@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-load_dotenv(BASE_DIR / '.env')
+load_dotenv(BASE_DIR / ".env")
 
 
 # Quick-start development settings - unsuitable for production
@@ -37,8 +37,7 @@ ALLOWED_HOSTS = []
 
 SHARED_APPS = (
     "django_tenants",  # obligatorio para el framework
-    "core",            # obligatorio incluir la app donde residen los modelos Tenant y Domain
-    
+    "core",  # obligatorio incluir la app donde residen los modelos Tenant y Domain
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -55,7 +54,9 @@ TENANT_APPS = (
     "dashboard",
 )
 
-INSTALLED_APPS = list(SHARED_APPS) + [app for app in TENANT_APPS if app not in SHARED_APPS]
+INSTALLED_APPS = list(SHARED_APPS) + [
+    app for app in TENANT_APPS if app not in SHARED_APPS
+]
 
 TENANT_MODEL = "core.Tenant"
 TENANT_DOMAIN_MODEL = "core.Domain"
@@ -96,14 +97,11 @@ WSGI_APPLICATION = "config.wsgi.application"
 
 DATABASES = {
     "default": dj_database_url.config(
-        default=os.getenv("DATABASE_URL"),
-        engine="django_tenants.postgresql_backend"
+        default=os.getenv("DATABASE_URL"), engine="django_tenants.postgresql_backend"
     )
 }
 
-DATABASE_ROUTERS = (
-    "django_tenants.routers.TenantSyncRouter",
-)
+DATABASE_ROUTERS = ("django_tenants.routers.TenantSyncRouter",)
 
 
 # Password validation
