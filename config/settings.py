@@ -44,6 +44,8 @@ SHARED_APPS = (
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "rest_framework",
+    "drf_spectacular",
 )
 
 TENANT_APPS = (
@@ -102,6 +104,17 @@ DATABASES = {
 }
 
 DATABASE_ROUTERS = ("django_tenants.routers.TenantSyncRouter",)
+
+REST_FRAMEWORK = {
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "Fivuza API",
+    "DESCRIPTION": "API para el sistema SaaS Fivuza (ERP multi-tenant)",
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
+}
 
 
 # Password validation
