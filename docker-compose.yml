@@ -64,6 +64,7 @@ services:
     build: 
       context: ../FivuzaFrontend
       dockerfile: Dockerfile
+      target: build
     command: npm run dev
     volumes:
       - ../FivuzaFrontend:/app
