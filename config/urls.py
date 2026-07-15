@@ -22,6 +22,7 @@ from drf_spectacular.views import (
     SpectacularRedocView,
     SpectacularSwaggerView,
 )
+from core import views as core_views
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -35,4 +36,6 @@ urlpatterns = [
     ),
     # ReDoc
     path("api/redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
+    # Health Check
+    path("api/v1/health/", core_views.health_check, name="health_check"),
 ]
