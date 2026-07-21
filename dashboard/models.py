@@ -6,7 +6,9 @@ from usuarios.models import User
 class DashboardWidget(models.Model):
     """Configuración opcional de widgets visibles por usuario; omitible si el dashboard es fijo."""
 
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="dashboard_widgets")
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="dashboard_widgets"
+    )
     widget_code = models.CharField(
         max_length=30,
         choices=[

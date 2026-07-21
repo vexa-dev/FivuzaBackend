@@ -37,7 +37,9 @@ class Permission(models.Model):
 
 
 class RolePermission(models.Model):
-    role = models.ForeignKey(Role, on_delete=models.CASCADE, related_name="role_permissions")
+    role = models.ForeignKey(
+        Role, on_delete=models.CASCADE, related_name="role_permissions"
+    )
     permission = models.ForeignKey(
         Permission, on_delete=models.CASCADE, related_name="role_permissions"
     )
@@ -76,7 +78,9 @@ class User(models.Model):
 class RolePermissionsHistory(models.Model):
     """MEJORA 5: historial inmutable de otorgamiento/revocación de permisos por rol."""
 
-    role = models.ForeignKey(Role, on_delete=models.PROTECT, related_name="permission_history")
+    role = models.ForeignKey(
+        Role, on_delete=models.PROTECT, related_name="permission_history"
+    )
     permission = models.ForeignKey(
         Permission, on_delete=models.PROTECT, related_name="role_history"
     )
@@ -97,8 +101,12 @@ class RolePermissionsHistory(models.Model):
 
 
 class UserPermission(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="permission_overrides")
-    permission = models.ForeignKey(Permission, on_delete=models.CASCADE, related_name="+")
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="permission_overrides"
+    )
+    permission = models.ForeignKey(
+        Permission, on_delete=models.CASCADE, related_name="+"
+    )
     is_granted = models.BooleanField()
 
     class Meta:
@@ -108,7 +116,9 @@ class UserPermission(models.Model):
 class UserWarehouse(models.Model):
     """MEJORA 7: sucursales a las que puede operar cada usuario."""
 
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="warehouse_access")
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="warehouse_access"
+    )
     warehouse = models.ForeignKey(
         "inventario.Warehouse", on_delete=models.CASCADE, related_name="+"
     )
@@ -179,7 +189,9 @@ class Employee(models.Model):
 
 
 class EmployeeSchedule(models.Model):
-    employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name="schedules")
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, related_name="schedules"
+    )
     day_of_week = models.CharField(
         max_length=10,
         choices=[
@@ -217,7 +229,9 @@ class EmployeeSchedule(models.Model):
 
 
 class EmployeeAttendance(models.Model):
-    employee = models.ForeignKey(Employee, on_delete=models.PROTECT, related_name="attendance")
+    employee = models.ForeignKey(
+        Employee, on_delete=models.PROTECT, related_name="attendance"
+    )
     warehouse = models.ForeignKey(
         "inventario.Warehouse", on_delete=models.PROTECT, related_name="+"
     )
@@ -254,7 +268,9 @@ class EmployeeAttendance(models.Model):
 
 
 class EmployeePayroll(models.Model):
-    employee = models.ForeignKey(Employee, on_delete=models.PROTECT, related_name="payroll")
+    employee = models.ForeignKey(
+        Employee, on_delete=models.PROTECT, related_name="payroll"
+    )
     period_start = models.DateField()
     period_end = models.DateField()
     base_salary = models.DecimalField(max_digits=12, decimal_places=4)

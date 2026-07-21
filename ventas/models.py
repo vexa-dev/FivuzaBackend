@@ -7,7 +7,9 @@ from usuarios.models import User
 
 
 class CashRegister(models.Model):
-    warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, related_name="cash_registers")
+    warehouse = models.ForeignKey(
+        Warehouse, on_delete=models.PROTECT, related_name="cash_registers"
+    )
     name = models.CharField(max_length=100)
     is_active = models.BooleanField(default=True)
 
@@ -22,7 +24,9 @@ class CashSession(models.Model):
     cash_register = models.ForeignKey(
         CashRegister, on_delete=models.PROTECT, related_name="sessions"
     )
-    user = models.ForeignKey(User, on_delete=models.PROTECT, related_name="cash_sessions")
+    user = models.ForeignKey(
+        User, on_delete=models.PROTECT, related_name="cash_sessions"
+    )
     opening_amount = models.DecimalField(max_digits=12, decimal_places=4)
     opening_at = models.DateTimeField()
     expected_closing_amount = models.DecimalField(
@@ -31,8 +35,12 @@ class CashSession(models.Model):
     counted_closing_amount = models.DecimalField(
         max_digits=12, decimal_places=4, null=True, blank=True
     )
-    difference = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
-    status = models.CharField(max_length=10, choices=[("OPEN", "OPEN"), ("CLOSED", "CLOSED")])
+    difference = models.DecimalField(
+        max_digits=12, decimal_places=4, null=True, blank=True
+    )
+    status = models.CharField(
+        max_length=10, choices=[("OPEN", "OPEN"), ("CLOSED", "CLOSED")]
+    )
     closing_at = models.DateTimeField(null=True, blank=True)
     notes = models.CharField(max_length=255, null=True, blank=True)
 
@@ -61,7 +69,9 @@ class CashMovement(models.Model):
         ],
     )
     amount = models.DecimalField(max_digits=12, decimal_places=4)
-    user = models.ForeignKey(User, on_delete=models.PROTECT, related_name="cash_movements")
+    user = models.ForeignKey(
+        User, on_delete=models.PROTECT, related_name="cash_movements"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -110,7 +120,8 @@ class Customer(models.Model):
 class Promotion(models.Model):
     name = models.CharField(max_length=150)
     type = models.CharField(
-        max_length=20, choices=[("PERCENTAGE", "PERCENTAGE"), ("FIXED_AMOUNT", "FIXED_AMOUNT")]
+        max_length=20,
+        choices=[("PERCENTAGE", "PERCENTAGE"), ("FIXED_AMOUNT", "FIXED_AMOUNT")],
     )
     value = models.DecimalField(max_digits=12, decimal_places=4)
     start_date = models.DateTimeField()
@@ -135,9 +146,15 @@ class Promotion(models.Model):
 class PromotionProduct(models.Model):
     """Uno de variant / category va poblado, no ambos."""
 
-    promotion = models.ForeignKey(Promotion, on_delete=models.CASCADE, related_name="targets")
+    promotion = models.ForeignKey(
+        Promotion, on_delete=models.CASCADE, related_name="targets"
+    )
     variant = models.ForeignKey(
-        ProductVariant, on_delete=models.CASCADE, null=True, blank=True, related_name="+"
+        ProductVariant,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="+",
     )
     category = models.ForeignKey(
         Category, on_delete=models.CASCADE, null=True, blank=True, related_name="+"
@@ -149,18 +166,27 @@ class PromotionProduct(models.Model):
 
 class Sale(models.Model):
     invoice_number = models.CharField(max_length=50, unique=True)
-    customer = models.ForeignKey(Customer, on_delete=models.PROTECT, related_name="sales")
+    customer = models.ForeignKey(
+        Customer, on_delete=models.PROTECT, related_name="sales"
+    )
     user = models.ForeignKey(User, on_delete=models.PROTECT, related_name="sales")
-    warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, related_name="sales")
+    warehouse = models.ForeignKey(
+        Warehouse, on_delete=models.PROTECT, related_name="sales"
+    )
     cash_session = models.ForeignKey(
-        CashSession, on_delete=models.PROTECT, null=True, blank=True, related_name="sales"
+        CashSession,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="sales",
     )
     subtotal = models.DecimalField(max_digits=12, decimal_places=4)
     discount_total = models.DecimalField(max_digits=12, decimal_places=4, default=0)
     total = models.DecimalField(max_digits=12, decimal_places=4)
     currency = models.CharField(max_length=3, default="PEN")
     payment_status = models.CharField(
-        max_length=10, choices=[("PAID", "PAID"), ("PARTIAL", "PARTIAL"), ("UNPAID", "UNPAID")]
+        max_length=10,
+        choices=[("PAID", "PAID"), ("PARTIAL", "PARTIAL"), ("UNPAID", "UNPAID")],
     )
     status = models.CharField(
         max_length=15,
@@ -193,7 +219,9 @@ class Sale(models.Model):
                 name="ck_sales_status",
             ),
             models.CheckConstraint(
-                check=models.Q(sync_status__in=["SYNCED", "OFFLINE_PENDING", "CONFLICT"]),
+                check=models.Q(
+                    sync_status__in=["SYNCED", "OFFLINE_PENDING", "CONFLICT"]
+                ),
                 name="ck_sales_sync_status",
             ),
         ]
@@ -248,7 +276,9 @@ class SaleDetail(models.Model):
 
 class SaleReturn(models.Model):
     sale = models.ForeignKey(Sale, on_delete=models.PROTECT, related_name="returns")
-    user = models.ForeignKey(User, on_delete=models.PROTECT, related_name="sale_returns")
+    user = models.ForeignKey(
+        User, on_delete=models.PROTECT, related_name="sale_returns"
+    )
     reason = models.CharField(max_length=255, blank=True)
     total_refund_amount = models.DecimalField(max_digits=12, decimal_places=4)
     refund_type = models.CharField(
@@ -284,11 +314,19 @@ class SaleReturnDetail(models.Model):
 class CustomerDebtLedger(models.Model):
     """Libro exclusivo del flujo de ventas al crédito ('fiado')."""
 
-    customer = models.ForeignKey(Customer, on_delete=models.PROTECT, related_name="debt_ledger")
-    sale = models.ForeignKey(
-        Sale, on_delete=models.PROTECT, null=True, blank=True, related_name="debt_entries"
+    customer = models.ForeignKey(
+        Customer, on_delete=models.PROTECT, related_name="debt_ledger"
     )
-    type = models.CharField(max_length=6, choices=[("DEBIT", "DEBIT"), ("CREDIT", "CREDIT")])
+    sale = models.ForeignKey(
+        Sale,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="debt_entries",
+    )
+    type = models.CharField(
+        max_length=6, choices=[("DEBIT", "DEBIT"), ("CREDIT", "CREDIT")]
+    )
     amount = models.DecimalField(max_digits=12, decimal_places=4)
     currency = models.CharField(max_length=3, default="PEN")
     description = models.CharField(max_length=255, blank=True)
@@ -311,12 +349,22 @@ class CustomerBalanceLedger(models.Model):
         Customer, on_delete=models.PROTECT, related_name="balance_ledger"
     )
     sale_return = models.ForeignKey(
-        SaleReturn, on_delete=models.PROTECT, null=True, blank=True, related_name="balance_entries"
+        SaleReturn,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="balance_entries",
     )
     sale = models.ForeignKey(
-        Sale, on_delete=models.PROTECT, null=True, blank=True, related_name="balance_entries"
+        Sale,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="balance_entries",
     )
-    type = models.CharField(max_length=6, choices=[("CREDIT", "CREDIT"), ("DEBIT", "DEBIT")])
+    type = models.CharField(
+        max_length=6, choices=[("CREDIT", "CREDIT"), ("DEBIT", "DEBIT")]
+    )
     amount = models.DecimalField(max_digits=12, decimal_places=4)
     currency = models.CharField(max_length=3, default="PEN")
     description = models.CharField(max_length=255, blank=True)

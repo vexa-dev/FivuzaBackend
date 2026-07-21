@@ -5,18 +5,21 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     initial = True
 
     dependencies = [
-        ('dashboard', '0001_initial'),
-        ('usuarios', '0001_initial'),
+        ("dashboard", "0001_initial"),
+        ("usuarios", "0001_initial"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='dashboardwidget',
-            name='user',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='dashboard_widgets', to='usuarios.user'),
+            model_name="dashboardwidget",
+            name="user",
+            field=models.ForeignKey(
+                on_delete=django.db.models.deletion.CASCADE,
+                related_name="dashboard_widgets",
+                to="usuarios.user",
+            ),
         ),
     ]

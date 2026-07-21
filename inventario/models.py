@@ -62,9 +62,15 @@ class Product(models.Model):
     )
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True)
-    category = models.ForeignKey(Category, on_delete=models.PROTECT, related_name="products")
+    category = models.ForeignKey(
+        Category, on_delete=models.PROTECT, related_name="products"
+    )
     supplier = models.ForeignKey(
-        Supplier, on_delete=models.PROTECT, null=True, blank=True, related_name="products"
+        Supplier,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="products",
     )
     unit_of_measure = models.CharField(
         max_length=10, choices=[("UND", "UND"), ("KG", "KG")]
@@ -107,7 +113,9 @@ class Attribute(models.Model):
 
 
 class AttributeValue(models.Model):
-    attribute = models.ForeignKey(Attribute, on_delete=models.PROTECT, related_name="values")
+    attribute = models.ForeignKey(
+        Attribute, on_delete=models.PROTECT, related_name="values"
+    )
     value = models.CharField(max_length=100)
 
     class Meta:
@@ -118,7 +126,9 @@ class AttributeValue(models.Model):
 
 
 class ProductVariant(models.Model):
-    product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name="variants")
+    product = models.ForeignKey(
+        Product, on_delete=models.PROTECT, related_name="variants"
+    )
     sku = models.CharField(max_length=100, unique=True)
     cost = models.DecimalField(max_digits=12, decimal_places=4, default=0)
     price = models.DecimalField(max_digits=12, decimal_places=4, default=0)
@@ -161,10 +171,18 @@ class ProductPriceHistory(models.Model):
     variant = models.ForeignKey(
         ProductVariant, on_delete=models.PROTECT, related_name="price_history"
     )
-    old_cost = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
-    new_cost = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
-    old_price = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
-    new_price = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
+    old_cost = models.DecimalField(
+        max_digits=12, decimal_places=4, null=True, blank=True
+    )
+    new_cost = models.DecimalField(
+        max_digits=12, decimal_places=4, null=True, blank=True
+    )
+    old_price = models.DecimalField(
+        max_digits=12, decimal_places=4, null=True, blank=True
+    )
+    new_price = models.DecimalField(
+        max_digits=12, decimal_places=4, null=True, blank=True
+    )
     changed_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="+")
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -174,8 +192,12 @@ class ProductPriceHistory(models.Model):
 
 
 class Stock(models.Model):
-    variant = models.ForeignKey(ProductVariant, on_delete=models.PROTECT, related_name="stock")
-    warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, related_name="stock")
+    variant = models.ForeignKey(
+        ProductVariant, on_delete=models.PROTECT, related_name="stock"
+    )
+    warehouse = models.ForeignKey(
+        Warehouse, on_delete=models.PROTECT, related_name="stock"
+    )
     quantity = models.DecimalField(max_digits=12, decimal_places=3, default=0)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -193,9 +215,15 @@ class InventoryMovement(models.Model):
     """Kardex. Particionada nativamente por RANGE sobre created_at (mensual) a nivel de DB;
     el particionado se aplica con una migración manual de SQL, no lo gestiona Django."""
 
-    variant = models.ForeignKey(ProductVariant, on_delete=models.PROTECT, related_name="movements")
-    warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, related_name="movements")
-    user = models.ForeignKey(User, on_delete=models.PROTECT, related_name="inventory_movements")
+    variant = models.ForeignKey(
+        ProductVariant, on_delete=models.PROTECT, related_name="movements"
+    )
+    warehouse = models.ForeignKey(
+        Warehouse, on_delete=models.PROTECT, related_name="movements"
+    )
+    user = models.ForeignKey(
+        User, on_delete=models.PROTECT, related_name="inventory_movements"
+    )
     type = models.CharField(max_length=3, choices=[("IN", "IN"), ("OUT", "OUT")])
     quantity = models.DecimalField(max_digits=12, decimal_places=3)
     concept = models.CharField(
@@ -215,7 +243,8 @@ class InventoryMovement(models.Model):
         db_table = "inventory_movements"
         constraints = [
             models.CheckConstraint(
-                check=models.Q(type__in=["IN", "OUT"]), name="ck_inventory_movements_type"
+                check=models.Q(type__in=["IN", "OUT"]),
+                name="ck_inventory_movements_type",
             )
         ]
 
@@ -235,7 +264,9 @@ class TaxRate(models.Model):
 
 
 class ProductTax(models.Model):
-    variant = models.ForeignKey(ProductVariant, on_delete=models.PROTECT, related_name="taxes")
+    variant = models.ForeignKey(
+        ProductVariant, on_delete=models.PROTECT, related_name="taxes"
+    )
     tax_rate = models.ForeignKey(TaxRate, on_delete=models.PROTECT, related_name="+")
 
     class Meta:
@@ -250,8 +281,12 @@ class ProductTax(models.Model):
 class PurchaseOrder(models.Model):
     """Visible solo si tenant_settings.purchases_enabled = true."""
 
-    supplier = models.ForeignKey(Supplier, on_delete=models.PROTECT, related_name="purchase_orders")
-    user = models.ForeignKey(User, on_delete=models.PROTECT, related_name="purchase_orders")
+    supplier = models.ForeignKey(
+        Supplier, on_delete=models.PROTECT, related_name="purchase_orders"
+    )
+    user = models.ForeignKey(
+        User, on_delete=models.PROTECT, related_name="purchase_orders"
+    )
     invoice_number = models.CharField(max_length=100, blank=True)
     status = models.CharField(
         max_length=15,
@@ -279,7 +314,9 @@ class PurchaseOrderDetail(models.Model):
     purchase_order = models.ForeignKey(
         PurchaseOrder, on_delete=models.CASCADE, related_name="details"
     )
-    variant_id = models.IntegerField()  # desacoplado, sin FK física (igual que sale_details)
+    variant_id = (
+        models.IntegerField()
+    )  # desacoplado, sin FK física (igual que sale_details)
     quantity = models.DecimalField(max_digits=12, decimal_places=3)
     unit_cost = models.DecimalField(max_digits=12, decimal_places=4)
     subtotal = models.DecimalField(max_digits=12, decimal_places=4)

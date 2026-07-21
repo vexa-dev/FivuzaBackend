@@ -6,159 +6,279 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     initial = True
 
     dependencies = [
-        ('inventario', '0001_initial'),
-        ('usuarios', '0001_initial'),
+        ("inventario", "0001_initial"),
+        ("usuarios", "0001_initial"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='category',
-            name='deleted_by',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='+', to='usuarios.user'),
+            model_name="category",
+            name="deleted_by",
+            field=models.ForeignKey(
+                blank=True,
+                null=True,
+                on_delete=django.db.models.deletion.PROTECT,
+                related_name="+",
+                to="usuarios.user",
+            ),
         ),
         migrations.AddField(
-            model_name='inventorymovement',
-            name='user',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='inventory_movements', to='usuarios.user'),
+            model_name="inventorymovement",
+            name="user",
+            field=models.ForeignKey(
+                on_delete=django.db.models.deletion.PROTECT,
+                related_name="inventory_movements",
+                to="usuarios.user",
+            ),
         ),
         migrations.AddField(
-            model_name='product',
-            name='category',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='products', to='inventario.category'),
+            model_name="product",
+            name="category",
+            field=models.ForeignKey(
+                on_delete=django.db.models.deletion.PROTECT,
+                related_name="products",
+                to="inventario.category",
+            ),
         ),
         migrations.AddField(
-            model_name='product',
-            name='deleted_by',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='+', to='usuarios.user'),
+            model_name="product",
+            name="deleted_by",
+            field=models.ForeignKey(
+                blank=True,
+                null=True,
+                on_delete=django.db.models.deletion.PROTECT,
+                related_name="+",
+                to="usuarios.user",
+            ),
         ),
         migrations.AddField(
-            model_name='productpricehistory',
-            name='changed_by',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='+', to='usuarios.user'),
+            model_name="productpricehistory",
+            name="changed_by",
+            field=models.ForeignKey(
+                on_delete=django.db.models.deletion.PROTECT,
+                related_name="+",
+                to="usuarios.user",
+            ),
         ),
         migrations.AddField(
-            model_name='productvariant',
-            name='deleted_by',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='+', to='usuarios.user'),
+            model_name="productvariant",
+            name="deleted_by",
+            field=models.ForeignKey(
+                blank=True,
+                null=True,
+                on_delete=django.db.models.deletion.PROTECT,
+                related_name="+",
+                to="usuarios.user",
+            ),
         ),
         migrations.AddField(
-            model_name='productvariant',
-            name='product',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='variants', to='inventario.product'),
+            model_name="productvariant",
+            name="product",
+            field=models.ForeignKey(
+                on_delete=django.db.models.deletion.PROTECT,
+                related_name="variants",
+                to="inventario.product",
+            ),
         ),
         migrations.AddField(
-            model_name='producttax',
-            name='variant',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='taxes', to='inventario.productvariant'),
+            model_name="producttax",
+            name="variant",
+            field=models.ForeignKey(
+                on_delete=django.db.models.deletion.PROTECT,
+                related_name="taxes",
+                to="inventario.productvariant",
+            ),
         ),
         migrations.AddField(
-            model_name='productpricehistory',
-            name='variant',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='price_history', to='inventario.productvariant'),
+            model_name="productpricehistory",
+            name="variant",
+            field=models.ForeignKey(
+                on_delete=django.db.models.deletion.PROTECT,
+                related_name="price_history",
+                to="inventario.productvariant",
+            ),
         ),
         migrations.AddField(
-            model_name='inventorymovement',
-            name='variant',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='movements', to='inventario.productvariant'),
+            model_name="inventorymovement",
+            name="variant",
+            field=models.ForeignKey(
+                on_delete=django.db.models.deletion.PROTECT,
+                related_name="movements",
+                to="inventario.productvariant",
+            ),
         ),
         migrations.AddField(
-            model_name='purchaseorder',
-            name='user',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='purchase_orders', to='usuarios.user'),
+            model_name="purchaseorder",
+            name="user",
+            field=models.ForeignKey(
+                on_delete=django.db.models.deletion.PROTECT,
+                related_name="purchase_orders",
+                to="usuarios.user",
+            ),
         ),
         migrations.AddField(
-            model_name='purchaseorderdetail',
-            name='purchase_order',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='details', to='inventario.purchaseorder'),
+            model_name="purchaseorderdetail",
+            name="purchase_order",
+            field=models.ForeignKey(
+                on_delete=django.db.models.deletion.CASCADE,
+                related_name="details",
+                to="inventario.purchaseorder",
+            ),
         ),
         migrations.AddField(
-            model_name='stock',
-            name='variant',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='stock', to='inventario.productvariant'),
+            model_name="stock",
+            name="variant",
+            field=models.ForeignKey(
+                on_delete=django.db.models.deletion.PROTECT,
+                related_name="stock",
+                to="inventario.productvariant",
+            ),
         ),
         migrations.AddField(
-            model_name='supplier',
-            name='deleted_by',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='+', to='usuarios.user'),
+            model_name="supplier",
+            name="deleted_by",
+            field=models.ForeignKey(
+                blank=True,
+                null=True,
+                on_delete=django.db.models.deletion.PROTECT,
+                related_name="+",
+                to="usuarios.user",
+            ),
         ),
         migrations.AddField(
-            model_name='purchaseorder',
-            name='supplier',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='purchase_orders', to='inventario.supplier'),
+            model_name="purchaseorder",
+            name="supplier",
+            field=models.ForeignKey(
+                on_delete=django.db.models.deletion.PROTECT,
+                related_name="purchase_orders",
+                to="inventario.supplier",
+            ),
         ),
         migrations.AddField(
-            model_name='product',
-            name='supplier',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='products', to='inventario.supplier'),
+            model_name="product",
+            name="supplier",
+            field=models.ForeignKey(
+                blank=True,
+                null=True,
+                on_delete=django.db.models.deletion.PROTECT,
+                related_name="products",
+                to="inventario.supplier",
+            ),
         ),
         migrations.AddField(
-            model_name='producttax',
-            name='tax_rate',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='+', to='inventario.taxrate'),
+            model_name="producttax",
+            name="tax_rate",
+            field=models.ForeignKey(
+                on_delete=django.db.models.deletion.PROTECT,
+                related_name="+",
+                to="inventario.taxrate",
+            ),
         ),
         migrations.AddField(
-            model_name='variantattributevalue',
-            name='attribute_value',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='+', to='inventario.attributevalue'),
+            model_name="variantattributevalue",
+            name="attribute_value",
+            field=models.ForeignKey(
+                on_delete=django.db.models.deletion.PROTECT,
+                related_name="+",
+                to="inventario.attributevalue",
+            ),
         ),
         migrations.AddField(
-            model_name='variantattributevalue',
-            name='variant',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='attribute_values', to='inventario.productvariant'),
+            model_name="variantattributevalue",
+            name="variant",
+            field=models.ForeignKey(
+                on_delete=django.db.models.deletion.CASCADE,
+                related_name="attribute_values",
+                to="inventario.productvariant",
+            ),
         ),
         migrations.AddField(
-            model_name='warehouse',
-            name='deleted_by',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='+', to='usuarios.user'),
+            model_name="warehouse",
+            name="deleted_by",
+            field=models.ForeignKey(
+                blank=True,
+                null=True,
+                on_delete=django.db.models.deletion.PROTECT,
+                related_name="+",
+                to="usuarios.user",
+            ),
         ),
         migrations.AddField(
-            model_name='stock',
-            name='warehouse',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='stock', to='inventario.warehouse'),
+            model_name="stock",
+            name="warehouse",
+            field=models.ForeignKey(
+                on_delete=django.db.models.deletion.PROTECT,
+                related_name="stock",
+                to="inventario.warehouse",
+            ),
         ),
         migrations.AddField(
-            model_name='inventorymovement',
-            name='warehouse',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='movements', to='inventario.warehouse'),
+            model_name="inventorymovement",
+            name="warehouse",
+            field=models.ForeignKey(
+                on_delete=django.db.models.deletion.PROTECT,
+                related_name="movements",
+                to="inventario.warehouse",
+            ),
         ),
         migrations.AddIndex(
-            model_name='productvariant',
-            index=models.Index(fields=['updated_at'], name='product_var_updated_ed1660_idx'),
+            model_name="productvariant",
+            index=models.Index(
+                fields=["updated_at"], name="product_var_updated_ed1660_idx"
+            ),
         ),
         migrations.AddConstraint(
-            model_name='purchaseorder',
-            constraint=models.CheckConstraint(check=models.Q(('status__in', ['PENDING', 'RECEIVED', 'CANCELLED'])), name='ck_purchase_orders_status'),
+            model_name="purchaseorder",
+            constraint=models.CheckConstraint(
+                check=models.Q(("status__in", ["PENDING", "RECEIVED", "CANCELLED"])),
+                name="ck_purchase_orders_status",
+            ),
         ),
         migrations.AddIndex(
-            model_name='product',
-            index=models.Index(fields=['updated_at'], name='products_updated_b2f96c_idx'),
+            model_name="product",
+            index=models.Index(
+                fields=["updated_at"], name="products_updated_b2f96c_idx"
+            ),
         ),
         migrations.AddIndex(
-            model_name='product',
-            index=django.contrib.postgres.indexes.GinIndex(fields=['search_vector'], name='products_search__7bdc4d_gin'),
+            model_name="product",
+            index=django.contrib.postgres.indexes.GinIndex(
+                fields=["search_vector"], name="products_search__7bdc4d_gin"
+            ),
         ),
         migrations.AddConstraint(
-            model_name='product',
-            constraint=models.CheckConstraint(check=models.Q(('type__in', ['PRODUCT', 'SERVICE', 'ASSET'])), name='ck_products_type'),
+            model_name="product",
+            constraint=models.CheckConstraint(
+                check=models.Q(("type__in", ["PRODUCT", "SERVICE", "ASSET"])),
+                name="ck_products_type",
+            ),
         ),
         migrations.AddConstraint(
-            model_name='producttax',
-            constraint=models.UniqueConstraint(fields=('variant', 'tax_rate'), name='uq_product_tax_variant_rate'),
+            model_name="producttax",
+            constraint=models.UniqueConstraint(
+                fields=("variant", "tax_rate"), name="uq_product_tax_variant_rate"
+            ),
         ),
         migrations.AddConstraint(
-            model_name='variantattributevalue',
-            constraint=models.UniqueConstraint(fields=('variant', 'attribute_value'), name='uq_variant_attribute_value'),
+            model_name="variantattributevalue",
+            constraint=models.UniqueConstraint(
+                fields=("variant", "attribute_value"), name="uq_variant_attribute_value"
+            ),
         ),
         migrations.AddConstraint(
-            model_name='stock',
-            constraint=models.UniqueConstraint(fields=('variant', 'warehouse'), name='uq_stock_variant_warehouse'),
+            model_name="stock",
+            constraint=models.UniqueConstraint(
+                fields=("variant", "warehouse"), name="uq_stock_variant_warehouse"
+            ),
         ),
         migrations.AddConstraint(
-            model_name='inventorymovement',
-            constraint=models.CheckConstraint(check=models.Q(('type__in', ['IN', 'OUT'])), name='ck_inventory_movements_type'),
+            model_name="inventorymovement",
+            constraint=models.CheckConstraint(
+                check=models.Q(("type__in", ["IN", "OUT"])),
+                name="ck_inventory_movements_type",
+            ),
         ),
     ]

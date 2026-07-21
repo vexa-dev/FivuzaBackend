@@ -70,17 +70,29 @@ class PlanFeature(models.Model):
 
 
 class Subscription(models.Model):
-    tenant = models.ForeignKey(Tenant, on_delete=models.PROTECT, related_name="subscriptions")
-    plan = models.ForeignKey(Plan, on_delete=models.PROTECT, related_name="subscriptions")
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.PROTECT, related_name="subscriptions"
+    )
+    plan = models.ForeignKey(
+        Plan, on_delete=models.PROTECT, related_name="subscriptions"
+    )
     billing_cycle = models.CharField(
         max_length=20,
-        choices=[("MONTHLY", "MONTHLY"), ("SEMIANNUAL", "SEMIANNUAL"), ("ANNUAL", "ANNUAL")],
+        choices=[
+            ("MONTHLY", "MONTHLY"),
+            ("SEMIANNUAL", "SEMIANNUAL"),
+            ("ANNUAL", "ANNUAL"),
+        ],
     )
     price_paid = models.DecimalField(max_digits=10, decimal_places=2)
     currency = models.CharField(max_length=3, default="PEN")
     status = models.CharField(
         max_length=20,
-        choices=[("active", "active"), ("past_due", "past_due"), ("canceled", "canceled")],
+        choices=[
+            ("active", "active"),
+            ("past_due", "past_due"),
+            ("canceled", "canceled"),
+        ],
     )
     starts_at = models.DateTimeField()
     expires_at = models.DateTimeField()
@@ -104,7 +116,12 @@ class SubscriptionPayment(models.Model):
     currency = models.CharField(max_length=3, default="PEN")
     payment_method = models.CharField(
         max_length=20,
-        choices=[("CARD", "CARD"), ("TRANSFER", "TRANSFER"), ("YAPE", "YAPE"), ("PLIN", "PLIN")],
+        choices=[
+            ("CARD", "CARD"),
+            ("TRANSFER", "TRANSFER"),
+            ("YAPE", "YAPE"),
+            ("PLIN", "PLIN"),
+        ],
     )
     external_reference = models.CharField(max_length=100, blank=True)
     status = models.CharField(
@@ -130,7 +147,9 @@ class SubscriptionPayment(models.Model):
 
 
 class TenantSettings(models.Model):
-    tenant = models.OneToOneField(Tenant, on_delete=models.PROTECT, related_name="settings")
+    tenant = models.OneToOneField(
+        Tenant, on_delete=models.PROTECT, related_name="settings"
+    )
     purchases_enabled = models.BooleanField(default=True)
     variants_enabled = models.BooleanField(default=False)
     multi_warehouse_enabled = models.BooleanField(default=False)

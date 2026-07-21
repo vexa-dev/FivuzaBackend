@@ -5,162 +5,326 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('core', '0001_initial'),
+        ("core", "0001_initial"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='Plan',
+            name="Plan",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('code', models.CharField(max_length=20, unique=True)),
-                ('name', models.CharField(max_length=100)),
-                ('max_users', models.IntegerField()),
-                ('price_monthly', models.DecimalField(decimal_places=2, max_digits=10)),
-                ('price_semiannual', models.DecimalField(decimal_places=2, max_digits=10)),
-                ('price_annual', models.DecimalField(decimal_places=2, max_digits=10)),
-                ('is_active', models.BooleanField(default=True)),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("code", models.CharField(max_length=20, unique=True)),
+                ("name", models.CharField(max_length=100)),
+                ("max_users", models.IntegerField()),
+                ("price_monthly", models.DecimalField(decimal_places=2, max_digits=10)),
+                (
+                    "price_semiannual",
+                    models.DecimalField(decimal_places=2, max_digits=10),
+                ),
+                ("price_annual", models.DecimalField(decimal_places=2, max_digits=10)),
+                ("is_active", models.BooleanField(default=True)),
             ],
             options={
-                'db_table': 'plans',
+                "db_table": "plans",
             },
         ),
         migrations.CreateModel(
-            name='PlatformStaff',
+            name="PlatformStaff",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('email', models.EmailField(max_length=254, unique=True)),
-                ('password', models.CharField(max_length=255)),
-                ('full_name', models.CharField(max_length=150)),
-                ('role', models.CharField(choices=[('SUPER_ADMIN', 'SUPER_ADMIN'), ('SUPPORT', 'SUPPORT'), ('BILLING', 'BILLING')], max_length=20)),
-                ('is_active', models.BooleanField(default=True)),
-                ('last_login', models.DateTimeField(blank=True, null=True)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("email", models.EmailField(max_length=254, unique=True)),
+                ("password", models.CharField(max_length=255)),
+                ("full_name", models.CharField(max_length=150)),
+                (
+                    "role",
+                    models.CharField(
+                        choices=[
+                            ("SUPER_ADMIN", "SUPER_ADMIN"),
+                            ("SUPPORT", "SUPPORT"),
+                            ("BILLING", "BILLING"),
+                        ],
+                        max_length=20,
+                    ),
+                ),
+                ("is_active", models.BooleanField(default=True)),
+                ("last_login", models.DateTimeField(blank=True, null=True)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
             ],
             options={
-                'db_table': 'platform_staff',
+                "db_table": "platform_staff",
             },
         ),
         migrations.CreateModel(
-            name='Subscription',
+            name="Subscription",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('billing_cycle', models.CharField(choices=[('MONTHLY', 'MONTHLY'), ('SEMIANNUAL', 'SEMIANNUAL'), ('ANNUAL', 'ANNUAL')], max_length=20)),
-                ('price_paid', models.DecimalField(decimal_places=2, max_digits=10)),
-                ('currency', models.CharField(default='PEN', max_length=3)),
-                ('status', models.CharField(choices=[('active', 'active'), ('past_due', 'past_due'), ('canceled', 'canceled')], max_length=20)),
-                ('starts_at', models.DateTimeField()),
-                ('expires_at', models.DateTimeField()),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "billing_cycle",
+                    models.CharField(
+                        choices=[
+                            ("MONTHLY", "MONTHLY"),
+                            ("SEMIANNUAL", "SEMIANNUAL"),
+                            ("ANNUAL", "ANNUAL"),
+                        ],
+                        max_length=20,
+                    ),
+                ),
+                ("price_paid", models.DecimalField(decimal_places=2, max_digits=10)),
+                ("currency", models.CharField(default="PEN", max_length=3)),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[
+                            ("active", "active"),
+                            ("past_due", "past_due"),
+                            ("canceled", "canceled"),
+                        ],
+                        max_length=20,
+                    ),
+                ),
+                ("starts_at", models.DateTimeField()),
+                ("expires_at", models.DateTimeField()),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
             ],
             options={
-                'db_table': 'subscriptions',
+                "db_table": "subscriptions",
             },
         ),
         migrations.CreateModel(
-            name='SubscriptionPayment',
+            name="SubscriptionPayment",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('amount', models.DecimalField(decimal_places=2, max_digits=10)),
-                ('currency', models.CharField(default='PEN', max_length=3)),
-                ('payment_method', models.CharField(choices=[('CARD', 'CARD'), ('TRANSFER', 'TRANSFER'), ('YAPE', 'YAPE'), ('PLIN', 'PLIN')], max_length=20)),
-                ('external_reference', models.CharField(blank=True, max_length=100)),
-                ('status', models.CharField(choices=[('PAID', 'PAID'), ('FAILED', 'FAILED'), ('REFUNDED', 'REFUNDED'), ('PENDING', 'PENDING')], max_length=20)),
-                ('paid_at', models.DateTimeField(blank=True, null=True)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("amount", models.DecimalField(decimal_places=2, max_digits=10)),
+                ("currency", models.CharField(default="PEN", max_length=3)),
+                (
+                    "payment_method",
+                    models.CharField(
+                        choices=[
+                            ("CARD", "CARD"),
+                            ("TRANSFER", "TRANSFER"),
+                            ("YAPE", "YAPE"),
+                            ("PLIN", "PLIN"),
+                        ],
+                        max_length=20,
+                    ),
+                ),
+                ("external_reference", models.CharField(blank=True, max_length=100)),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[
+                            ("PAID", "PAID"),
+                            ("FAILED", "FAILED"),
+                            ("REFUNDED", "REFUNDED"),
+                            ("PENDING", "PENDING"),
+                        ],
+                        max_length=20,
+                    ),
+                ),
+                ("paid_at", models.DateTimeField(blank=True, null=True)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
             ],
             options={
-                'db_table': 'subscription_payments',
+                "db_table": "subscription_payments",
             },
         ),
         migrations.CreateModel(
-            name='TenantSettings',
+            name="TenantSettings",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('purchases_enabled', models.BooleanField(default=True)),
-                ('variants_enabled', models.BooleanField(default=False)),
-                ('multi_warehouse_enabled', models.BooleanField(default=False)),
-                ('hr_module_enabled', models.BooleanField(default=False)),
-                ('cash_module_enabled', models.BooleanField(default=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("purchases_enabled", models.BooleanField(default=True)),
+                ("variants_enabled", models.BooleanField(default=False)),
+                ("multi_warehouse_enabled", models.BooleanField(default=False)),
+                ("hr_module_enabled", models.BooleanField(default=False)),
+                ("cash_module_enabled", models.BooleanField(default=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
             ],
             options={
-                'db_table': 'tenant_settings',
+                "db_table": "tenant_settings",
             },
         ),
         migrations.AddField(
-            model_name='tenant',
-            name='default_currency',
-            field=models.CharField(default='PEN', max_length=3),
+            model_name="tenant",
+            name="default_currency",
+            field=models.CharField(default="PEN", max_length=3),
         ),
         migrations.AddField(
-            model_name='tenant',
-            name='ruc',
+            model_name="tenant",
+            name="ruc",
             field=models.CharField(blank=True, max_length=20, null=True, unique=True),
         ),
         migrations.AddField(
-            model_name='tenant',
-            name='status',
-            field=models.CharField(choices=[('active', 'Active'), ('trial', 'Trial'), ('suspended', 'Suspended'), ('canceled', 'Canceled')], default='trial', max_length=20),
+            model_name="tenant",
+            name="status",
+            field=models.CharField(
+                choices=[
+                    ("active", "Active"),
+                    ("trial", "Trial"),
+                    ("suspended", "Suspended"),
+                    ("canceled", "Canceled"),
+                ],
+                default="trial",
+                max_length=20,
+            ),
         ),
         migrations.AlterField(
-            model_name='domain',
-            name='id',
-            field=models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID'),
+            model_name="domain",
+            name="id",
+            field=models.AutoField(
+                auto_created=True, primary_key=True, serialize=False, verbose_name="ID"
+            ),
         ),
         migrations.AlterField(
-            model_name='tenant',
-            name='id',
-            field=models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID'),
+            model_name="tenant",
+            name="id",
+            field=models.AutoField(
+                auto_created=True, primary_key=True, serialize=False, verbose_name="ID"
+            ),
         ),
         migrations.CreateModel(
-            name='PlanFeature',
+            name="PlanFeature",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('feature_code', models.CharField(choices=[('HAS_SALES_MODULE', 'HAS_SALES_MODULE'), ('HAS_PURCHASES_MODULE', 'HAS_PURCHASES_MODULE'), ('HAS_VARIANTS', 'HAS_VARIANTS'), ('HAS_MULTI_WAREHOUSE', 'HAS_MULTI_WAREHOUSE'), ('HAS_HR_MODULE', 'HAS_HR_MODULE'), ('HAS_CASH_MODULE', 'HAS_CASH_MODULE')], max_length=50)),
-                ('is_enabled', models.BooleanField(default=True)),
-                ('plan', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='features', to='core.plan')),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "feature_code",
+                    models.CharField(
+                        choices=[
+                            ("HAS_SALES_MODULE", "HAS_SALES_MODULE"),
+                            ("HAS_PURCHASES_MODULE", "HAS_PURCHASES_MODULE"),
+                            ("HAS_VARIANTS", "HAS_VARIANTS"),
+                            ("HAS_MULTI_WAREHOUSE", "HAS_MULTI_WAREHOUSE"),
+                            ("HAS_HR_MODULE", "HAS_HR_MODULE"),
+                            ("HAS_CASH_MODULE", "HAS_CASH_MODULE"),
+                        ],
+                        max_length=50,
+                    ),
+                ),
+                ("is_enabled", models.BooleanField(default=True)),
+                (
+                    "plan",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="features",
+                        to="core.plan",
+                    ),
+                ),
             ],
             options={
-                'db_table': 'plan_features',
+                "db_table": "plan_features",
             },
         ),
         migrations.AddConstraint(
-            model_name='platformstaff',
-            constraint=models.CheckConstraint(check=models.Q(('role__in', ['SUPER_ADMIN', 'SUPPORT', 'BILLING'])), name='ck_platform_staff_role'),
+            model_name="platformstaff",
+            constraint=models.CheckConstraint(
+                check=models.Q(("role__in", ["SUPER_ADMIN", "SUPPORT", "BILLING"])),
+                name="ck_platform_staff_role",
+            ),
         ),
         migrations.AddField(
-            model_name='subscription',
-            name='plan',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='subscriptions', to='core.plan'),
+            model_name="subscription",
+            name="plan",
+            field=models.ForeignKey(
+                on_delete=django.db.models.deletion.PROTECT,
+                related_name="subscriptions",
+                to="core.plan",
+            ),
         ),
         migrations.AddField(
-            model_name='subscription',
-            name='tenant',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='subscriptions', to='core.tenant'),
+            model_name="subscription",
+            name="tenant",
+            field=models.ForeignKey(
+                on_delete=django.db.models.deletion.PROTECT,
+                related_name="subscriptions",
+                to="core.tenant",
+            ),
         ),
         migrations.AddField(
-            model_name='subscriptionpayment',
-            name='subscription',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='payments', to='core.subscription'),
+            model_name="subscriptionpayment",
+            name="subscription",
+            field=models.ForeignKey(
+                on_delete=django.db.models.deletion.PROTECT,
+                related_name="payments",
+                to="core.subscription",
+            ),
         ),
         migrations.AddField(
-            model_name='tenantsettings',
-            name='tenant',
-            field=models.OneToOneField(on_delete=django.db.models.deletion.PROTECT, related_name='settings', to='core.tenant'),
+            model_name="tenantsettings",
+            name="tenant",
+            field=models.OneToOneField(
+                on_delete=django.db.models.deletion.PROTECT,
+                related_name="settings",
+                to="core.tenant",
+            ),
         ),
         migrations.AddConstraint(
-            model_name='planfeature',
-            constraint=models.UniqueConstraint(fields=('plan', 'feature_code'), name='uq_plan_feature'),
+            model_name="planfeature",
+            constraint=models.UniqueConstraint(
+                fields=("plan", "feature_code"), name="uq_plan_feature"
+            ),
         ),
         migrations.AddConstraint(
-            model_name='subscription',
-            constraint=models.CheckConstraint(check=models.Q(('status__in', ['active', 'past_due', 'canceled'])), name='ck_subscriptions_status'),
+            model_name="subscription",
+            constraint=models.CheckConstraint(
+                check=models.Q(("status__in", ["active", "past_due", "canceled"])),
+                name="ck_subscriptions_status",
+            ),
         ),
         migrations.AddConstraint(
-            model_name='subscriptionpayment',
-            constraint=models.CheckConstraint(check=models.Q(('status__in', ['PAID', 'FAILED', 'REFUNDED', 'PENDING'])), name='ck_subscription_payments_status'),
+            model_name="subscriptionpayment",
+            constraint=models.CheckConstraint(
+                check=models.Q(
+                    ("status__in", ["PAID", "FAILED", "REFUNDED", "PENDING"])
+                ),
+                name="ck_subscription_payments_status",
+            ),
         ),
     ]
