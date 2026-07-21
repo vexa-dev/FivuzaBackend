@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 from pathlib import Path
 import os
 import dj_database_url
+import sentry_sdk
 from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -31,6 +32,17 @@ SECRET_KEY = "django-insecure-3nzrr(nes&b(0ks&5q+klr17*7px)aoj1lo38s+833)3m9-y5n
 DEBUG = True
 
 ALLOWED_HOSTS = []
+
+# send_default_pii=False: a diferencia del snippet por defecto de Sentry, no se envian
+# headers de request ni IP de usuarios -el sistema maneja datos de negocios/clientes
+# sujetos a la Ley N 29733 (TRD, seccion 6.2).
+SENTRY_DSN = os.getenv("SENTRY_DSN")
+if SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        environment=os.getenv("SENTRY_ENVIRONMENT", "development"),
+        send_default_pii=False,
+    )
 
 
 # Application definition
