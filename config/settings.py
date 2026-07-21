@@ -44,15 +44,16 @@ SHARED_APPS = (
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "django.contrib.postgres",
     "rest_framework",
     "drf_spectacular",
 )
 
 TENANT_APPS = (
     # Aplicaciones específicas para cada inquilino (tenant)
+    "usuarios",
     "inventario",
     "ventas",
-    "usuarios",
     "dashboard",
 )
 
