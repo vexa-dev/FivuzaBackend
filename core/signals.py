@@ -1,4 +1,11 @@
-"""Señales de core.
+from django.db.models.signals import post_save
+from django.dispatch import receiver
 
-post_save de Tenant: dispara tasks.provision_tenant cuando se crea un tenant.
-"""
+from core.models import Tenant
+from core.services import TenantProvisioningService
+
+
+@receiver(post_save, sender=Tenant)
+def provision_tenant(sender, instance, created, **kwargs):
+    if created:
+        TenantProvisioningService.provision(instance)
