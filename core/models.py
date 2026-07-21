@@ -1,3 +1,4 @@
+from django.contrib.auth.hashers import check_password, make_password
 from django.db import models
 from django_tenants.models import TenantMixin, DomainMixin
 
@@ -179,6 +180,13 @@ class PlatformStaff(models.Model):
     last_login = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # No hereda de AbstractUser -flujo de autenticacion completamente separado
+    # de tenant.users (Esquema Backend, mejora de arquitectura #2). is_authenticated
+    # e is_anonymous son lo minimo que DRF/permissions necesitan para tratar esta
+    # instancia como "el usuario autenticado" de request.user.
+    is_authenticated = True
+    is_anonymous = False
+
     class Meta:
         db_table = "platform_staff"
         constraints = [
@@ -190,3 +198,9 @@ class PlatformStaff(models.Model):
 
     def __str__(self):
         return self.email
+
+    def set_password(self, raw_password):
+        self.password = make_password(raw_password)
+
+    def check_password(self, raw_password):
+        return check_password(raw_password, self.password)

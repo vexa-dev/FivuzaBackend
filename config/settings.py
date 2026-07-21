@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+from datetime import timedelta
 from pathlib import Path
 import os
 import dj_database_url
@@ -31,7 +32,11 @@ SECRET_KEY = "django-insecure-3nzrr(nes&b(0ks&5q+klr17*7px)aoj1lo38s+833)3m9-y5n
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+# Antes se ignoraba la variable de entorno ALLOWED_HOSTS y quedaba en [] -en dev
+# eso "funcionaba por accidente" porque Django agrega '.localhost' cuando
+# DEBUG=True, pero el test runner fuerza DEBUG=False, asi que cualquier
+# subdominio (ej. tenant1.localhost) fallaba con DisallowedHost solo en tests.
+ALLOWED_HOSTS = [h.strip() for h in os.getenv("ALLOWED_HOSTS", "localhost").split(",")]
 
 # send_default_pii=False: a diferencia del snippet por defecto de Sentry, no se envian
 # headers de request ni IP de usuarios -el sistema maneja datos de negocios/clientes
@@ -58,6 +63,7 @@ SHARED_APPS = (
     "django.contrib.staticfiles",
     "django.contrib.postgres",
     "rest_framework",
+    "rest_framework_simplejwt.token_blacklist",
     "drf_spectacular",
 )
 
@@ -120,6 +126,12 @@ DATABASE_ROUTERS = ("django_tenants.routers.TenantSyncRouter",)
 
 REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "DEFAULT_AUTHENTICATION_CLASSES": (
+        "core.authentication.PlatformStaffJWTAuthentication",
+        # TenantValidatedJWTAuthentication (tenant.users) se agrega en la
+        # siguiente tarea de Sprint 1 -flujo de autenticacion separado del
+        # de platform_staff, tal como documenta el Esquema del Backend.
+    ),
 }
 
 SPECTACULAR_SETTINGS = {
@@ -127,6 +139,16 @@ SPECTACULAR_SETTINGS = {
     "DESCRIPTION": "API para el sistema SaaS Fivuza (ERP multi-tenant)",
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
+}
+
+# Infraestructura de djangorestframework-simplejwt (Sprint 1, Plan de Implementacion).
+# Usada hoy por platform_staff (core.authentication.PlatformStaffJWTAuthentication);
+# tenant.users la reutiliza a partir de Sprint 2 via TenantValidatedJWTAuthentication.
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=30),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
 }
 
 

@@ -3,9 +3,43 @@ import os
 import redis
 from django.db import connection
 from django.db.utils import OperationalError
+from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.exceptions import ValidationError
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.tokens import RefreshToken
+
+from core.serializers import PlatformStaffTokenObtainSerializer
+
+
+class PlatformStaffLoginView(APIView):
+    """POST email/password de un miembro del equipo Fivuza -> par de tokens JWT."""
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = PlatformStaffTokenObtainSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        return Response(serializer.validated_data, status=status.HTTP_200_OK)
+
+
+class PlatformStaffLogoutView(APIView):
+    """POST refresh token -> lo agrega a la blacklist, invalidandolo."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        refresh_token = request.data.get("refresh")
+        if not refresh_token:
+            raise ValidationError({"refresh": "Este campo es requerido."})
+        try:
+            RefreshToken(refresh_token).blacklist()
+        except TokenError as exc:
+            raise ValidationError({"refresh": str(exc)})
+        return Response(status=status.HTTP_205_RESET_CONTENT)
 
 
 @api_view(["GET"])
