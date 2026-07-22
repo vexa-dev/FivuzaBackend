@@ -6,6 +6,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.utils import datetime_from_epoch
 
 from core.models import (
+    Domain,
     PlatformStaff,
     Plan,
     PlanFeature,
@@ -14,6 +15,7 @@ from core.models import (
     Tenant,
     TenantSettings,
 )
+from core.services import TenantRegistrationService
 
 
 def issue_tokens_for_platform_staff(user: PlatformStaff) -> RefreshToken:
@@ -200,3 +202,40 @@ class PlatformStaffCRUDSerializer(serializers.ModelSerializer):
             instance.set_password(password)
         instance.save()
         return instance
+
+
+class TenantRegisterSerializer(serializers.Serializer):
+    """POST /api/v1/core/tenants/register/ (Especificacion de API §4.9).
+
+    No es un ModelSerializer porque el payload combina campos de 3 modelos
+    distintos (Tenant, Domain, Subscription) -delega la orquestacion a
+    TenantRegistrationService."""
+
+    company_name = serializers.CharField(max_length=100)
+    ruc = serializers.CharField(max_length=20, required=False, allow_null=True)
+    schema_name = serializers.CharField(max_length=63)
+    domain = serializers.CharField(max_length=253)
+    plan_code = serializers.CharField()
+    billing_cycle = serializers.ChoiceField(choices=["MONTHLY", "SEMIANNUAL", "ANNUAL"])
+
+    def validate_schema_name(self, value):
+        if Tenant.objects.filter(schema_name=value).exists():
+            raise serializers.ValidationError(
+                "Ya existe un tenant con ese schema_name."
+            )
+        return value
+
+    def validate_domain(self, value):
+        if Domain.objects.filter(domain=value).exists():
+            raise serializers.ValidationError("Ya existe un tenant con ese dominio.")
+        return value
+
+    def validate_plan_code(self, value):
+        if not Plan.objects.filter(code=value, is_active=True).exists():
+            raise serializers.ValidationError(
+                "No existe un plan activo con ese codigo."
+            )
+        return value
+
+    def create(self, validated_data):
+        return TenantRegistrationService.register(**validated_data)

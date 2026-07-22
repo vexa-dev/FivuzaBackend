@@ -30,6 +30,7 @@ from core.serializers import (
     PlatformStaffTokenObtainSerializer,
     SubscriptionPaymentSerializer,
     SubscriptionSerializer,
+    TenantRegisterSerializer,
     TenantSerializer,
     TenantSettingsSerializer,
 )
@@ -61,6 +62,27 @@ class PlatformStaffLogoutView(APIView):
         except TokenError as exc:
             raise ValidationError({"refresh": str(exc)})
         return Response(status=status.HTTP_205_RESET_CONTENT)
+
+
+class TenantRegisterView(APIView):
+    """POST -> registra un tenant nuevo (Especificacion de API §4.9). Solo
+    platform_staff -no es un formulario de auto-registro publico (Especificacion
+    de API §2.5: la creacion de tenants es "Solo platform_staff")."""
+
+    permission_classes = [IsAuthenticated, IsPlatformStaff]
+
+    def post(self, request):
+        serializer = TenantRegisterSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        tenant = serializer.save()
+        return Response(
+            {
+                "id": tenant.id,
+                "status": tenant.status,
+                "provisioning_status": "IN_PROGRESS",
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
 
 
 class TenantSuspendView(APIView):

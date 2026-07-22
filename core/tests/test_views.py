@@ -1,7 +1,7 @@
 # Pruebas de ViewSets/vistas: permisos, serialización, códigos de respuesta HTTP.
 from rest_framework.test import APIClient, APIRequestFactory, APITestCase
 
-from core.models import Domain, PlatformStaff, Tenant
+from core.models import Domain, PlatformStaff, Tenant, TenantSettings
 from core.permissions import IsPlatformStaff, TenantNotSuspended, TenantSuspendedError
 
 
@@ -340,3 +340,105 @@ class CoreCRUDEndpointsTests(APITestCase):
             "/api/v1/core/subscription-payments/"
         )
         self.assertEqual(response.status_code, 200)
+
+
+class TenantRegisterViewTests(APITestCase):
+    """POST /api/v1/core/tenants/register/ (Sprint 1, cierre del gap de la
+    Definicion de Hecho: "se puede crear un tenant nuevo via API")."""
+
+    @classmethod
+    def setUpTestData(cls):
+        public_tenant = Tenant.objects.create(
+            schema_name="public", company_name="Servicio Publico"
+        )
+        Domain.objects.create(
+            domain="public.localhost", tenant=public_tenant, is_primary=True
+        )
+        cls.password = "ClaveSegura123"
+        cls.super_admin = PlatformStaff.objects.create(
+            email="admin@fivuza.com", full_name="Super Admin", role="SUPER_ADMIN"
+        )
+        cls.super_admin.set_password(cls.password)
+        cls.super_admin.save()
+
+        from core.models import Plan
+
+        cls.plan = Plan.objects.create(
+            code="PLAN_2",
+            name="Plan 2",
+            max_users=1,
+            price_monthly=39,
+            price_semiannual=195,
+            price_annual=390,
+        )
+
+    def _client_as(self, staff):
+        client = APIClient(HTTP_HOST="public.localhost")
+        login = client.post(
+            "/api/v1/platform/auth/login/",
+            {"email": staff.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def _payload(self, **overrides):
+        payload = {
+            "company_name": "Bodega Lucho",
+            "ruc": "20123456789",
+            "schema_name": "emp_lucho",
+            "domain": "lucho.fivuza.localhost",
+            "plan_code": "PLAN_2",
+            "billing_cycle": "MONTHLY",
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_register_creates_tenant_domain_and_subscription(self):
+        from core.models import Domain as DomainModel
+        from core.models import Subscription
+
+        response = self._client_as(self.super_admin).post(
+            "/api/v1/core/tenants/register/", self._payload(), format="json"
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.data["status"], "trial")
+        self.assertEqual(response.data["provisioning_status"], "IN_PROGRESS")
+
+        tenant = Tenant.objects.get(schema_name="emp_lucho")
+        self.assertTrue(
+            DomainModel.objects.filter(
+                domain="lucho.fivuza.localhost", tenant=tenant
+            ).exists()
+        )
+        subscription = Subscription.objects.get(tenant=tenant)
+        self.assertEqual(subscription.plan, self.plan)
+        self.assertEqual(subscription.price_paid, 39)
+        # TenantProvisioningService (signal post_save) ya debio correr:
+        self.assertTrue(TenantSettings.objects.filter(tenant=tenant).exists())
+
+    def test_register_rejects_duplicate_schema_name(self):
+        client = self._client_as(self.super_admin)
+        client.post("/api/v1/core/tenants/register/", self._payload(), format="json")
+
+        response = client.post(
+            "/api/v1/core/tenants/register/",
+            self._payload(domain="otro-dominio.localhost"),
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_register_rejects_unknown_plan_code(self):
+        response = self._client_as(self.super_admin).post(
+            "/api/v1/core/tenants/register/",
+            self._payload(plan_code="PLAN_INEXISTENTE"),
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_register_requires_platform_staff(self):
+        response = APIClient(HTTP_HOST="public.localhost").post(
+            "/api/v1/core/tenants/register/", self._payload(), format="json"
+        )
+        self.assertEqual(response.status_code, 401)
