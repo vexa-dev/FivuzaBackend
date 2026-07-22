@@ -40,6 +40,11 @@ urlpatterns = [
         name="platform_logout",
     ),
     path(
+        "core/tenants/register/",
+        views.TenantRegisterView.as_view(),
+        name="tenant_register",
+    ),
+    path(
         "core/tenants/<int:pk>/suspend/",
         views.TenantSuspendView.as_view(),
         name="tenant_suspend",
