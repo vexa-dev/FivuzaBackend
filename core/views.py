@@ -4,7 +4,7 @@ import redis
 from django.db import connection
 from django.db.utils import OperationalError
 from django.shortcuts import get_object_or_404
-from rest_framework import status
+from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -13,9 +13,26 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from core.models import Tenant
-from core.permissions import IsPlatformStaff
-from core.serializers import PlatformStaffTokenObtainSerializer
+from core.models import (
+    PlatformStaff,
+    Plan,
+    PlanFeature,
+    Subscription,
+    SubscriptionPayment,
+    Tenant,
+    TenantSettings,
+)
+from core.permissions import IsPlatformStaff, require_platform_role
+from core.serializers import (
+    PlanFeatureSerializer,
+    PlanSerializer,
+    PlatformStaffCRUDSerializer,
+    PlatformStaffTokenObtainSerializer,
+    SubscriptionPaymentSerializer,
+    SubscriptionSerializer,
+    TenantSerializer,
+    TenantSettingsSerializer,
+)
 from core.services import TenantLifecycleService
 
 
@@ -74,6 +91,78 @@ class TenantReactivateView(APIView):
         tenant = get_object_or_404(Tenant, pk=pk)
         tenant = TenantLifecycleService.reactivate_tenant(tenant)
         return Response({"id": tenant.id, "status": tenant.status})
+
+
+class TenantViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.UpdateModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Sin create: el registro de un tenant nuevo es POST /core/tenants/register/
+    (Especificacion de API §4.9), un endpoint de accion fuera de este CRUD."""
+
+    queryset = Tenant.objects.all()
+    serializer_class = TenantSerializer
+    permission_classes = [IsAuthenticated, IsPlatformStaff]
+
+
+class PlanViewSet(viewsets.ModelViewSet):
+    """Lectura publica (sitio de marketing); escritura solo SUPER_ADMIN."""
+
+    queryset = Plan.objects.all()
+    serializer_class = PlanSerializer
+
+    def get_permissions(self):
+        if self.action in ("list", "retrieve"):
+            return [AllowAny()]
+        return [IsAuthenticated(), require_platform_role("SUPER_ADMIN")()]
+
+
+class PlanFeatureViewSet(viewsets.ModelViewSet):
+    queryset = PlanFeature.objects.all()
+    serializer_class = PlanFeatureSerializer
+    permission_classes = [IsAuthenticated, require_platform_role("SUPER_ADMIN")]
+
+
+class SubscriptionViewSet(viewsets.ModelViewSet):
+    queryset = Subscription.objects.all()
+    serializer_class = SubscriptionSerializer
+    permission_classes = [IsAuthenticated, IsPlatformStaff]
+
+
+class SubscriptionPaymentViewSet(viewsets.ModelViewSet):
+    """Lectura: cualquier platform_staff. Escritura: solo BILLING."""
+
+    queryset = SubscriptionPayment.objects.all()
+    serializer_class = SubscriptionPaymentSerializer
+
+    def get_permissions(self):
+        if self.action in ("list", "retrieve"):
+            return [IsAuthenticated(), IsPlatformStaff()]
+        return [IsAuthenticated(), require_platform_role("BILLING")()]
+
+
+class TenantSettingsViewSet(viewsets.ModelViewSet):
+    """Solo platform_staff por ahora. La Especificacion de API tambien permite
+    'admin del propio tenant para toggles operativos', pero eso depende de
+    PermissionService (usuarios), que llega recien en Sprint 2 -queda
+    pendiente para entonces, no se improvisa aqui."""
+
+    queryset = TenantSettings.objects.all()
+    serializer_class = TenantSettingsSerializer
+    permission_classes = [IsAuthenticated, IsPlatformStaff]
+
+
+class PlatformStaffViewSet(viewsets.ModelViewSet):
+    """Gestion del equipo interno de Fivuza -restringido a SUPER_ADMIN tanto
+    para lectura como escritura, dado que expone quien tiene cada rol
+    interno (soporte/facturacion/administracion)."""
+
+    queryset = PlatformStaff.objects.all()
+    serializer_class = PlatformStaffCRUDSerializer
+    permission_classes = [IsAuthenticated, require_platform_role("SUPER_ADMIN")]
 
 
 @api_view(["GET"])

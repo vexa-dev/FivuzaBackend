@@ -30,7 +30,7 @@ class PlatformStaffAuthTests(APITestCase):
 
     def _login(self):
         return self.client.post(
-            "/api/v1/auth/platform/login/",
+            "/api/v1/platform/auth/login/",
             {"email": self.staff.email, "password": self.password},
             format="json",
         )
@@ -43,7 +43,7 @@ class PlatformStaffAuthTests(APITestCase):
 
     def test_login_with_wrong_password_fails(self):
         response = self.client.post(
-            "/api/v1/auth/platform/login/",
+            "/api/v1/platform/auth/login/",
             {"email": self.staff.email, "password": "incorrecta"},
             format="json",
         )
@@ -57,7 +57,7 @@ class PlatformStaffAuthTests(APITestCase):
 
     def test_logout_requires_authentication(self):
         response = self.client.post(
-            "/api/v1/auth/platform/logout/", {"refresh": "x"}, format="json"
+            "/api/v1/platform/auth/logout/", {"refresh": "x"}, format="json"
         )
         self.assertEqual(response.status_code, 401)
 
@@ -66,24 +66,24 @@ class PlatformStaffAuthTests(APITestCase):
         access, refresh = tokens["access"], tokens["refresh"]
 
         refresh_response = self.client.post(
-            "/api/v1/auth/platform/refresh/", {"refresh": refresh}, format="json"
+            "/api/v1/platform/auth/refresh/", {"refresh": refresh}, format="json"
         )
         self.assertEqual(refresh_response.status_code, 200)
 
         old_refresh_reuse = self.client.post(
-            "/api/v1/auth/platform/refresh/", {"refresh": refresh}, format="json"
+            "/api/v1/platform/auth/refresh/", {"refresh": refresh}, format="json"
         )
         self.assertEqual(old_refresh_reuse.status_code, 401)
 
         new_refresh = refresh_response.data["refresh"]
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
         logout_response = self.client.post(
-            "/api/v1/auth/platform/logout/", {"refresh": new_refresh}, format="json"
+            "/api/v1/platform/auth/logout/", {"refresh": new_refresh}, format="json"
         )
         self.assertEqual(logout_response.status_code, 205)
 
         reuse_after_logout = self.client.post(
-            "/api/v1/auth/platform/refresh/", {"refresh": new_refresh}, format="json"
+            "/api/v1/platform/auth/refresh/", {"refresh": new_refresh}, format="json"
         )
         self.assertEqual(reuse_after_logout.status_code, 401)
 
@@ -112,7 +112,7 @@ class TenantLifecycleViewTests(APITestCase):
     def setUp(self):
         self.client = APIClient(HTTP_HOST="public.localhost")
         login = self.client.post(
-            "/api/v1/auth/platform/login/",
+            "/api/v1/platform/auth/login/",
             {"email": self.staff.email, "password": self.password},
             format="json",
         )
@@ -181,3 +181,162 @@ class IsPlatformStaffPermissionTests(APITestCase):
         request = APIRequestFactory().get("/")
         request.user = object()
         self.assertFalse(IsPlatformStaff().has_permission(request, None))
+
+
+class CoreCRUDEndpointsTests(APITestCase):
+    """CRUD de core: tenants, plans, plan-features, subscriptions,
+    subscription-payments, tenant-settings, platform-staff (Sprint 1, tarea 5)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        public_tenant = Tenant.objects.create(
+            schema_name="public", company_name="Servicio Publico"
+        )
+        Domain.objects.create(
+            domain="public.localhost", tenant=public_tenant, is_primary=True
+        )
+        cls.password = "ClaveSegura123"
+        cls.super_admin = PlatformStaff.objects.create(
+            email="admin@fivuza.com", full_name="Super Admin", role="SUPER_ADMIN"
+        )
+        cls.super_admin.set_password(cls.password)
+        cls.super_admin.save()
+        cls.support = PlatformStaff.objects.create(
+            email="soporte@fivuza.com", full_name="Soporte", role="SUPPORT"
+        )
+        cls.support.set_password(cls.password)
+        cls.support.save()
+        cls.billing = PlatformStaff.objects.create(
+            email="facturacion@fivuza.com", full_name="Billing", role="BILLING"
+        )
+        cls.billing.set_password(cls.password)
+        cls.billing.save()
+
+        from core.models import Plan
+
+        cls.plan = Plan.objects.create(
+            code="PLAN_1",
+            name="Plan 1",
+            max_users=1,
+            price_monthly=29,
+            price_semiannual=145,
+            price_annual=290,
+        )
+
+    def _client_as(self, staff):
+        client = APIClient(HTTP_HOST="public.localhost")
+        login = client.post(
+            "/api/v1/platform/auth/login/",
+            {"email": staff.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def test_plans_list_is_public(self):
+        response = APIClient(HTTP_HOST="public.localhost").get("/api/v1/core/plans/")
+        self.assertEqual(response.status_code, 200)
+
+    def test_plans_write_requires_super_admin(self):
+        response = self._client_as(self.support).post(
+            "/api/v1/core/plans/",
+            {
+                "code": "PLAN_2",
+                "name": "Plan 2",
+                "max_users": 1,
+                "price_monthly": 39,
+                "price_semiannual": 195,
+                "price_annual": 390,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+        response = self._client_as(self.super_admin).post(
+            "/api/v1/core/plans/",
+            {
+                "code": "PLAN_2",
+                "name": "Plan 2",
+                "max_users": 1,
+                "price_monthly": 39,
+                "price_semiannual": 195,
+                "price_annual": 390,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+
+    def test_tenants_list_has_no_create_action(self):
+        response = self._client_as(self.super_admin).post(
+            "/api/v1/core/tenants/",
+            {"schema_name": "no_deberia_crearse", "company_name": "X"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 405)
+
+    def test_tenants_list_requires_platform_staff(self):
+        response = APIClient(HTTP_HOST="public.localhost").get("/api/v1/core/tenants/")
+        self.assertEqual(response.status_code, 401)
+
+        response = self._client_as(self.support).get("/api/v1/core/tenants/")
+        self.assertEqual(response.status_code, 200)
+
+    def test_platform_staff_crud_restricted_to_super_admin(self):
+        response = self._client_as(self.support).get("/api/v1/core/platform-staff/")
+        self.assertEqual(response.status_code, 403)
+
+        response = self._client_as(self.super_admin).get("/api/v1/core/platform-staff/")
+        self.assertEqual(response.status_code, 200)
+
+    def test_platform_staff_create_hashes_password(self):
+        response = self._client_as(self.super_admin).post(
+            "/api/v1/core/platform-staff/",
+            {
+                "email": "nuevo@fivuza.com",
+                "full_name": "Nuevo",
+                "role": "SUPPORT",
+                "password": "OtraClave456",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertNotIn("password", response.data)
+
+        created = PlatformStaff.objects.get(email="nuevo@fivuza.com")
+        self.assertNotEqual(created.password, "OtraClave456")
+        self.assertTrue(created.check_password("OtraClave456"))
+
+    def test_subscription_payments_write_requires_billing_role(self):
+        from core.models import Subscription
+
+        subscription = Subscription.objects.create(
+            tenant=Tenant.objects.first(),
+            plan=self.plan,
+            billing_cycle="MONTHLY",
+            price_paid=29,
+            status="active",
+            starts_at="2026-01-01T00:00:00Z",
+            expires_at="2026-02-01T00:00:00Z",
+        )
+        payload = {
+            "subscription": subscription.id,
+            "amount": 29,
+            "payment_method": "TRANSFER",
+            "status": "PAID",
+        }
+
+        response = self._client_as(self.super_admin).post(
+            "/api/v1/core/subscription-payments/", payload, format="json"
+        )
+        self.assertEqual(response.status_code, 403)
+
+        response = self._client_as(self.billing).post(
+            "/api/v1/core/subscription-payments/", payload, format="json"
+        )
+        self.assertEqual(response.status_code, 201)
+
+        # lectura: cualquier platform_staff, no solo BILLING
+        response = self._client_as(self.support).get(
+            "/api/v1/core/subscription-payments/"
+        )
+        self.assertEqual(response.status_code, 200)
