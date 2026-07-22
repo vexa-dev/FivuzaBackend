@@ -3,6 +3,7 @@ import os
 import redis
 from django.db import connection
 from django.db.utils import OperationalError
+from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.exceptions import ValidationError
@@ -12,7 +13,10 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from core.models import Tenant
+from core.permissions import IsPlatformStaff
 from core.serializers import PlatformStaffTokenObtainSerializer
+from core.services import TenantLifecycleService
 
 
 class PlatformStaffLoginView(APIView):
@@ -40,6 +44,36 @@ class PlatformStaffLogoutView(APIView):
         except TokenError as exc:
             raise ValidationError({"refresh": str(exc)})
         return Response(status=status.HTTP_205_RESET_CONTENT)
+
+
+class TenantSuspendView(APIView):
+    """PATCH -> suspende un tenant (Especificacion de API §4.12). Solo platform_staff."""
+
+    permission_classes = [IsAuthenticated, IsPlatformStaff]
+
+    def patch(self, request, pk):
+        tenant = get_object_or_404(Tenant, pk=pk)
+        tenant = TenantLifecycleService.suspend_tenant(
+            tenant, reason=request.data.get("reason")
+        )
+        return Response(
+            {
+                "id": tenant.id,
+                "status": tenant.status,
+                "suspended_at": tenant.suspended_at,
+            }
+        )
+
+
+class TenantReactivateView(APIView):
+    """PATCH -> reactiva un tenant (Especificacion de API §4.12). Solo platform_staff."""
+
+    permission_classes = [IsAuthenticated, IsPlatformStaff]
+
+    def patch(self, request, pk):
+        tenant = get_object_or_404(Tenant, pk=pk)
+        tenant = TenantLifecycleService.reactivate_tenant(tenant)
+        return Response({"id": tenant.id, "status": tenant.status})
 
 
 @api_view(["GET"])

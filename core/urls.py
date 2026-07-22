@@ -15,4 +15,14 @@ urlpatterns = [
         views.PlatformStaffLogoutView.as_view(),
         name="platform_logout",
     ),
+    path(
+        "core/tenants/<int:pk>/suspend/",
+        views.TenantSuspendView.as_view(),
+        name="tenant_suspend",
+    ),
+    path(
+        "core/tenants/<int:pk>/reactivate/",
+        views.TenantReactivateView.as_view(),
+        name="tenant_reactivate",
+    ),
 ]

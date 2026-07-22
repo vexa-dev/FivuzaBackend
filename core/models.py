@@ -17,6 +17,7 @@ class Tenant(TenantMixin):
         ],
         default="trial",
     )
+    suspended_at = models.DateTimeField(null=True, blank=True)
     created_on = models.DateField(auto_now_add=True)
 
     # Por defecto en True: el esquema se creará y sincronizará automáticamente al guardar
