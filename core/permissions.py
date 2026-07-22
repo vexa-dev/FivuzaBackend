@@ -42,3 +42,19 @@ class IsPlatformStaff(BasePermission):
 
     def has_permission(self, request, view):
         return isinstance(request.user, PlatformStaff)
+
+
+def require_platform_role(*roles):
+    """Factory de permiso: exige ademas que PlatformStaff.role este en roles
+    (Especificacion de API §2.5, ej. "Solo platform_staff (SUPER_ADMIN)").
+
+    Uso: permission_classes = [IsAuthenticated, require_platform_role("SUPER_ADMIN")]
+    """
+
+    class _RequirePlatformRole(BasePermission):
+        def has_permission(self, request, view):
+            return (
+                isinstance(request.user, PlatformStaff) and request.user.role in roles
+            )
+
+    return _RequirePlatformRole
