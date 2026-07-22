@@ -1,4 +1,31 @@
+from django.utils import timezone
+
 from core.models import Tenant, TenantSettings
+
+
+class TenantLifecycleService:
+    """Suspende/reactiva el acceso de un tenant sin borrar ningun dato -una
+    suspension es una pausa, no una eliminacion (Especificacion de API,
+    seccion 4.12). Solo accesible por platform_staff.
+
+    El motivo (reason) de la suspension no tiene un campo propio en la BDD
+    v5 -se acepta como parametro para uso futuro (ej. bitacora de soporte),
+    pero por ahora no se persiste en ningun lado.
+    """
+
+    @staticmethod
+    def suspend_tenant(tenant: Tenant, reason: str | None = None) -> Tenant:
+        tenant.status = "suspended"
+        tenant.suspended_at = timezone.now()
+        tenant.save(update_fields=["status", "suspended_at"])
+        return tenant
+
+    @staticmethod
+    def reactivate_tenant(tenant: Tenant) -> Tenant:
+        tenant.status = "active"
+        tenant.suspended_at = None
+        tenant.save(update_fields=["status", "suspended_at"])
+        return tenant
 
 
 class TenantProvisioningService:
