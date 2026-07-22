@@ -70,6 +70,7 @@ SHARED_APPS = (
     "rest_framework",
     "rest_framework_simplejwt.token_blacklist",
     "drf_spectacular",
+    "corsheaders",
 )
 
 TENANT_APPS = (
@@ -89,6 +90,7 @@ TENANT_DOMAIN_MODEL = "core.Domain"
 
 MIDDLEWARE = [
     "django_tenants.middleware.main.TenantMainMiddleware",
+    "corsheaders.middleware.CorsMiddleware",  # antes de CommonMiddleware (requisito de django-cors-headers)
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -146,6 +148,15 @@ SPECTACULAR_SETTINGS = {
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
 }
+
+# django-cors-headers: el frontend (puerto 5173) y el backend (puerto 8000)
+# son origenes distintos incluso en desarrollo local.
+CORS_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:5173").split(",")
+    if origin.strip()
+]
+CORS_ALLOW_CREDENTIALS = True
 
 # Infraestructura de djangorestframework-simplejwt (Sprint 1, Plan de Implementacion).
 # Usada hoy por platform_staff (core.authentication.PlatformStaffJWTAuthentication);
