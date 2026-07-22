@@ -128,9 +128,10 @@ REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "core.authentication.PlatformStaffJWTAuthentication",
-        # TenantValidatedJWTAuthentication (tenant.users) se agrega en la
-        # siguiente tarea de Sprint 1 -flujo de autenticacion separado del
-        # de platform_staff, tal como documenta el Esquema del Backend.
+        "core.authentication.TenantValidatedJWTAuthentication",
+        # Ambas conviven: cada una resuelve el user_id contra su propia
+        # tabla (platform_staff / tenant.users) y no interfieren entre si.
+        # Los endpoints de tenant.users llegan recien en Sprint 2.
     ),
 }
 
