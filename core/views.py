@@ -14,6 +14,7 @@ from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from core.models import (
+    PlatformAuditLog,
     PlatformStaff,
     Plan,
     PlanFeature,
@@ -26,6 +27,7 @@ from core.permissions import IsPlatformStaff, require_platform_role
 from core.serializers import (
     PlanFeatureSerializer,
     PlanSerializer,
+    PlatformAuditLogSerializer,
     PlatformStaffCRUDSerializer,
     PlatformStaffTokenObtainSerializer,
     SubscriptionPaymentSerializer,
@@ -34,7 +36,47 @@ from core.serializers import (
     TenantSerializer,
     TenantSettingsSerializer,
 )
-from core.services import TenantLifecycleService
+from core.services import (
+    PlatformAuditLogService,
+    PlatformDashboardService,
+    TenantLifecycleService,
+)
+
+
+class AuditLoggedViewSetMixin:
+    """Registra automaticamente en platform_audit_logs cada create/update/
+    destroy de un ViewSet (Esquema Backend §8.2: "cada vista que ejecuta una
+    accion relevante llama explicitamente a este helper"). El nombre de la
+    entidad es el nombre del modelo, ej. "Plan", "Subscription"."""
+
+    def perform_create(self, serializer):
+        super().perform_create(serializer)
+        PlatformAuditLogService.log_action(
+            staff=self.request.user,
+            action="CREATE",
+            entity=serializer.instance.__class__.__name__,
+            entity_id=serializer.instance.pk,
+        )
+
+    def perform_update(self, serializer):
+        super().perform_update(serializer)
+        PlatformAuditLogService.log_action(
+            staff=self.request.user,
+            action="UPDATE",
+            entity=serializer.instance.__class__.__name__,
+            entity_id=serializer.instance.pk,
+        )
+
+    def perform_destroy(self, instance):
+        entity = instance.__class__.__name__
+        entity_id = instance.pk
+        super().perform_destroy(instance)
+        PlatformAuditLogService.log_action(
+            staff=self.request.user,
+            action="DELETE",
+            entity=entity,
+            entity_id=entity_id,
+        )
 
 
 class PlatformStaffLoginView(APIView):
@@ -75,6 +117,13 @@ class TenantRegisterView(APIView):
         serializer = TenantRegisterSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         tenant = serializer.save()
+        PlatformAuditLogService.log_action(
+            staff=request.user,
+            action="REGISTER_TENANT",
+            entity="Tenant",
+            entity_id=tenant.id,
+            details={"company_name": tenant.company_name},
+        )
         return Response(
             {
                 "id": tenant.id,
@@ -95,6 +144,13 @@ class TenantSuspendView(APIView):
         tenant = TenantLifecycleService.suspend_tenant(
             tenant, reason=request.data.get("reason")
         )
+        PlatformAuditLogService.log_action(
+            staff=request.user,
+            action="SUSPEND_TENANT",
+            entity="Tenant",
+            entity_id=tenant.id,
+            details={"reason": request.data.get("reason")},
+        )
         return Response(
             {
                 "id": tenant.id,
@@ -112,10 +168,17 @@ class TenantReactivateView(APIView):
     def patch(self, request, pk):
         tenant = get_object_or_404(Tenant, pk=pk)
         tenant = TenantLifecycleService.reactivate_tenant(tenant)
+        PlatformAuditLogService.log_action(
+            staff=request.user,
+            action="REACTIVATE_TENANT",
+            entity="Tenant",
+            entity_id=tenant.id,
+        )
         return Response({"id": tenant.id, "status": tenant.status})
 
 
 class TenantViewSet(
+    AuditLoggedViewSetMixin,
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
     mixins.UpdateModelMixin,
@@ -130,7 +193,7 @@ class TenantViewSet(
     permission_classes = [IsAuthenticated, IsPlatformStaff]
 
 
-class PlanViewSet(viewsets.ModelViewSet):
+class PlanViewSet(AuditLoggedViewSetMixin, viewsets.ModelViewSet):
     """Lectura publica (sitio de marketing); escritura solo SUPER_ADMIN."""
 
     queryset = Plan.objects.all()
@@ -142,19 +205,19 @@ class PlanViewSet(viewsets.ModelViewSet):
         return [IsAuthenticated(), require_platform_role("SUPER_ADMIN")()]
 
 
-class PlanFeatureViewSet(viewsets.ModelViewSet):
+class PlanFeatureViewSet(AuditLoggedViewSetMixin, viewsets.ModelViewSet):
     queryset = PlanFeature.objects.all()
     serializer_class = PlanFeatureSerializer
     permission_classes = [IsAuthenticated, require_platform_role("SUPER_ADMIN")]
 
 
-class SubscriptionViewSet(viewsets.ModelViewSet):
+class SubscriptionViewSet(AuditLoggedViewSetMixin, viewsets.ModelViewSet):
     queryset = Subscription.objects.all()
     serializer_class = SubscriptionSerializer
     permission_classes = [IsAuthenticated, IsPlatformStaff]
 
 
-class SubscriptionPaymentViewSet(viewsets.ModelViewSet):
+class SubscriptionPaymentViewSet(AuditLoggedViewSetMixin, viewsets.ModelViewSet):
     """Lectura: cualquier platform_staff. Escritura: solo BILLING."""
 
     queryset = SubscriptionPayment.objects.all()
@@ -166,7 +229,7 @@ class SubscriptionPaymentViewSet(viewsets.ModelViewSet):
         return [IsAuthenticated(), require_platform_role("BILLING")()]
 
 
-class TenantSettingsViewSet(viewsets.ModelViewSet):
+class TenantSettingsViewSet(AuditLoggedViewSetMixin, viewsets.ModelViewSet):
     """Solo platform_staff por ahora. La Especificacion de API tambien permite
     'admin del propio tenant para toggles operativos', pero eso depende de
     PermissionService (usuarios), que llega recien en Sprint 2 -queda
@@ -177,7 +240,7 @@ class TenantSettingsViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsPlatformStaff]
 
 
-class PlatformStaffViewSet(viewsets.ModelViewSet):
+class PlatformStaffViewSet(AuditLoggedViewSetMixin, viewsets.ModelViewSet):
     """Gestion del equipo interno de Fivuza -restringido a SUPER_ADMIN tanto
     para lectura como escritura, dado que expone quien tiene cada rol
     interno (soporte/facturacion/administracion)."""
@@ -185,6 +248,26 @@ class PlatformStaffViewSet(viewsets.ModelViewSet):
     queryset = PlatformStaff.objects.all()
     serializer_class = PlatformStaffCRUDSerializer
     permission_classes = [IsAuthenticated, require_platform_role("SUPER_ADMIN")]
+
+
+class PlatformAuditLogViewSet(
+    mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet
+):
+    """Solo lectura (Especificacion de API §4.14) -se escribe unicamente via
+    PlatformAuditLogService.log_action(), nunca por POST/PUT del cliente."""
+
+    queryset = PlatformAuditLog.objects.select_related("platform_staff").all()
+    serializer_class = PlatformAuditLogSerializer
+    permission_classes = [IsAuthenticated, IsPlatformStaff]
+
+
+class DashboardSummaryView(APIView):
+    """GET -> resumen agregado del panel interno (Especificacion de API §4.13)."""
+
+    permission_classes = [IsAuthenticated, IsPlatformStaff]
+
+    def get(self, request):
+        return Response(PlatformDashboardService.get_summary())
 
 
 @api_view(["GET"])

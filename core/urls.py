@@ -22,6 +22,11 @@ router.register(
 router.register(
     "core/platform-staff", views.PlatformStaffViewSet, basename="platform-staff"
 )
+router.register(
+    "core/platform-audit-logs",
+    views.PlatformAuditLogViewSet,
+    basename="platform-audit-log",
+)
 
 urlpatterns = [
     # Especificacion de API, seccion 3.2: /api/v1/platform/auth/... (no
@@ -53,6 +58,11 @@ urlpatterns = [
         "core/tenants/<int:pk>/reactivate/",
         views.TenantReactivateView.as_view(),
         name="tenant_reactivate",
+    ),
+    path(
+        "core/dashboard/summary/",
+        views.DashboardSummaryView.as_view(),
+        name="dashboard_summary",
     ),
 ]
 
