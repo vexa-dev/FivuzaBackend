@@ -205,3 +205,27 @@ class PlatformStaff(models.Model):
 
     def check_password(self, raw_password):
         return check_password(raw_password, self.password)
+
+
+class PlatformAuditLog(models.Model):
+    """Bitacora de acciones de platform_staff sobre la plataforma (suspender/
+    reactivar un tenant, confirmar un pago, crear/editar un plan, etc.).
+    Complementa a tenant.audit_logs, que solo registra acciones DENTRO del
+    negocio de un tenant. Se escribe unicamente via PlatformAuditLogService,
+    nunca por POST/PUT directo del cliente (BDD v5, seccion public.platform_audit_logs)."""
+
+    platform_staff = models.ForeignKey(
+        PlatformStaff, on_delete=models.PROTECT, related_name="audit_logs"
+    )
+    action = models.CharField(max_length=100)
+    entity = models.CharField(max_length=100)
+    entity_id = models.IntegerField()
+    details = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "platform_audit_logs"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.action} on {self.entity}#{self.entity_id}"

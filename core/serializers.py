@@ -7,6 +7,7 @@ from rest_framework_simplejwt.utils import datetime_from_epoch
 
 from core.models import (
     Domain,
+    PlatformAuditLog,
     PlatformStaff,
     Plan,
     PlanFeature,
@@ -202,6 +203,30 @@ class PlatformStaffCRUDSerializer(serializers.ModelSerializer):
             instance.set_password(password)
         instance.save()
         return instance
+
+
+class PlatformAuditLogSerializer(serializers.ModelSerializer):
+    """Solo lectura (Especificacion de API §4.14) -platform_audit_logs se
+    escribe unicamente via PlatformAuditLogService.log_action(), nunca por
+    POST/PUT directo del cliente."""
+
+    platform_staff_email = serializers.EmailField(
+        source="platform_staff.email", read_only=True
+    )
+
+    class Meta:
+        model = PlatformAuditLog
+        fields = [
+            "id",
+            "platform_staff",
+            "platform_staff_email",
+            "action",
+            "entity",
+            "entity_id",
+            "details",
+            "created_at",
+        ]
+        read_only_fields = fields
 
 
 class TenantRegisterSerializer(serializers.Serializer):

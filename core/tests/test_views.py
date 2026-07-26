@@ -442,3 +442,173 @@ class TenantRegisterViewTests(APITestCase):
             "/api/v1/core/tenants/register/", self._payload(), format="json"
         )
         self.assertEqual(response.status_code, 401)
+
+
+class PlatformAuditLogTests(APITestCase):
+    """platform_audit_logs: se escribe via PlatformAuditLogService al suspender/
+    reactivar/registrar un tenant, y es de solo lectura por API."""
+
+    @classmethod
+    def setUpTestData(cls):
+        public_tenant = Tenant.objects.create(
+            schema_name="public", company_name="Servicio Publico"
+        )
+        Domain.objects.create(
+            domain="public.localhost", tenant=public_tenant, is_primary=True
+        )
+        cls.password = "ClaveSegura123"
+        cls.super_admin = PlatformStaff.objects.create(
+            email="admin@fivuza.com", full_name="Super Admin", role="SUPER_ADMIN"
+        )
+        cls.super_admin.set_password(cls.password)
+        cls.super_admin.save()
+        cls.target_tenant = Tenant.objects.create(
+            schema_name="test_audit", company_name="Negocio Auditado"
+        )
+
+    def _client_as(self, staff):
+        client = APIClient(HTTP_HOST="public.localhost")
+        login = client.post(
+            "/api/v1/platform/auth/login/",
+            {"email": staff.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def test_suspend_tenant_writes_audit_log(self):
+        from core.models import PlatformAuditLog
+
+        client = self._client_as(self.super_admin)
+        client.patch(
+            f"/api/v1/core/tenants/{self.target_tenant.id}/suspend/",
+            {"reason": "Suscripcion vencida"},
+            format="json",
+        )
+        log = PlatformAuditLog.objects.get(
+            action="SUSPEND_TENANT", entity_id=self.target_tenant.id
+        )
+        self.assertEqual(log.platform_staff, self.super_admin)
+        self.assertEqual(log.entity, "Tenant")
+
+    def test_plan_create_writes_audit_log(self):
+        from core.models import PlatformAuditLog
+
+        client = self._client_as(self.super_admin)
+        response = client.post(
+            "/api/v1/core/plans/",
+            {
+                "code": "PLAN_AUDIT",
+                "name": "Plan Auditado",
+                "max_users": 1,
+                "price_monthly": 19,
+                "price_semiannual": 95,
+                "price_annual": 190,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(
+            PlatformAuditLog.objects.filter(
+                action="CREATE", entity="Plan", entity_id=response.data["id"]
+            ).exists()
+        )
+
+    def test_audit_log_list_requires_platform_staff(self):
+        response = APIClient(HTTP_HOST="public.localhost").get(
+            "/api/v1/core/platform-audit-logs/"
+        )
+        self.assertEqual(response.status_code, 401)
+
+        response = self._client_as(self.super_admin).get(
+            "/api/v1/core/platform-audit-logs/"
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_audit_log_is_read_only(self):
+        response = self._client_as(self.super_admin).post(
+            "/api/v1/core/platform-audit-logs/",
+            {
+                "platform_staff": self.super_admin.id,
+                "action": "FAKE",
+                "entity": "Tenant",
+                "entity_id": 1,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 405)
+
+
+class DashboardSummaryViewTests(APITestCase):
+    """GET /api/v1/core/dashboard/summary/ (Especificacion de API §4.13)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        public_tenant = Tenant.objects.create(
+            schema_name="public", company_name="Servicio Publico"
+        )
+        Domain.objects.create(
+            domain="public.localhost", tenant=public_tenant, is_primary=True
+        )
+        cls.password = "ClaveSegura123"
+        cls.super_admin = PlatformStaff.objects.create(
+            email="admin@fivuza.com", full_name="Super Admin", role="SUPER_ADMIN"
+        )
+        cls.super_admin.set_password(cls.password)
+        cls.super_admin.save()
+
+        from core.models import Plan, Subscription
+
+        cls.active_tenant = Tenant.objects.create(
+            schema_name="test_dash_active", company_name="Activo", status="active"
+        )
+        cls.suspended_tenant = Tenant.objects.create(
+            schema_name="test_dash_suspended",
+            company_name="Suspendido",
+            status="suspended",
+        )
+        cls.plan = Plan.objects.create(
+            code="PLAN_DASH",
+            name="Plan Dash",
+            max_users=1,
+            price_monthly=30,
+            price_semiannual=150,
+            price_annual=300,
+        )
+        cls.subscription = Subscription.objects.create(
+            tenant=cls.active_tenant,
+            plan=cls.plan,
+            billing_cycle="ANNUAL",
+            price_paid=300,
+            status="active",
+            starts_at="2026-01-01T00:00:00Z",
+            expires_at="2027-01-01T00:00:00Z",
+        )
+
+    def _client_as(self, staff):
+        client = APIClient(HTTP_HOST="public.localhost")
+        login = client.post(
+            "/api/v1/platform/auth/login/",
+            {"email": staff.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def test_summary_requires_platform_staff(self):
+        response = APIClient(HTTP_HOST="public.localhost").get(
+            "/api/v1/core/dashboard/summary/"
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_summary_aggregates_expected_fields(self):
+        response = self._client_as(self.super_admin).get(
+            "/api/v1/core/dashboard/summary/"
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.data
+        self.assertEqual(data["tenants_by_status"]["active"], 1)
+        self.assertEqual(data["tenants_by_status"]["suspended"], 1)
+        self.assertEqual(float(data["mrr"]), 25.0)  # 300 ANNUAL / 12
+        self.assertEqual(data["pending_payments_count"], 0)
+        self.assertEqual(len(data["recently_suspended"]), 1)
