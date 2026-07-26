@@ -16,7 +16,7 @@ jobs:
       with:
         python-version: '3.12'
     - name: Install Ruff
-      run: pip install ruff
+      run: pip install ruff==0.15.21
     - name: Run Ruff Linter
       run: ruff check .
     - name: Run Ruff Formatter
