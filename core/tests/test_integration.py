@@ -38,11 +38,56 @@ class TenantProvisioningServiceTests(TestCase):
 
         self.assertEqual(TenantSettings.objects.filter(tenant=tenant).count(), 1)
 
+    def test_creating_a_tenant_seeds_default_roles_with_base_permissions(self):
+        from django_tenants.utils import schema_context
+
+        from usuarios.models import Role
+
+        tenant = Tenant.objects.create(
+            schema_name="test_provisioning_roles", company_name="Negocio de Prueba 3"
+        )
+
+        with schema_context(tenant.schema_name):
+            role_names = set(Role.objects.values_list("name", flat=True))
+            self.assertEqual(role_names, {"admin", "manager", "seller"})
+
+            admin_codes = set(
+                Role.objects.get(name="admin").role_permissions.values_list(
+                    "permission__code", flat=True
+                )
+            )
+            self.assertIn("USERS_MANAGE_ROLES", admin_codes)
+            self.assertIn("HR_MANAGE", admin_codes)
+
+            seller_codes = set(
+                Role.objects.get(name="seller").role_permissions.values_list(
+                    "permission__code", flat=True
+                )
+            )
+            self.assertEqual(seller_codes, set())
+
+    def test_seeding_default_roles_is_never_attempted_on_public_schema(self):
+        from core.services import TenantProvisioningService
+
+        public_tenant = Tenant(schema_name="public", company_name="Servicio Publico")
+        # No debe lanzar (ni intentar consultar tablas de usuarios en public,
+        # que no existen ahi -usuarios es TENANT_APP, no SHARED_APP). No se
+        # guarda el tenant: alcanza con el schema_name para probar el guard.
+        TenantProvisioningService.seed_default_roles(public_tenant)
+
 
 class TenantValidatedJWTAuthenticationTests(TenantTestCase):
-    """No existe todavia un endpoint de login de tenant.users (llega en
-    Sprint 2), asi que se prueba la clase de autenticacion directamente,
-    construyendo el token a mano -exactamente lo que hara ese endpoint."""
+    """Prueba la clase de autenticacion directamente, construyendo el token a
+    mano -complementa las pruebas de flujo completo del endpoint real de
+    login (usuarios.tests.test_views.TenantUserAuthTests, Sprint 2)."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_jwt_auth"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-jwt-auth.test.com"
 
     @classmethod
     def setUpClass(cls):

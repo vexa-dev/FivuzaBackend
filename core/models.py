@@ -3,6 +3,37 @@ from django.db import models
 from django_tenants.models import TenantMixin, DomainMixin
 
 
+class ActiveManager(models.Manager):
+    """Manager por defecto de SoftDeleteModel: excluye automaticamente los
+    registros con deleted_at no nulo. Todo el codigo de negocio debe usar
+    este manager (Model.objects) por defecto; solo una pantalla explicita de
+    papelera/auditoria debe usar Model.all_objects (Convenciones de Codigo
+    §2.5; Esquema Backend §2.5)."""
+
+    def get_queryset(self):
+        return super().get_queryset().filter(deleted_at__isnull=True)
+
+
+class SoftDeleteModel(models.Model):
+    """Modelo abstracto para eliminacion logica, compartido entre apps.
+
+    Cada modelo concreto que herede de esta clase debe declarar su propio
+    campo deleted_by -el FK correcto depende de que modelo de usuario aplica
+    en su esquema (tenant.users o platform_staff), por eso no se declara aqui.
+    Es una excepcion deliberada a la regla de "nunca importar modelos de otra
+    app": SoftDeleteModel es un mixin abstracto sin tabla ni relacion propia,
+    no una dependencia de negocio entre apps.
+    """
+
+    deleted_at = models.DateTimeField(null=True, blank=True)
+
+    objects = ActiveManager()
+    all_objects = models.Manager()
+
+    class Meta:
+        abstract = True
+
+
 class Tenant(TenantMixin):
     company_name = models.CharField(max_length=100)
     ruc = models.CharField(max_length=20, unique=True, null=True, blank=True)

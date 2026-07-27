@@ -39,4 +39,5 @@ urlpatterns = [
     # Health Check
     path("api/v1/health/", core_views.health_check, name="health_check"),
     path("api/v1/", include("core.urls")),
+    path("api/v1/", include("usuarios.urls")),
 ]

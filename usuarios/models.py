@@ -1,6 +1,8 @@
 from django.contrib.auth.hashers import check_password, make_password
 from django.db import models
 
+from core.models import SoftDeleteModel
+
 
 class Role(models.Model):
     name = models.CharField(max_length=50)
@@ -54,13 +56,12 @@ class RolePermission(models.Model):
         ]
 
 
-class User(models.Model):
+class User(SoftDeleteModel):
     email = models.EmailField()
     password = models.CharField(max_length=255)
     role = models.ForeignKey(Role, on_delete=models.PROTECT, related_name="users")
     is_active = models.BooleanField(default=True)
     last_login = models.DateTimeField(null=True, blank=True)
-    deleted_at = models.DateTimeField(null=True, blank=True)
     deleted_by = models.ForeignKey(
         "self", on_delete=models.PROTECT, null=True, blank=True, related_name="+"
     )
@@ -161,7 +162,7 @@ class AuditLog(models.Model):
         db_table = "audit_logs"
 
 
-class Employee(models.Model):
+class Employee(SoftDeleteModel):
     """Ficha de trabajador, separada del concepto de User (acceso al sistema es opcional)."""
 
     user = models.OneToOneField(
@@ -183,7 +184,6 @@ class Employee(models.Model):
     hire_date = models.DateField()
     termination_date = models.DateField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
-    deleted_at = models.DateTimeField(null=True, blank=True)
     deleted_by = models.ForeignKey(
         User, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
     )

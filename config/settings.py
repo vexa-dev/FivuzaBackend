@@ -168,6 +168,17 @@ SIMPLE_JWT = {
     "BLACKLIST_AFTER_ROTATION": True,
 }
 
+# Cache de Redis (Sprint 2, Plan de Implementacion): usada por
+# usuarios.services.PermissionService para no recalcular el set de permisos
+# de un usuario en cada request. Backend nativo de Django (5.0+), sin
+# depender de django-redis.
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": os.getenv("REDIS_URL", "redis://redis:6379/0"),
+    }
+}
+
 
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators

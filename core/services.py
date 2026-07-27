@@ -3,6 +3,7 @@ from datetime import timedelta
 
 from django.db.models import Count
 from django.utils import timezone
+from django_tenants.utils import get_public_schema_name
 
 from core.models import (
     Domain,
@@ -102,15 +103,87 @@ class TenantProvisioningService:
     Version inicial (Sprint 1, Plan de Implementacion): solo crea el registro
     1:1 de TenantSettings. El esquema fisico en Postgres ya lo crea
     django-tenants automaticamente (Tenant.auto_create_schema = True).
-    La creacion de roles por defecto, almacen 'Principal' y caja por defecto
-    se completa en Sprint 2-3, cuando esos modelos ya tengan su catalogo base
-    (permisos, etc.) listo para poblarlos.
+    La creacion de almacen 'Principal' y caja por defecto se completa en
+    Sprint 3-10, cuando esos modelos ya existan.
     """
+
+    # Catalogo minimo de permisos que Sprint 2 necesita: solo los de la app
+    # usuarios (RBAC + auditoria + RRHH), que es lo unico que ya tiene
+    # endpoints reales. Cada sprint que agregue un modulo de negocio con
+    # permisos propios (inventario, ventas, etc.) debe sumar sus codigos aqui
+    # y a los 3 roles que corresponda -no se anticipan codigos de modulos que
+    # todavia no existen (Convenciones: no disenar para requisitos hipoteticos).
+    _BASE_PERMISSIONS = [
+        ("USERS_MANAGE_ROLES", "USERS"),
+        ("USERS_MANAGE", "USERS"),
+        ("USERS_VIEW_AUDIT", "USERS"),
+        ("HR_MANAGE", "HR"),
+    ]
+    _ROLE_PERMISSIONS = {
+        "admin": [
+            "USERS_MANAGE_ROLES",
+            "USERS_MANAGE",
+            "USERS_VIEW_AUDIT",
+            "HR_MANAGE",
+        ],
+        "manager": ["USERS_MANAGE", "USERS_VIEW_AUDIT", "HR_MANAGE"],
+        "seller": [],
+    }
 
     @staticmethod
     def provision(tenant: Tenant) -> TenantSettings:
+        """Se dispara desde post_save de Tenant (core/signals.py). Solo crea
+        TenantSettings -tabla de core, vive en el esquema public, no depende
+        de que el esquema fisico del tenant ya exista.
+
+        La creacion de roles por defecto NO puede hacerse aqui: post_save se
+        dispara DENTRO de TenantMixin.save(), ANTES de que ese mismo metodo
+        llame a create_schema() -el esquema del tenant todavia no existe en
+        este punto. Por eso seed_default_roles() se dispara aparte, desde la
+        señal post_schema_sync (ver core/signals.py), que django-tenants
+        emite recien despues de crear y migrar el esquema fisico.
+        """
         settings, _ = TenantSettings.objects.get_or_create(tenant=tenant)
         return settings
+
+    @staticmethod
+    def seed_default_roles(tenant: Tenant) -> None:
+        """Crea los 3 roles por defecto con su set de permisos base dentro
+        del esquema ya migrado del tenant. Nunca se ejecuta sobre el esquema
+        public -ese esquema no tiene las tablas de usuarios (TENANT_APP),
+        y ademas no es un negocio real sobre el cual tenga sentido sembrar
+        roles."""
+        if tenant.schema_name == get_public_schema_name():
+            return
+
+        from django_tenants.utils import schema_context
+
+        with schema_context(tenant.schema_name):
+            TenantProvisioningService._seed_default_roles()
+
+    @staticmethod
+    def _seed_default_roles() -> None:
+        # Import perezoso: usuarios es TENANT_APP, core es SHARED_APP -esta
+        # es la unica excepcion documentada a "nunca importar modelos de otra
+        # app" (Esquema Backend §8.2), porque el aprovisionamiento ocurre una
+        # sola vez, al nacer el tenant.
+        from usuarios.models import Permission, Role, RolePermission
+
+        permissions_by_code = {}
+        for code, module in TenantProvisioningService._BASE_PERMISSIONS:
+            permission, _ = Permission.objects.get_or_create(
+                code=code, defaults={"module": module}
+            )
+            permissions_by_code[code] = permission
+
+        for role_name, codes in TenantProvisioningService._ROLE_PERMISSIONS.items():
+            role, _ = Role.objects.get_or_create(
+                name=role_name, defaults={"is_system_default": True}
+            )
+            for code in codes:
+                RolePermission.objects.get_or_create(
+                    role=role, permission=permissions_by_code[code]
+                )
 
 
 class PlatformAuditLogService:
