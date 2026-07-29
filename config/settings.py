@@ -156,6 +156,19 @@ CORS_ALLOWED_ORIGINS = [
     for origin in os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:5173").split(",")
     if origin.strip()
 ]
+# El panel core (platform_staff) usa una VITE_API_URL fija, por eso le
+# alcanza con el origen exacto de arriba. El ERP de cada tenant (Sprint 2)
+# resuelve la API por window.location.hostname -su propio origen del
+# navegador ES el subdominio del tenant (ej. tenant1.localhost:5173)-, asi
+# que una lista fija de origenes no alcanza: se necesita un patron que
+# acepte cualquier subdominio.
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    regex.strip()
+    for regex in os.getenv(
+        "CORS_ALLOWED_ORIGIN_REGEXES", r"^http://([a-z0-9-]+\.)?localhost:5173$"
+    ).split(",")
+    if regex.strip()
+]
 CORS_ALLOW_CREDENTIALS = True
 
 # Infraestructura de djangorestframework-simplejwt (Sprint 1, Plan de Implementacion).

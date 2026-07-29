@@ -32,6 +32,12 @@ class TenantUserAuthTests(TenantTestCase):
         super().tearDownClass()
 
     def setUp(self):
+        # Ver PermissionServiceTests.setUp (usuarios/tests/test_models.py):
+        # la cache de permisos vive en Redis, fuera de la transaccion de BD
+        # que Django revierte al terminar cada test.
+        from django.core.cache import cache
+
+        cache.clear()
         self.client = APIClient(HTTP_HOST=self.domain.domain)
 
     def _login(self):
@@ -47,6 +53,15 @@ class TenantUserAuthTests(TenantTestCase):
         self.assertIn("access", response.data)
         self.assertIn("refresh", response.data)
         self.assertEqual(response.data["user"]["email"], self.user.email)
+
+    def test_login_response_includes_permission_codes(self):
+        from usuarios.models import RolePermission
+
+        permission = Permission.objects.create(code="TEST_LOGIN_PERM", module="USERS")
+        RolePermission.objects.create(role=self.role, permission=permission)
+
+        response = self._login()
+        self.assertIn("TEST_LOGIN_PERM", response.data["user"]["permissions"])
 
     def test_login_with_wrong_password_fails(self):
         response = self.client.post(
