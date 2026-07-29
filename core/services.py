@@ -8,6 +8,7 @@ from django_tenants.utils import get_public_schema_name
 from core.models import (
     Domain,
     Plan,
+    PlanFeature,
     PlatformAuditLog,
     PlatformStaff,
     Subscription,
@@ -118,6 +119,8 @@ class TenantProvisioningService:
         ("USERS_MANAGE", "USERS"),
         ("USERS_VIEW_AUDIT", "USERS"),
         ("HR_MANAGE", "HR"),
+        ("INVENTORY_VIEW", "INVENTORY"),
+        ("INVENTORY_MANAGE", "INVENTORY"),
     ]
     _ROLE_PERMISSIONS = {
         "admin": [
@@ -125,9 +128,17 @@ class TenantProvisioningService:
             "USERS_MANAGE",
             "USERS_VIEW_AUDIT",
             "HR_MANAGE",
+            "INVENTORY_VIEW",
+            "INVENTORY_MANAGE",
         ],
-        "manager": ["USERS_MANAGE", "USERS_VIEW_AUDIT", "HR_MANAGE"],
-        "seller": [],
+        "manager": [
+            "USERS_MANAGE",
+            "USERS_VIEW_AUDIT",
+            "HR_MANAGE",
+            "INVENTORY_VIEW",
+            "INVENTORY_MANAGE",
+        ],
+        "seller": ["INVENTORY_VIEW"],
     }
 
     @staticmethod
@@ -184,6 +195,44 @@ class TenantProvisioningService:
                 RolePermission.objects.get_or_create(
                     role=role, permission=permissions_by_code[code]
                 )
+
+
+class FeatureFlagService:
+    """Bloquea el acceso a funcionalidad opcional segun dos capas
+    independientes: TenantSettings (el interruptor que el propio negocio
+    prende/apaga, ej. "activar variantes") y PlanFeature (el techo que le
+    pone su plan de suscripcion). Ambas capas deben permitirlo -Esquema
+    Backend §8.2. Se adelanta al Sprint 3 porque variants_enabled y
+    multi_warehouse_enabled ya aplican a inventario desde este sprint."""
+
+    _TENANT_SETTINGS_FIELDS = {
+        "HAS_VARIANTS": "variants_enabled",
+        "HAS_MULTI_WAREHOUSE": "multi_warehouse_enabled",
+        "HAS_HR_MODULE": "hr_module_enabled",
+        "HAS_CASH_MODULE": "cash_module_enabled",
+    }
+
+    @staticmethod
+    def is_enabled(tenant: Tenant, feature_code: str) -> bool:
+        settings_field = FeatureFlagService._TENANT_SETTINGS_FIELDS.get(feature_code)
+        if settings_field:
+            settings = TenantSettings.objects.filter(tenant=tenant).first()
+            if settings is not None and not getattr(settings, settings_field):
+                return False
+
+        plan_feature = (
+            PlanFeature.objects.filter(
+                plan__subscriptions__tenant=tenant,
+                plan__subscriptions__status="active",
+                feature_code=feature_code,
+            )
+            .order_by("-id")
+            .first()
+        )
+        if plan_feature is not None and not plan_feature.is_enabled:
+            return False
+
+        return True
 
 
 class PlatformAuditLogService:

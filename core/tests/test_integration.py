@@ -64,7 +64,9 @@ class TenantProvisioningServiceTests(TestCase):
                     "permission__code", flat=True
                 )
             )
-            self.assertEqual(seller_codes, set())
+            # Sprint 3: seller obtiene INVENTORY_VIEW (necesita consultar el
+            # catalogo, aunque no pueda editarlo).
+            self.assertEqual(seller_codes, {"INVENTORY_VIEW"})
 
     def test_seeding_default_roles_is_never_attempted_on_public_schema(self):
         from core.services import TenantProvisioningService
