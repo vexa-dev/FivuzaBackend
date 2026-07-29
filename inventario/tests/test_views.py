@@ -160,7 +160,9 @@ class InventoryCatalogEndpointsTests(TenantTestCase):
         settings.save(update_fields=["multi_warehouse_enabled"])
 
         admin = self._client_as(self.admin_user)
-        admin.post("/api/v1/inventario/warehouses/", {"name": "Principal"}, format="json")
+        admin.post(
+            "/api/v1/inventario/warehouses/", {"name": "Principal"}, format="json"
+        )
         second = admin.post(
             "/api/v1/inventario/warehouses/", {"name": "Sucursal 2"}, format="json"
         )
