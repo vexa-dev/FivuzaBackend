@@ -68,6 +68,9 @@ class TenantUserTokenObtainSerializer(serializers.Serializer):
 
         schema_name = self.context["request"].tenant.schema_name
         refresh = issue_tokens_for_tenant_user(user, schema_name)
+
+        from usuarios.services import PermissionService
+
         return {
             "refresh": str(refresh),
             "access": str(refresh.access_token),
@@ -75,6 +78,10 @@ class TenantUserTokenObtainSerializer(serializers.Serializer):
                 "id": user.id,
                 "email": user.email,
                 "role": user.role.name,
+                # El frontend usa esto para mostrar/ocultar secciones segun
+                # permiso, nunca segun el NOMBRE del rol -los roles son
+                # personalizables (Convenciones), un nombre fijo no alcanza.
+                "permissions": sorted(PermissionService.get_permission_codes(user)),
             },
         }
 
