@@ -192,6 +192,13 @@ CACHES = {
     }
 }
 
+# S3 para imagenes de variante (Sprint 3, Plan de Implementacion). Las
+# credenciales de AWS no se leen aqui -boto3 las toma solas de las variables
+# de entorno estandar (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY) o del rol de
+# IAM de la tarea ECS en produccion (TRD §5.1); no hay que duplicarlas.
+AWS_STORAGE_BUCKET_NAME = os.getenv("AWS_STORAGE_BUCKET_NAME", "")
+AWS_S3_REGION = os.getenv("AWS_S3_REGION", "us-east-1")
+
 
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators

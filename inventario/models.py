@@ -2,14 +2,14 @@ from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVectorField
 from django.db import models
 
+from core.models import SoftDeleteModel
 from usuarios.models import User
 
 
-class Warehouse(models.Model):
+class Warehouse(SoftDeleteModel):
     name = models.CharField(max_length=150)
     address = models.CharField(max_length=255, blank=True)
     is_active = models.BooleanField(default=True)
-    deleted_at = models.DateTimeField(null=True, blank=True)
     deleted_by = models.ForeignKey(
         User, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
     )
@@ -22,10 +22,9 @@ class Warehouse(models.Model):
         return self.name
 
 
-class Category(models.Model):
+class Category(SoftDeleteModel):
     name = models.CharField(max_length=150)
     is_active = models.BooleanField(default=True)
-    deleted_at = models.DateTimeField(null=True, blank=True)
     deleted_by = models.ForeignKey(
         User, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
     )
@@ -38,12 +37,11 @@ class Category(models.Model):
         return self.name
 
 
-class Supplier(models.Model):
+class Supplier(SoftDeleteModel):
     ruc_or_dni = models.CharField(max_length=20, unique=True)
     company_name = models.CharField(max_length=150)
     phone = models.CharField(max_length=30, blank=True)
     address = models.CharField(max_length=255, blank=True)
-    deleted_at = models.DateTimeField(null=True, blank=True)
     deleted_by = models.ForeignKey(
         User, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
     )
@@ -55,7 +53,7 @@ class Supplier(models.Model):
         return self.company_name
 
 
-class Product(models.Model):
+class Product(SoftDeleteModel):
     type = models.CharField(
         max_length=10,
         choices=[("PRODUCT", "PRODUCT"), ("SERVICE", "SERVICE"), ("ASSET", "ASSET")],
@@ -79,7 +77,6 @@ class Product(models.Model):
     is_active = models.BooleanField(default=True)
     search_vector = SearchVectorField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
-    deleted_at = models.DateTimeField(null=True, blank=True)
     deleted_by = models.ForeignKey(
         User, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
     )
@@ -125,11 +122,12 @@ class AttributeValue(models.Model):
         return self.value
 
 
-class ProductVariant(models.Model):
+class ProductVariant(SoftDeleteModel):
     product = models.ForeignKey(
         Product, on_delete=models.PROTECT, related_name="variants"
     )
     sku = models.CharField(max_length=100, unique=True)
+    barcode = models.CharField(max_length=100, unique=True, null=True, blank=True)
     cost = models.DecimalField(max_digits=12, decimal_places=4, default=0)
     price = models.DecimalField(max_digits=12, decimal_places=4, default=0)
     min_stock = models.DecimalField(max_digits=12, decimal_places=3, default=0)
@@ -137,14 +135,16 @@ class ProductVariant(models.Model):
     is_default = models.BooleanField(default=True)
     is_active = models.BooleanField(default=True)
     updated_at = models.DateTimeField(auto_now=True)
-    deleted_at = models.DateTimeField(null=True, blank=True)
     deleted_by = models.ForeignKey(
         User, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
     )
 
     class Meta:
         db_table = "product_variants"
-        indexes = [models.Index(fields=["updated_at"])]
+        indexes = [
+            models.Index(fields=["updated_at"]),
+            models.Index(fields=["barcode"]),
+        ]
 
     def __str__(self):
         return self.sku
