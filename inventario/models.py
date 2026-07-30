@@ -237,6 +237,13 @@ class InventoryMovement(models.Model):
     )
     reference_id = models.IntegerField(null=True, blank=True)
     oversell_flag = models.BooleanField(default=False)
+    # Saldo de Stock.quantity (variant+warehouse) inmediatamente despues de
+    # este movimiento. Denormalizado a proposito: reconstruirlo en cada
+    # lectura del Kardex requeriria una window function SUM() OVER (...)
+    # sobre una tabla particionada potencialmente grande -StockService ya
+    # conoce este valor en el momento de escribir, es mas barato guardarlo
+    # que recalcularlo (Esquema Backend §5.2).
+    resulting_balance = models.DecimalField(max_digits=12, decimal_places=3)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

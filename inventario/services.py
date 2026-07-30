@@ -1,10 +1,19 @@
 import uuid
+from decimal import Decimal
 
 import boto3
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import transaction
 
-from inventario.models import Product, ProductVariant, VariantAttributeValue
+from inventario.models import (
+    InventoryMovement,
+    Product,
+    ProductVariant,
+    Stock,
+    VariantAttributeValue,
+    Warehouse,
+)
 
 _PRESIGNED_URL_TTL_SECONDS = 300
 _ALLOWED_IMAGE_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
@@ -96,3 +105,66 @@ class ProductVariantService:
                 variant=variant, attribute_value_id=attribute_value_id
             )
         return variant
+
+
+class StockService:
+    """Único punto de entrada para modificar Stock. Toda alteración genera
+    su InventoryMovement en la MISMA transacción atómica que actualiza
+    Stock, con select_for_update() sobre la fila de stock -dos ajustes
+    simultáneos sobre la misma variante+almacén nunca pueden dejar el saldo
+    inconsistente, uno espera al otro (Esquema Backend §5.2)."""
+
+    @staticmethod
+    @transaction.atomic
+    def adjust_stock(
+        *,
+        variant: ProductVariant,
+        warehouse: Warehouse,
+        counted_quantity: Decimal,
+        concept: str,
+        user,
+    ) -> InventoryMovement:
+        # get_or_create resuelve la carrera de "primer ajuste sobre esta
+        # variante+almacen" (reintenta el get si otro request gano la
+        # creacion primero, gracias al constraint unico); el select_for_update
+        # posterior es el que de verdad serializa dos ajustes concurrentes
+        # sobre una fila YA existente.
+        stock, _ = Stock.objects.get_or_create(
+            variant=variant, warehouse=warehouse, defaults={"quantity": 0}
+        )
+        stock = Stock.objects.select_for_update().get(pk=stock.pk)
+
+        delta = counted_quantity - stock.quantity
+        if delta == 0:
+            raise ValidationError(
+                "La cantidad contada es igual al stock actual -no hay nada que ajustar."
+            )
+
+        movement = InventoryMovement.objects.create(
+            variant=variant,
+            warehouse=warehouse,
+            user=user,
+            type="IN" if delta > 0 else "OUT",
+            quantity=abs(delta),
+            concept=concept,
+            resulting_balance=counted_quantity,
+        )
+        stock.quantity = counted_quantity
+        stock.save(update_fields=["quantity"])
+
+        from usuarios.services import AuditLogService
+
+        AuditLogService.log_action(
+            user=user,
+            action="STOCK_ADJUSTED",
+            entity="Stock",
+            entity_id=stock.id,
+            details={
+                "variant_id": variant.id,
+                "warehouse_id": warehouse.id,
+                "delta": str(delta),
+                "resulting_balance": str(counted_quantity),
+                "concept": concept,
+            },
+        )
+        return movement

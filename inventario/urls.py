@@ -1,3 +1,4 @@
+from django.urls import path
 from rest_framework.routers import DefaultRouter
 
 from inventario import views
@@ -18,5 +19,24 @@ router.register(
     views.ProductVariantViewSet,
     basename="product-variant",
 )
+router.register("inventario/stock", views.StockViewSet, basename="stock")
+router.register(
+    "inventario/inventory-movements",
+    views.InventoryMovementViewSet,
+    basename="inventory-movement",
+)
 
-urlpatterns = router.urls
+urlpatterns = [
+    path(
+        "inventario/stock/adjust/",
+        views.StockAdjustView.as_view(),
+        name="stock-adjust",
+    ),
+    path(
+        "inventario/stock/low-stock/",
+        views.LowStockVariantsView.as_view(),
+        name="stock-low-stock",
+    ),
+]
+
+urlpatterns += router.urls

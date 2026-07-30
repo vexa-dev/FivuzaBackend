@@ -15,6 +15,7 @@ from pathlib import Path
 import os
 import dj_database_url
 import sentry_sdk
+from celery.schedules import crontab
 from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -229,6 +230,27 @@ TIME_ZONE = "UTC"
 USE_I18N = True
 
 USE_TZ = True
+
+
+# Celery (Sprint 4, Plan de Implementacion). CELERY_BROKER_URL no se leia
+# antes -config.celery.py usa config_from_object("django.conf:settings",
+# namespace="CELERY"), que solo encuentra ajustes con ese prefijo aqui, no
+# la variable de entorno cruda del contenedor.
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
+CELERY_RESULT_BACKEND = os.getenv("REDIS_URL", "redis://redis:6379/0")
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_BEAT_SCHEDULE = {
+    # Dia 28 (nunca dia 1: hay que tener la particion del mes siguiente
+    # lista ANTES de que empiece, con margen) a las 2am.
+    "inventario-create-next-month-partitions": {
+        "task": "inventario.tasks.create_next_month_partitions",
+        "schedule": crontab(day_of_month=28, hour=2, minute=0),
+    },
+    "inventario-alert-low-stock": {
+        "task": "inventario.tasks.alert_low_stock_variants",
+        "schedule": crontab(hour=8, minute=0),
+    },
+}
 
 
 # Static files (CSS, JavaScript, Images)
