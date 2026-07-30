@@ -4,13 +4,15 @@ from inventario.models import (
     Attribute,
     AttributeValue,
     Category,
+    InventoryMovement,
     Product,
     ProductVariant,
+    Stock,
     Supplier,
     VariantAttributeValue,
     Warehouse,
 )
-from inventario.services import MediaService, ProductVariantService
+from inventario.services import MediaService, ProductVariantService, StockService
 
 
 class WarehouseSerializer(serializers.ModelSerializer):
@@ -144,4 +146,72 @@ class ProductSerializer(serializers.ModelSerializer):
         variants_data = validated_data.pop("variants_input", [])
         return ProductVariantService.create_product(
             product_data=validated_data, variants_data=variants_data
+        )
+
+
+class StockSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Stock
+        fields = ["id", "variant", "warehouse", "quantity", "updated_at"]
+        read_only_fields = fields
+
+
+class InventoryMovementSerializer(serializers.ModelSerializer):
+    """Solo lectura -el Kardex nunca se edita a mano, se construye
+    exclusivamente via StockService (y, a partir de ventas/compras,
+    tambien via esos servicios) (API Spec §4.6)."""
+
+    class Meta:
+        model = InventoryMovement
+        fields = [
+            "id",
+            "variant",
+            "warehouse",
+            "user",
+            "type",
+            "quantity",
+            "concept",
+            "resulting_balance",
+            "oversell_flag",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class LowStockVariantSerializer(serializers.ModelSerializer):
+    """Salida de GET /inventario/stock/low-stock/ -incluye el nombre del
+    producto y el total ya agregado (get_low_stock_variants()) para que el
+    badge del layout no tenga que hacer una segunda consulta por variante."""
+
+    product_name = serializers.CharField(source="product.name", read_only=True)
+    total_stock = serializers.DecimalField(
+        max_digits=12, decimal_places=3, read_only=True
+    )
+
+    class Meta:
+        model = ProductVariant
+        fields = ["id", "sku", "product_name", "total_stock", "min_stock"]
+        read_only_fields = fields
+
+
+class StockAdjustSerializer(serializers.Serializer):
+    """Payload de entrada de POST /inventario/stock/adjust/: cubre tanto
+    conteo fisico como merma, ambos son "la cantidad real es esta" desde
+    el punto de vista de StockService -no un delta que el frontend calcula
+    a mano (API Spec §4.6)."""
+
+    variant = serializers.PrimaryKeyRelatedField(queryset=ProductVariant.objects.all())
+    warehouse = serializers.PrimaryKeyRelatedField(queryset=Warehouse.objects.all())
+    counted_quantity = serializers.DecimalField(max_digits=12, decimal_places=3)
+    concept = serializers.ChoiceField(
+        choices=["PURCHASE", "SALE", "ADJUSTMENT", "RETURN"], default="ADJUSTMENT"
+    )
+
+    def create(self, validated_data):
+        return StockService.adjust_stock(
+            variant=validated_data["variant"],
+            warehouse=validated_data["warehouse"],
+            counted_quantity=validated_data["counted_quantity"],
+            concept=validated_data["concept"],
+            user=self.context["request"].user,
         )

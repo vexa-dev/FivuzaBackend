@@ -1,18 +1,23 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from core.permissions import TenantNotSuspended
 from core.services import FeatureFlagService
+from inventario import selectors
 from inventario.models import (
     Attribute,
     AttributeValue,
     Category,
+    InventoryMovement,
     Product,
     ProductVariant,
+    Stock,
     Supplier,
     Warehouse,
 )
@@ -21,9 +26,13 @@ from inventario.serializers import (
     AttributeSerializer,
     AttributeValueSerializer,
     CategorySerializer,
+    InventoryMovementSerializer,
+    LowStockVariantSerializer,
     ProductSerializer,
     ProductVariantImageUploadURLSerializer,
     ProductVariantSerializer,
+    StockAdjustSerializer,
+    StockSerializer,
     SupplierSerializer,
     WarehouseSerializer,
 )
@@ -203,3 +212,82 @@ class ProductVariantViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         result = serializer.save()
         return Response(result, status=status.HTTP_200_OK)
+
+
+class StockViewSet(viewsets.ReadOnlyModelViewSet):
+    """Solo lectura -el saldo de Stock nunca se edita directo, siempre pasa
+    por StockService.adjust_stock() via StockAdjustView (Esquema Backend §5.2)."""
+
+    queryset = Stock.objects.select_related("variant", "warehouse")
+    serializer_class = StockSerializer
+    permission_classes = _BASE_PERMISSIONS
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        variant_id = self.request.query_params.get("variant")
+        if variant_id:
+            queryset = queryset.filter(variant_id=variant_id)
+        warehouse_id = self.request.query_params.get("warehouse")
+        if warehouse_id:
+            queryset = queryset.filter(warehouse_id=warehouse_id)
+        return queryset
+
+
+class InventoryMovementViewSet(viewsets.ReadOnlyModelViewSet):
+    """Kardex -solo lectura, filtrable por variante/almacen/rango de fechas
+    (API Spec §4.6). Se escribe unicamente via StockService."""
+
+    queryset = InventoryMovement.objects.select_related("variant", "warehouse", "user")
+    serializer_class = InventoryMovementSerializer
+    permission_classes = _BASE_PERMISSIONS
+
+    def get_queryset(self):
+        queryset = super().get_queryset().order_by("-created_at")
+        variant_id = self.request.query_params.get("variant")
+        if variant_id:
+            queryset = queryset.filter(variant_id=variant_id)
+        warehouse_id = self.request.query_params.get("warehouse")
+        if warehouse_id:
+            queryset = queryset.filter(warehouse_id=warehouse_id)
+        date_from = self.request.query_params.get("date_from")
+        if date_from:
+            queryset = queryset.filter(created_at__date__gte=date_from)
+        date_to = self.request.query_params.get("date_to")
+        if date_to:
+            queryset = queryset.filter(created_at__date__lte=date_to)
+        return queryset
+
+
+class StockAdjustView(APIView):
+    """POST conteo fisico/merma/ajuste -unico punto de entrada HTTP hacia
+    StockService.adjust_stock() (API Spec §4.6)."""
+
+    permission_classes = [
+        IsAuthenticated,
+        TenantNotSuspended,
+        HasInventoryAccess,
+    ]
+
+    def post(self, request):
+        serializer = StockAdjustSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        try:
+            movement = serializer.save()
+        except DjangoValidationError as exc:
+            raise ValidationError(exc.message) from exc
+        return Response(
+            InventoryMovementSerializer(movement).data, status=status.HTTP_201_CREATED
+        )
+
+
+class LowStockVariantsView(APIView):
+    """GET listado de variantes por debajo de su min_stock -usado por el
+    badge de alertas del layout (PRD, perfil 'Dueño')."""
+
+    permission_classes = _BASE_PERMISSIONS
+
+    def get(self, request):
+        variants = selectors.get_low_stock_variants()
+        return Response(LowStockVariantSerializer(variants, many=True).data)
