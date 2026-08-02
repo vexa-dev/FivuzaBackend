@@ -245,9 +245,17 @@ class PlanViewSet(AuditLoggedViewSetMixin, viewsets.ModelViewSet):
 
 
 class PlanFeatureViewSet(AuditLoggedViewSetMixin, viewsets.ModelViewSet):
+    """Lectura: cualquier platform_staff (API Spec §2.5 solo restringe quien
+    puede ESCRIBIR -antes este ViewSet exigia SUPER_ADMIN incluso para
+    listar, lo que le impedia a SUPPORT/BILLING ver que trae cada plan)."""
+
     queryset = PlanFeature.objects.all()
     serializer_class = PlanFeatureSerializer
-    permission_classes = [IsAuthenticated, require_platform_role("SUPER_ADMIN")]
+
+    def get_permissions(self):
+        if self.action in ("list", "retrieve"):
+            return [IsAuthenticated(), IsPlatformStaff()]
+        return [IsAuthenticated(), require_platform_role("SUPER_ADMIN")()]
 
 
 class SubscriptionViewSet(AuditLoggedViewSetMixin, viewsets.ModelViewSet):
@@ -260,6 +268,9 @@ class SubscriptionViewSet(AuditLoggedViewSetMixin, viewsets.ModelViewSet):
         tenant_id = self.request.query_params.get("tenant")
         if tenant_id:
             queryset = queryset.filter(tenant_id=tenant_id)
+        status_param = self.request.query_params.get("status")
+        if status_param:
+            queryset = queryset.filter(status=status_param)
         return queryset
 
 
@@ -279,6 +290,9 @@ class SubscriptionPaymentViewSet(AuditLoggedViewSetMixin, viewsets.ModelViewSet)
         subscription_id = self.request.query_params.get("subscription")
         if subscription_id:
             queryset = queryset.filter(subscription_id=subscription_id)
+        status_param = self.request.query_params.get("status")
+        if status_param:
+            queryset = queryset.filter(status=status_param)
         return queryset
 
 
@@ -320,10 +334,25 @@ class TenantSettingsViewSet(AuditLoggedViewSetMixin, viewsets.ModelViewSet):
         return queryset
 
 
-class PlatformStaffViewSet(AuditLoggedViewSetMixin, viewsets.ModelViewSet):
+class PlatformStaffViewSet(
+    AuditLoggedViewSetMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.CreateModelMixin,
+    mixins.UpdateModelMixin,
+    viewsets.GenericViewSet,
+):
     """Gestion del equipo interno de Fivuza -restringido a SUPER_ADMIN tanto
     para lectura como escritura, dado que expone quien tiene cada rol
-    interno (soporte/facturacion/administracion)."""
+    interno (soporte/facturacion/administracion).
+
+    Sin DestroyModelMixin (Sprint 9): platform_audit_logs.platform_staff es
+    on_delete=PROTECT -un DELETE sobre un staff con historial de auditoria
+    (el caso comun, ya que la bitacora registra cada accion) reventaria con
+    un ProtectedError sin manejar. La API Spec pide "desactivacion en vez de
+    borrado fisico"; se retira el borrado del CRUD en vez de agregarle un
+    manejo de excepcion -is_active=False via PATCH ya cubre el caso de uso.
+    """
 
     queryset = PlatformStaff.objects.all()
     serializer_class = PlatformStaffCRUDSerializer

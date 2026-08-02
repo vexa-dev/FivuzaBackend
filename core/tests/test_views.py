@@ -379,6 +379,76 @@ class CoreCRUDEndpointsTests(APITestCase):
         )
         self.assertEqual(response.status_code, 200)
 
+    def test_plan_features_readable_by_any_staff_writable_only_by_super_admin(self):
+        from core.models import PlanFeature
+
+        # Sprint 9: antes este recurso exigia SUPER_ADMIN incluso para leer.
+        response = self._client_as(self.support).get("/api/v1/core/plan-features/")
+        self.assertEqual(response.status_code, 200)
+        response = self._client_as(self.billing).get("/api/v1/core/plan-features/")
+        self.assertEqual(response.status_code, 200)
+
+        payload = {"plan": self.plan.id, "feature_code": "HAS_SALES_MODULE"}
+        response = self._client_as(self.support).post(
+            "/api/v1/core/plan-features/", payload, format="json"
+        )
+        self.assertEqual(response.status_code, 403)
+
+        response = self._client_as(self.super_admin).post(
+            "/api/v1/core/plan-features/", payload, format="json"
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(PlanFeature.objects.filter(id=response.data["id"]).exists())
+
+    def test_platform_staff_cannot_be_hard_deleted(self):
+        # Sprint 9: platform_audit_logs.platform_staff es PROTECT -se retira
+        # el borrado del CRUD (API Spec §2.5: "desactivacion, no borrado
+        # fisico") en vez de dejar que un DELETE revienta con ProtectedError.
+        response = self._client_as(self.super_admin).delete(
+            f"/api/v1/core/platform-staff/{self.support.id}/"
+        )
+        self.assertEqual(response.status_code, 405)
+
+    def test_platform_staff_deactivated_via_patch(self):
+        response = self._client_as(self.super_admin).patch(
+            f"/api/v1/core/platform-staff/{self.support.id}/",
+            {"is_active": False},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.support.refresh_from_db()
+        self.assertFalse(self.support.is_active)
+
+    def test_login_response_includes_staff_role(self):
+        response = APIClient(HTTP_HOST="public.localhost").post(
+            "/api/v1/platform/auth/login/",
+            {"email": self.billing.email, "password": self.password},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["staff"]["role"], "BILLING")
+        self.assertEqual(response.data["staff"]["email"], self.billing.email)
+
+    def test_subscriptions_write_requires_any_platform_staff(self):
+        response = APIClient(HTTP_HOST="public.localhost").get(
+            "/api/v1/core/subscriptions/"
+        )
+        self.assertEqual(response.status_code, 401)
+
+        response = self._client_as(self.support).get("/api/v1/core/subscriptions/")
+        self.assertEqual(response.status_code, 200)
+
+    def test_tenant_settings_requires_any_platform_staff(self):
+        response = self._client_as(self.billing).get("/api/v1/core/tenant-settings/")
+        self.assertEqual(response.status_code, 200)
+
+    def test_audit_logs_and_dashboard_readable_by_any_staff(self):
+        for staff in (self.super_admin, self.support, self.billing):
+            response = self._client_as(staff).get("/api/v1/core/platform-audit-logs/")
+            self.assertEqual(response.status_code, 200)
+            response = self._client_as(staff).get("/api/v1/core/dashboard/summary/")
+            self.assertEqual(response.status_code, 200)
+
 
 class TenantRegisterViewTests(APITestCase):
     """POST /api/v1/core/tenants/register/ (Sprint 1, cierre del gap de la
