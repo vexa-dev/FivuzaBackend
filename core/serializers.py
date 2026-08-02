@@ -71,6 +71,16 @@ class PlatformStaffTokenObtainSerializer(serializers.Serializer):
         return {
             "refresh": str(refresh),
             "access": str(refresh.access_token),
+            # Especificacion de API §3.2: la respuesta de login debe incluir
+            # el staff autenticado -sin esto el frontend no tiene forma de
+            # saber su rol (SUPER_ADMIN/SUPPORT/BILLING) para, por ejemplo,
+            # ocultar secciones del panel segun permisos (Sprint 9).
+            "staff": {
+                "id": user.id,
+                "email": user.email,
+                "full_name": user.full_name,
+                "role": user.role,
+            },
         }
 
 
