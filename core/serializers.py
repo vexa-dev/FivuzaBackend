@@ -89,9 +89,17 @@ class TenantSerializer(serializers.ModelSerializer):
             "default_currency",
             "status",
             "suspended_at",
+            "canceled_at",
+            "provisioning_status",
             "created_on",
         ]
-        read_only_fields = ["status", "suspended_at", "created_on"]
+        read_only_fields = [
+            "status",
+            "suspended_at",
+            "canceled_at",
+            "provisioning_status",
+            "created_on",
+        ]
 
 
 class PlanSerializer(serializers.ModelSerializer):

@@ -189,6 +189,65 @@ class InventoryCatalogEndpointsTests(TenantTestCase):
         self.assertEqual(response.data[0]["barcode"], "7501234567890")
 
 
+class TenantCanceledPermissionTests(TenantTestCase):
+    """TenantNotCanceled (Sprint 8, Especificacion de API §4.12): a diferencia
+    de un tenant suspended (bloquea todo), un tenant canceled conserva
+    lectura durante su periodo de gracia -solo bloquea escritura."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_tenant_canceled"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-tenant-canceled.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.password = "ClaveSegura123"
+        cls.admin_user = User.objects.create(
+            email="admin@negocio.com", role=Role.objects.get(name="admin")
+        )
+        cls.admin_user.set_password(cls.password)
+        cls.admin_user.save()
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    def setUp(self):
+        cache.clear()
+        self.tenant.status = "canceled"
+        self.tenant.save(update_fields=["status"])
+
+    def tearDown(self):
+        self.tenant.status = "active"
+        self.tenant.save(update_fields=["status"])
+
+    def _client(self):
+        client = APIClient(HTTP_HOST=self.domain.domain)
+        login = client.post(
+            "/api/v1/auth/login/",
+            {"email": self.admin_user.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def test_canceled_tenant_can_still_read(self):
+        response = self._client().get("/api/v1/inventario/categories/")
+        self.assertEqual(response.status_code, 200)
+
+    def test_canceled_tenant_cannot_write(self):
+        response = self._client().post(
+            "/api/v1/inventario/categories/", {"name": "Nueva"}, format="json"
+        )
+        self.assertEqual(response.status_code, 402)
+        self.assertEqual(response.data["error"]["code"], "TENANT_CANCELED")
+
+
 class PurchaseOrderEndpointsTests(TenantTestCase):
     """CRUD + accion receive de purchase-orders: gateado por
     RequiresFeature('HAS_PURCHASES_MODULE') y por PURCHASES_MANAGE (Sprint 5)."""

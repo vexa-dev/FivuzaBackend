@@ -1,4 +1,5 @@
 import os
+from datetime import timedelta
 
 import redis
 from django.db import connection
@@ -7,6 +8,8 @@ from django.shortcuts import get_object_or_404
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.exceptions import ValidationError
+from rest_framework.filters import OrderingFilter
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -37,8 +40,10 @@ from core.serializers import (
     TenantSettingsSerializer,
 )
 from core.services import (
+    DATA_RETENTION_GRACE_DAYS,
     PlatformAuditLogService,
     PlatformDashboardService,
+    SubscriptionPaymentService,
     TenantLifecycleService,
 )
 
@@ -124,11 +129,15 @@ class TenantRegisterView(APIView):
             entity_id=tenant.id,
             details={"company_name": tenant.company_name},
         )
+        # provisioning_status ya puede reflejar COMPLETED aqui mismo en tests
+        # (CELERY_TASK_ALWAYS_EAGER=True corre la tarea en el mismo proceso);
+        # en produccion el worker todavia no la tomo, y sigue en PENDING.
+        tenant.refresh_from_db(fields=["provisioning_status"])
         return Response(
             {
                 "id": tenant.id,
                 "status": tenant.status,
-                "provisioning_status": "IN_PROGRESS",
+                "provisioning_status": tenant.provisioning_status,
             },
             status=status.HTTP_202_ACCEPTED,
         )
@@ -175,6 +184,36 @@ class TenantReactivateView(APIView):
             entity_id=tenant.id,
         )
         return Response({"id": tenant.id, "status": tenant.status})
+
+
+class TenantCancelView(APIView):
+    """PATCH -> cancela un tenant de forma definitiva (Especificacion de API
+    §4.12). Solo platform_staff. Transicion sin retorno: un tenant canceled
+    no puede reactivarse."""
+
+    permission_classes = [IsAuthenticated, IsPlatformStaff]
+
+    def patch(self, request, pk):
+        tenant = get_object_or_404(Tenant, pk=pk)
+        tenant = TenantLifecycleService.cancel_tenant(
+            tenant, reason=request.data.get("reason")
+        )
+        PlatformAuditLogService.log_action(
+            staff=request.user,
+            action="TENANT_CANCELED",
+            entity="Tenant",
+            entity_id=tenant.id,
+            details={"reason": request.data.get("reason")},
+        )
+        return Response(
+            {
+                "id": tenant.id,
+                "status": tenant.status,
+                "canceled_at": tenant.canceled_at,
+                "data_retention_until": tenant.canceled_at
+                + timedelta(days=DATA_RETENTION_GRACE_DAYS),
+            }
+        )
 
 
 class TenantViewSet(
@@ -229,6 +268,26 @@ class SubscriptionPaymentViewSet(AuditLoggedViewSetMixin, viewsets.ModelViewSet)
         return [IsAuthenticated(), require_platform_role("BILLING")()]
 
 
+class SubscriptionPaymentConfirmView(APIView):
+    """POST -> confirma manualmente un pago recibido por transferencia
+    (Especificacion de API §4.10). Solo rol BILLING."""
+
+    permission_classes = [IsAuthenticated, require_platform_role("BILLING")]
+
+    def post(self, request, pk):
+        payment = get_object_or_404(SubscriptionPayment, pk=pk)
+        payment = SubscriptionPaymentService.confirm_payment(payment)
+        PlatformAuditLogService.log_action(
+            staff=request.user,
+            action="PAYMENT_CONFIRMED",
+            entity="SubscriptionPayment",
+            entity_id=payment.id,
+        )
+        return Response(
+            {"id": payment.id, "status": payment.status, "paid_at": payment.paid_at}
+        )
+
+
 class TenantSettingsViewSet(AuditLoggedViewSetMixin, viewsets.ModelViewSet):
     """Solo platform_staff por ahora. La Especificacion de API tambien permite
     'admin del propio tenant para toggles operativos', pero eso depende de
@@ -250,15 +309,51 @@ class PlatformStaffViewSet(AuditLoggedViewSetMixin, viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, require_platform_role("SUPER_ADMIN")]
 
 
+class PlatformAuditLogPagination(PageNumberPagination):
+    page_size = 25
+    page_size_query_param = "page_size"
+    max_page_size = 100
+
+
 class PlatformAuditLogViewSet(
     mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet
 ):
     """Solo lectura (Especificacion de API §4.14) -se escribe unicamente via
-    PlatformAuditLogService.log_action(), nunca por POST/PUT del cliente."""
+    PlatformAuditLogService.log_action(), nunca por POST/PUT del cliente.
+
+    Filtros manuales por query params en vez de django-filter (Sprint 8): el
+    set de filtros es chico y fijo (staff/entidad/rango de fechas), no
+    amerita sumar una dependencia nueva al proyecto solo para esto."""
 
     queryset = PlatformAuditLog.objects.select_related("platform_staff").all()
     serializer_class = PlatformAuditLogSerializer
     permission_classes = [IsAuthenticated, IsPlatformStaff]
+    pagination_class = PlatformAuditLogPagination
+    filter_backends = [OrderingFilter]
+    ordering_fields = ["created_at"]
+    ordering = ["-created_at"]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        params = self.request.query_params
+
+        platform_staff = params.get("platform_staff")
+        if platform_staff:
+            queryset = queryset.filter(platform_staff_id=platform_staff)
+
+        entity = params.get("entity")
+        if entity:
+            queryset = queryset.filter(entity=entity)
+
+        date_from = params.get("date_from")
+        if date_from:
+            queryset = queryset.filter(created_at__date__gte=date_from)
+
+        date_to = params.get("date_to")
+        if date_to:
+            queryset = queryset.filter(created_at__date__lte=date_to)
+
+        return queryset
 
 
 class DashboardSummaryView(APIView):

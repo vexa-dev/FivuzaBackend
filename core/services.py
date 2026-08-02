@@ -4,6 +4,7 @@ from datetime import timedelta
 from django.db.models import Count
 from django.utils import timezone
 from django_tenants.utils import get_public_schema_name
+from rest_framework.exceptions import APIException
 
 from core.models import (
     Domain,
@@ -16,6 +17,10 @@ from core.models import (
     Tenant,
     TenantSettings,
 )
+from core.permissions import (
+    CannotReactivateCanceledTenantError,
+    TenantAlreadyCanceledError,
+)
 
 _BILLING_CYCLE_DAYS = {"MONTHLY": 30, "SEMIANNUAL": 182, "ANNUAL": 365}
 _BILLING_CYCLE_PRICE_FIELD = {
@@ -23,23 +28,25 @@ _BILLING_CYCLE_PRICE_FIELD = {
     "SEMIANNUAL": "price_semiannual",
     "ANNUAL": "price_annual",
 }
+# Ley N 29733 (Especificacion de API §4.12): periodo de gracia de solo
+# lectura/exportacion tras cancelar un tenant, antes de que
+# TenantDataRetentionService.purge_expired_tenants() (fuera del alcance de
+# este sprint) elimine el esquema fisico de forma irreversible.
+DATA_RETENTION_GRACE_DAYS = 30
 
 
 class TenantRegistrationService:
     """Registro de un tenant nuevo (Especificacion de API §4.9).
 
     Crea Tenant + Domain + Subscription (snapshot del precio del plan segun
-    billing_cycle) de forma sincrona -el esquema fisico ya lo crea
-    django-tenants dentro de Tenant.save() (auto_create_schema=True), y
-    TenantProvisioningService se dispara solo via el signal post_save.
-
-    Nota: la Especificacion de API describe esto como asincrono via Celery
-    (TRD §5.4) para que la respuesta HTTP no espere el aprovisionamiento
-    completo. Se deja sincrono por ahora -el aprovisionamiento actual
-    (TenantSettings) es una escritura trivial, no amerita todavia la
-    complejidad de una tarea de Celery con seguimiento de estado. Se
-    revisita cuando el aprovisionamiento real (roles/almacen/caja) se
-    implemente en Sprint 2-3 y sea lo bastante pesado como para justificarlo.
+    billing_cycle). El esquema fisico lo crea django-tenants de forma
+    sincrona dentro de Tenant.save() (auto_create_schema=True) -Postgres no
+    permite crear un esquema en un worker aparte sin duplicar la conexion de
+    esta misma transaccion, asi que ese paso no se movio a Celery. Lo que si
+    se volvio asincrono (Sprint 8, deuda cerrada) es la siembra de roles por
+    defecto: el signal post_schema_sync encola provision_tenant_async en vez
+    de ejecutarla en el mismo request, con Tenant.provisioning_status
+    (PENDING/IN_PROGRESS/COMPLETED/FAILED) como seguimiento de estado.
     """
 
     @staticmethod
@@ -92,9 +99,23 @@ class TenantLifecycleService:
 
     @staticmethod
     def reactivate_tenant(tenant: Tenant) -> Tenant:
+        if tenant.status == "canceled":
+            raise CannotReactivateCanceledTenantError()
         tenant.status = "active"
         tenant.suspended_at = None
         tenant.save(update_fields=["status", "suspended_at"])
+        return tenant
+
+    @staticmethod
+    def cancel_tenant(tenant: Tenant, reason: str | None = None) -> Tenant:
+        """Salida definitiva del negocio (Especificacion de API §4.12) -a
+        diferencia de suspend_tenant, esta transicion no tiene vuelta atras:
+        reactivate_tenant() se niega a operar sobre un tenant ya canceled."""
+        if tenant.status == "canceled":
+            raise TenantAlreadyCanceledError(tenant.canceled_at)
+        tenant.status = "canceled"
+        tenant.canceled_at = timezone.now()
+        tenant.save(update_fields=["status", "canceled_at"])
         return tenant
 
 
@@ -200,6 +221,44 @@ class TenantProvisioningService:
                 )
 
 
+class PaymentAlreadyConfirmedError(APIException):
+    status_code = 409
+    default_code = "PAYMENT_ALREADY_CONFIRMED"
+    default_detail = {
+        "error": {
+            "code": "PAYMENT_ALREADY_CONFIRMED",
+            "message": "Este pago ya fue confirmado.",
+        }
+    }
+
+
+class SubscriptionPaymentService:
+    """Confirmacion manual de un pago recibido por transferencia bancaria
+    directa (Especificacion de API §4.10; TRD §6.3, sin pasarela de pago).
+    Confirmar extiende la vigencia de la suscripcion desde su vencimiento
+    actual (o desde ahora, si ya estaba vencida) segun su billing_cycle, y
+    la reactiva si estaba past_due."""
+
+    @staticmethod
+    def confirm_payment(payment: SubscriptionPayment) -> SubscriptionPayment:
+        if payment.status == "PAID":
+            raise PaymentAlreadyConfirmedError()
+
+        payment.status = "PAID"
+        payment.paid_at = timezone.now()
+        payment.save(update_fields=["status", "paid_at"])
+
+        subscription = payment.subscription
+        extension_days = _BILLING_CYCLE_DAYS[subscription.billing_cycle]
+        base = max(subscription.expires_at, timezone.now())
+        subscription.expires_at = base + timedelta(days=extension_days)
+        if subscription.status == "past_due":
+            subscription.status = "active"
+        subscription.save(update_fields=["expires_at", "status"])
+
+        return payment
+
+
 class FeatureFlagService:
     """Bloquea el acceso a funcionalidad opcional segun dos capas
     independientes: TenantSettings (el interruptor que el propio negocio
@@ -303,6 +362,20 @@ class PlatformDashboardService:
                 : PlatformDashboardService._RECENT_LIMIT
             ]
         )
+        recently_canceled = [
+            {
+                "id": row["id"],
+                "company_name": row["company_name"],
+                "canceled_at": row["canceled_at"],
+                "data_retention_until": row["canceled_at"]
+                + timedelta(days=DATA_RETENTION_GRACE_DAYS),
+            }
+            for row in Tenant.objects.filter(status="canceled")
+            .order_by("-canceled_at")
+            .values("id", "company_name", "canceled_at")[
+                : PlatformDashboardService._RECENT_LIMIT
+            ]
+        ]
 
         return {
             "tenants_by_status": tenants_by_status,
@@ -310,4 +383,5 @@ class PlatformDashboardService:
             "pending_payments_count": pending_payments_count,
             "recent_tenants": recent_tenants,
             "recently_suspended": recently_suspended,
+            "recently_canceled": recently_canceled,
         }

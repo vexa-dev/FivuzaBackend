@@ -9,7 +9,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.permissions import RequiresFeature, TenantNotSuspended
+from core.permissions import RequiresFeature, TenantNotCanceled, TenantNotSuspended
 from core.services import FeatureFlagService
 from inventario import selectors
 from inventario.models import (
@@ -46,10 +46,16 @@ from inventario.serializers import (
 )
 from usuarios.permissions import HasModulePermission
 
-_BASE_PERMISSIONS = [IsAuthenticated, TenantNotSuspended, HasInventoryAccess]
+_BASE_PERMISSIONS = [
+    IsAuthenticated,
+    TenantNotSuspended,
+    TenantNotCanceled,
+    HasInventoryAccess,
+]
 _PURCHASES_PERMISSIONS = [
     IsAuthenticated,
     TenantNotSuspended,
+    TenantNotCanceled,
     RequiresFeature("HAS_PURCHASES_MODULE"),
     HasModulePermission("PURCHASES_MANAGE"),
 ]
@@ -280,6 +286,7 @@ class StockAdjustView(APIView):
     permission_classes = [
         IsAuthenticated,
         TenantNotSuspended,
+        TenantNotCanceled,
         HasInventoryAccess,
     ]
 

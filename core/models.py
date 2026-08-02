@@ -49,7 +49,18 @@ class Tenant(TenantMixin):
         default="trial",
     )
     suspended_at = models.DateTimeField(null=True, blank=True)
+    canceled_at = models.DateTimeField(null=True, blank=True)
     created_on = models.DateField(auto_now_add=True)
+    provisioning_status = models.CharField(
+        max_length=20,
+        choices=[
+            ("PENDING", "PENDING"),
+            ("IN_PROGRESS", "IN_PROGRESS"),
+            ("COMPLETED", "COMPLETED"),
+            ("FAILED", "FAILED"),
+        ],
+        default="PENDING",
+    )
 
     # Por defecto en True: el esquema se creará y sincronizará automáticamente al guardar
     auto_create_schema = True
