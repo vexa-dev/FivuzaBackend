@@ -5,7 +5,7 @@ cualquier request de negocio -si está suspended, responde 402 sin tocar datos.
 """
 
 from rest_framework.exceptions import APIException
-from rest_framework.permissions import BasePermission
+from rest_framework.permissions import SAFE_METHODS, BasePermission
 
 from core.models import PlatformStaff
 
@@ -23,6 +23,47 @@ class TenantSuspendedError(APIException):
     }
 
 
+class TenantCanceledError(APIException):
+    """402 Payment Required, codigo distinto de TENANT_SUSPENDED (Especificacion
+    de API §4.12): un tenant cancelado no es un caso reversible, asi que el
+    frontend debe distinguirlo de una suspension."""
+
+    status_code = 402
+    default_code = "TENANT_CANCELED"
+    default_detail = {
+        "error": {
+            "code": "TENANT_CANCELED",
+            "message": "Este negocio esta cancelado. Solo se permite exportar datos durante el periodo de gracia.",
+        }
+    }
+
+
+class TenantAlreadyCanceledError(APIException):
+    status_code = 409
+    default_code = "TENANT_ALREADY_CANCELED"
+
+    def __init__(self, canceled_at):
+        super().__init__(
+            {
+                "error": {
+                    "code": "TENANT_ALREADY_CANCELED",
+                    "message": f"Este tenant ya fue cancelado el {canceled_at:%Y-%m-%d}.",
+                }
+            }
+        )
+
+
+class CannotReactivateCanceledTenantError(APIException):
+    status_code = 409
+    default_code = "CANNOT_REACTIVATE_CANCELED_TENANT"
+    default_detail = {
+        "error": {
+            "code": "CANNOT_REACTIVATE_CANCELED_TENANT",
+            "message": "Un tenant cancelado no puede reactivarse. Si el negocio desea volver, debe registrarse como un tenant nuevo.",
+        }
+    }
+
+
 class TenantNotSuspended(BasePermission):
     """Bloquea cualquier request de negocio si el tenant resuelto por
     subdominio esta suspended -usado por las 4 apps de negocio (usuarios,
@@ -33,6 +74,23 @@ class TenantNotSuspended(BasePermission):
         tenant = getattr(request, "tenant", None)
         if tenant is not None and tenant.status == "suspended":
             raise TenantSuspendedError()
+        return True
+
+
+class TenantNotCanceled(BasePermission):
+    """A diferencia de TenantNotSuspended (bloquea todo, incluidas lecturas),
+    un tenant cancelado conserva lectura durante su periodo de gracia de 30
+    dias -para que el negocio pueda exportar su respaldo (Especificacion de
+    API §4.12: "solo lectura/exportacion"). Solo bloquea metodos de escritura."""
+
+    def has_permission(self, request, view):
+        tenant = getattr(request, "tenant", None)
+        if (
+            tenant is not None
+            and tenant.status == "canceled"
+            and request.method not in SAFE_METHODS
+        ):
+            raise TenantCanceledError()
         return True
 
 

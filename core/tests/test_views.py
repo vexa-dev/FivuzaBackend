@@ -1,4 +1,7 @@
 # Pruebas de ViewSets/vistas: permisos, serialización, códigos de respuesta HTTP.
+from datetime import timedelta
+
+from django.utils import timezone
 from rest_framework.test import APIClient, APIRequestFactory, APITestCase
 
 from core.models import Domain, PlatformStaff, Tenant, TenantSettings
@@ -148,6 +151,41 @@ class TenantLifecycleViewTests(APITestCase):
             f"/api/v1/core/tenants/{self.target_tenant.id}/suspend/", {}, format="json"
         )
         self.assertEqual(response.status_code, 401)
+
+    def test_cancel_sets_status_and_timestamps(self):
+        response = self.client.patch(
+            f"/api/v1/core/tenants/{self.target_tenant.id}/cancel/",
+            {"reason": "El negocio cerro sus operaciones"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["status"], "canceled")
+        self.assertIsNotNone(response.data["canceled_at"])
+        self.assertIsNotNone(response.data["data_retention_until"])
+
+    def test_cancel_twice_is_rejected(self):
+        self.client.patch(
+            f"/api/v1/core/tenants/{self.target_tenant.id}/cancel/", {}, format="json"
+        )
+        response = self.client.patch(
+            f"/api/v1/core/tenants/{self.target_tenant.id}/cancel/", {}, format="json"
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["error"]["code"], "TENANT_ALREADY_CANCELED")
+
+    def test_canceled_tenant_cannot_be_reactivated(self):
+        self.client.patch(
+            f"/api/v1/core/tenants/{self.target_tenant.id}/cancel/", {}, format="json"
+        )
+        response = self.client.patch(
+            f"/api/v1/core/tenants/{self.target_tenant.id}/reactivate/",
+            {},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(
+            response.data["error"]["code"], "CANNOT_REACTIVATE_CANCELED_TENANT"
+        )
 
 
 class TenantNotSuspendedPermissionTests(APITestCase):
@@ -404,7 +442,11 @@ class TenantRegisterViewTests(APITestCase):
 
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.data["status"], "trial")
-        self.assertEqual(response.data["provisioning_status"], "IN_PROGRESS")
+        # CELERY_TASK_ALWAYS_EAGER=True en tests: provision_tenant_async ya
+        # termino (sincrono, en el mismo proceso) para cuando la vista arma
+        # la respuesta -en produccion, sin un worker que la tome todavia,
+        # este mismo campo llegaria como "PENDING".
+        self.assertEqual(response.data["provisioning_status"], "COMPLETED")
 
         tenant = Tenant.objects.get(schema_name="emp_lucho")
         self.assertTrue(
@@ -539,6 +581,227 @@ class PlatformAuditLogTests(APITestCase):
         self.assertEqual(response.status_code, 405)
 
 
+class PlatformAuditLogFilteringTests(APITestCase):
+    """Paginacion, filtros y ordenamiento sobre GET /core/platform-audit-logs/
+    (Sprint 8, Especificacion de API §4.14)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        from core.models import PlatformAuditLog
+
+        public_tenant = Tenant.objects.create(
+            schema_name="public", company_name="Servicio Publico"
+        )
+        Domain.objects.create(
+            domain="public.localhost", tenant=public_tenant, is_primary=True
+        )
+        cls.password = "ClaveSegura123"
+        cls.staff_a = PlatformStaff.objects.create(
+            email="a@fivuza.com", full_name="Staff A", role="SUPER_ADMIN"
+        )
+        cls.staff_a.set_password(cls.password)
+        cls.staff_a.save()
+        cls.staff_b = PlatformStaff.objects.create(
+            email="b@fivuza.com", full_name="Staff B", role="SUPPORT"
+        )
+        cls.staff_b.set_password(cls.password)
+        cls.staff_b.save()
+
+        PlatformAuditLog.objects.create(
+            platform_staff=cls.staff_a,
+            action="SUSPEND_TENANT",
+            entity="Tenant",
+            entity_id=1,
+        )
+        PlatformAuditLog.objects.create(
+            platform_staff=cls.staff_b,
+            action="REACTIVATE_TENANT",
+            entity="Tenant",
+            entity_id=1,
+        )
+        PlatformAuditLog.objects.create(
+            platform_staff=cls.staff_a, action="CREATE", entity="Plan", entity_id=5
+        )
+
+    def _client_as(self, staff):
+        client = APIClient(HTTP_HOST="public.localhost")
+        login = client.post(
+            "/api/v1/platform/auth/login/",
+            {"email": staff.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def test_list_is_paginated(self):
+        response = self._client_as(self.staff_a).get(
+            "/api/v1/core/platform-audit-logs/"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("results", response.data)
+        self.assertEqual(response.data["count"], 3)
+
+    def test_filter_by_platform_staff(self):
+        response = self._client_as(self.staff_a).get(
+            f"/api/v1/core/platform-audit-logs/?platform_staff={self.staff_b.id}"
+        )
+        self.assertEqual(len(response.data["results"]), 1)
+        self.assertEqual(response.data["results"][0]["action"], "REACTIVATE_TENANT")
+
+    def test_filter_by_entity(self):
+        response = self._client_as(self.staff_a).get(
+            "/api/v1/core/platform-audit-logs/?entity=Plan"
+        )
+        self.assertEqual(len(response.data["results"]), 1)
+        self.assertEqual(response.data["results"][0]["entity"], "Plan")
+
+    def test_ordering_ascending_by_created_at(self):
+        response = self._client_as(self.staff_a).get(
+            "/api/v1/core/platform-audit-logs/?ordering=created_at"
+        )
+        actions = [row["action"] for row in response.data["results"]]
+        self.assertEqual(actions, ["SUSPEND_TENANT", "REACTIVATE_TENANT", "CREATE"])
+
+
+class SubscriptionPaymentConfirmViewTests(APITestCase):
+    """POST /core/subscription-payments/{id}/confirm/ (Especificacion de API
+    §4.10). Solo rol BILLING."""
+
+    @classmethod
+    def setUpTestData(cls):
+        from core.models import Plan
+
+        public_tenant = Tenant.objects.create(
+            schema_name="public", company_name="Servicio Publico"
+        )
+        Domain.objects.create(
+            domain="public.localhost", tenant=public_tenant, is_primary=True
+        )
+        cls.password = "ClaveSegura123"
+        cls.billing_staff = PlatformStaff.objects.create(
+            email="billing@fivuza.com", full_name="Billing", role="BILLING"
+        )
+        cls.billing_staff.set_password(cls.password)
+        cls.billing_staff.save()
+        cls.support_staff = PlatformStaff.objects.create(
+            email="support@fivuza.com", full_name="Support", role="SUPPORT"
+        )
+        cls.support_staff.set_password(cls.password)
+        cls.support_staff.save()
+
+        cls.tenant = Tenant.objects.create(
+            schema_name="test_payment_confirm", company_name="Negocio con Pago"
+        )
+        cls.plan = Plan.objects.create(
+            code="PLAN_CONFIRM",
+            name="Plan Confirm",
+            max_users=1,
+            price_monthly=39,
+            price_semiannual=195,
+            price_annual=390,
+        )
+
+    def setUp(self):
+        from core.models import Subscription, SubscriptionPayment
+
+        self.starts_at = timezone.now()
+        self.expires_at = self.starts_at + timedelta(days=30)
+        self.subscription = Subscription.objects.create(
+            tenant=self.tenant,
+            plan=self.plan,
+            billing_cycle="MONTHLY",
+            price_paid=39,
+            status="active",
+            starts_at=self.starts_at,
+            expires_at=self.expires_at,
+        )
+        self.payment = SubscriptionPayment.objects.create(
+            subscription=self.subscription,
+            amount=39,
+            payment_method="TRANSFER",
+            status="PENDING",
+        )
+
+    def _client_as(self, staff):
+        client = APIClient(HTTP_HOST="public.localhost")
+        login = client.post(
+            "/api/v1/platform/auth/login/",
+            {"email": staff.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def test_billing_can_confirm_payment(self):
+        response = self._client_as(self.billing_staff).post(
+            f"/api/v1/core/subscription-payments/{self.payment.id}/confirm/",
+            {},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["status"], "PAID")
+        self.assertIsNotNone(response.data["paid_at"])
+
+        self.subscription.refresh_from_db()
+        self.assertEqual(
+            self.subscription.expires_at, self.expires_at + timedelta(days=30)
+        )
+
+    def test_confirming_extends_a_past_due_subscription_from_now(self):
+        self.subscription.status = "past_due"
+        self.subscription.expires_at = timezone.now() - timedelta(days=10)
+        self.subscription.save(update_fields=["status", "expires_at"])
+
+        response = self._client_as(self.billing_staff).post(
+            f"/api/v1/core/subscription-payments/{self.payment.id}/confirm/",
+            {},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        self.subscription.refresh_from_db()
+        self.assertEqual(self.subscription.status, "active")
+        self.assertGreater(
+            self.subscription.expires_at, timezone.now() + timedelta(days=29)
+        )
+
+    def test_support_role_cannot_confirm_payment(self):
+        response = self._client_as(self.support_staff).post(
+            f"/api/v1/core/subscription-payments/{self.payment.id}/confirm/",
+            {},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_confirming_twice_is_rejected(self):
+        client = self._client_as(self.billing_staff)
+        client.post(
+            f"/api/v1/core/subscription-payments/{self.payment.id}/confirm/",
+            {},
+            format="json",
+        )
+        response = client.post(
+            f"/api/v1/core/subscription-payments/{self.payment.id}/confirm/",
+            {},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 409)
+
+    def test_confirm_writes_audit_log(self):
+        from core.models import PlatformAuditLog
+
+        self._client_as(self.billing_staff).post(
+            f"/api/v1/core/subscription-payments/{self.payment.id}/confirm/",
+            {},
+            format="json",
+        )
+        self.assertTrue(
+            PlatformAuditLog.objects.filter(
+                action="PAYMENT_CONFIRMED", entity_id=self.payment.id
+            ).exists()
+        )
+
+
 class DashboardSummaryViewTests(APITestCase):
     """GET /api/v1/core/dashboard/summary/ (Especificacion de API §4.13)."""
 
@@ -566,6 +829,12 @@ class DashboardSummaryViewTests(APITestCase):
             schema_name="test_dash_suspended",
             company_name="Suspendido",
             status="suspended",
+        )
+        cls.canceled_tenant = Tenant.objects.create(
+            schema_name="test_dash_canceled",
+            company_name="Cancelado",
+            status="canceled",
+            canceled_at="2026-07-15T09:00:00Z",
         )
         cls.plan = Plan.objects.create(
             code="PLAN_DASH",
@@ -609,9 +878,14 @@ class DashboardSummaryViewTests(APITestCase):
         data = response.data
         self.assertEqual(data["tenants_by_status"]["active"], 1)
         self.assertEqual(data["tenants_by_status"]["suspended"], 1)
+        self.assertEqual(data["tenants_by_status"]["canceled"], 1)
         self.assertEqual(float(data["mrr"]), 25.0)  # 300 ANNUAL / 12
         self.assertEqual(data["pending_payments_count"], 0)
         self.assertEqual(len(data["recently_suspended"]), 1)
+        self.assertEqual(len(data["recently_canceled"]), 1)
+        canceled_row = data["recently_canceled"][0]
+        self.assertEqual(canceled_row["id"], self.canceled_tenant.id)
+        self.assertIsNotNone(canceled_row["data_retention_until"])
 
 
 class ApiDocsAccessTests(APITestCase):

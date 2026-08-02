@@ -60,13 +60,23 @@ urlpatterns = [
         name="tenant_reactivate",
     ),
     path(
+        "core/tenants/<int:pk>/cancel/",
+        views.TenantCancelView.as_view(),
+        name="tenant_cancel",
+    ),
+    path(
+        "core/subscription-payments/<int:pk>/confirm/",
+        views.SubscriptionPaymentConfirmView.as_view(),
+        name="subscription_payment_confirm",
+    ),
+    path(
         "core/dashboard/summary/",
         views.DashboardSummaryView.as_view(),
         name="dashboard_summary",
     ),
 ]
 
-# El router va al final: suspend/reactivate deben resolverse antes de que el
-# patron de detalle del router (core/tenants/<pk>/) intente tomar "suspend"
-# o "reactivate" como si fueran un pk.
+# El router va al final: suspend/reactivate/cancel/confirm deben resolverse
+# antes de que el patron de detalle del router (core/tenants/<pk>/,
+# core/subscription-payments/<pk>/) intente tomarlos como si fueran un pk.
 urlpatterns += router.urls

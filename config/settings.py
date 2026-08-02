@@ -281,6 +281,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "inventario.tasks.alert_low_stock_variants",
         "schedule": crontab(hour=8, minute=0),
     },
+    "core-check-subscription-expirations": {
+        "task": "core.tasks.check_subscription_expirations",
+        "schedule": crontab(hour=7, minute=0),
+    },
 }
 
 

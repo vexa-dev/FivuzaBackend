@@ -17,5 +17,9 @@ def seed_default_roles_after_schema_sync(sender, tenant, **kwargs):
     """Se dispara recien cuando el esquema fisico del tenant ya existe y esta
     migrado -a diferencia de post_save de Tenant, que ocurre antes de que
     TenantMixin.save() cree el esquema (ver nota en
-    TenantProvisioningService.provision())."""
-    TenantProvisioningService.seed_default_roles(tenant)
+    TenantProvisioningService.provision()). Encola la siembra de roles en
+    Celery (Sprint 8, Especificacion de API §4.9) en vez de ejecutarla aqui
+    mismo, para no bloquear la respuesta HTTP del registro del tenant."""
+    from core.tasks import provision_tenant_async
+
+    provision_tenant_async.delay(tenant.id)
