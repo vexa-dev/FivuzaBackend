@@ -255,6 +255,13 @@ class SubscriptionViewSet(AuditLoggedViewSetMixin, viewsets.ModelViewSet):
     serializer_class = SubscriptionSerializer
     permission_classes = [IsAuthenticated, IsPlatformStaff]
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        tenant_id = self.request.query_params.get("tenant")
+        if tenant_id:
+            queryset = queryset.filter(tenant_id=tenant_id)
+        return queryset
+
 
 class SubscriptionPaymentViewSet(AuditLoggedViewSetMixin, viewsets.ModelViewSet):
     """Lectura: cualquier platform_staff. Escritura: solo BILLING."""
@@ -266,6 +273,13 @@ class SubscriptionPaymentViewSet(AuditLoggedViewSetMixin, viewsets.ModelViewSet)
         if self.action in ("list", "retrieve"):
             return [IsAuthenticated(), IsPlatformStaff()]
         return [IsAuthenticated(), require_platform_role("BILLING")()]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        subscription_id = self.request.query_params.get("subscription")
+        if subscription_id:
+            queryset = queryset.filter(subscription_id=subscription_id)
+        return queryset
 
 
 class SubscriptionPaymentConfirmView(APIView):
@@ -297,6 +311,13 @@ class TenantSettingsViewSet(AuditLoggedViewSetMixin, viewsets.ModelViewSet):
     queryset = TenantSettings.objects.all()
     serializer_class = TenantSettingsSerializer
     permission_classes = [IsAuthenticated, IsPlatformStaff]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        tenant_id = self.request.query_params.get("tenant")
+        if tenant_id:
+            queryset = queryset.filter(tenant_id=tenant_id)
+        return queryset
 
 
 class PlatformStaffViewSet(AuditLoggedViewSetMixin, viewsets.ModelViewSet):
@@ -344,6 +365,10 @@ class PlatformAuditLogViewSet(
         entity = params.get("entity")
         if entity:
             queryset = queryset.filter(entity=entity)
+
+        entity_id = params.get("entity_id")
+        if entity_id:
+            queryset = queryset.filter(entity_id=entity_id)
 
         date_from = params.get("date_from")
         if date_from:
