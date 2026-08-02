@@ -1,11 +1,21 @@
 # Pruebas de modelos: validaciones de campo, constraints, métodos del modelo.
+from decimal import Decimal
+
 from django.core.exceptions import ValidationError
 from django_tenants.test.cases import TenantTestCase
 
 from core.models import TenantSettings
-from inventario.models import Category, InventoryMovement, Stock, Warehouse
+from inventario.models import (
+    Category,
+    InventoryMovement,
+    ProductPriceHistory,
+    PurchaseOrder,
+    Stock,
+    Supplier,
+    Warehouse,
+)
 from inventario.selectors import get_low_stock_variant_ids
-from inventario.services import ProductVariantService, StockService
+from inventario.services import ProductVariantService, PurchaseService, StockService
 from usuarios.models import AuditLog, Role, User
 
 
@@ -275,3 +285,105 @@ class StockServiceTests(TenantTestCase):
             .first()
         )
         self.assertEqual(stock.quantity, last_movement.resulting_balance)
+
+
+class PurchaseServiceTests(TenantTestCase):
+    """PurchaseService.receive_order(): recibir una orden mueve Stock via
+    StockService y recalcula el costo promedio ponderado (Sprint 5)."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_inventario_purchases"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-inventario-purchases.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        role = Role.objects.create(name="admin", is_system_default=True)
+        cls.user = User.objects.create(email="admin@negocio.com", role=role)
+        cls.warehouse = Warehouse.objects.create(name="Principal")
+        cls.supplier = Supplier.objects.create(
+            ruc_or_dni="20123456789", company_name="Proveedor SAC"
+        )
+        category = Category.objects.create(name="Ropa")
+        product = ProductVariantService.create_product(
+            product_data={
+                "type": "PRODUCT",
+                "name": "Camiseta",
+                "category": category,
+                "unit_of_measure": "UND",
+            },
+            variants_data=[{"sku": "PURCHASE-SKU", "cost": "10.00"}],
+        )
+        cls.variant = product.variants.first()
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    def _create_order(self, quantity="10", unit_cost="12.00"):
+        order = PurchaseOrder.objects.create(
+            supplier=self.supplier,
+            warehouse=self.warehouse,
+            user=self.user,
+            status="PENDING",
+            total="0",
+        )
+        from inventario.models import PurchaseOrderDetail
+
+        PurchaseOrderDetail.objects.create(
+            purchase_order=order,
+            variant_id=self.variant.id,
+            quantity=quantity,
+            unit_cost=unit_cost,
+            subtotal=str(float(quantity) * float(unit_cost)),
+        )
+        return order
+
+    def test_receive_order_creates_stock_and_movement(self):
+        order = self._create_order(quantity="10", unit_cost="12.00")
+        PurchaseService.receive_order(purchase_order=order, user=self.user)
+
+        stock = Stock.objects.get(variant=self.variant, warehouse=self.warehouse)
+        self.assertEqual(stock.quantity, 10)
+
+        movement = InventoryMovement.objects.filter(
+            variant=self.variant, concept="PURCHASE"
+        ).first()
+        self.assertIsNotNone(movement)
+        self.assertEqual(movement.type, "IN")
+
+    def test_receive_order_marks_status_received(self):
+        order = self._create_order()
+        order = PurchaseService.receive_order(purchase_order=order, user=self.user)
+        self.assertEqual(order.status, "RECEIVED")
+        self.assertIsNotNone(order.received_at)
+
+    def test_receive_order_updates_weighted_average_cost(self):
+        # Costo inicial: 10.00 sin stock previo -> tras recibir 10 u. a 12.00,
+        # el promedio queda igual a 12.00 (no habia stock previo que pesar).
+        order = self._create_order(quantity="10", unit_cost="12.00")
+        PurchaseService.receive_order(purchase_order=order, user=self.user)
+        self.variant.refresh_from_db()
+        self.assertEqual(self.variant.cost, Decimal("12.0000"))
+
+        # Segunda recepcion: 10 u. mas a 20.00 -> promedio ponderado sobre
+        # 10@12 + 10@20 = 320/20 = 16.00.
+        order2 = self._create_order(quantity="10", unit_cost="20.00")
+        PurchaseService.receive_order(purchase_order=order2, user=self.user)
+        self.variant.refresh_from_db()
+        self.assertEqual(self.variant.cost, Decimal("16.0000"))
+
+        self.assertTrue(
+            ProductPriceHistory.objects.filter(variant=self.variant).exists()
+        )
+
+    def test_cannot_receive_an_already_received_order(self):
+        order = self._create_order()
+        PurchaseService.receive_order(purchase_order=order, user=self.user)
+        with self.assertRaises(ValidationError):
+            PurchaseService.receive_order(purchase_order=order, user=self.user)

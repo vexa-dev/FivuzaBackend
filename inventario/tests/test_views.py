@@ -4,7 +4,7 @@ from django_tenants.test.cases import TenantTestCase
 from rest_framework.test import APIClient
 
 from core.models import TenantSettings
-from inventario.models import Category
+from inventario.models import Category, Supplier, Warehouse
 from usuarios.models import Role, User
 
 
@@ -187,3 +187,137 @@ class InventoryCatalogEndpointsTests(TenantTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]["barcode"], "7501234567890")
+
+
+class PurchaseOrderEndpointsTests(TenantTestCase):
+    """CRUD + accion receive de purchase-orders: gateado por
+    RequiresFeature('HAS_PURCHASES_MODULE') y por PURCHASES_MANAGE (Sprint 5)."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_inventario_purchases_views"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-inventario-purchases-views.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.password = "ClaveSegura123"
+        cls.admin_role = Role.objects.get(name="admin")
+        cls.seller_role = Role.objects.get(name="seller")
+
+        cls.admin_user = User.objects.create(
+            email="admin@negocio.com", role=cls.admin_role
+        )
+        cls.admin_user.set_password(cls.password)
+        cls.admin_user.save()
+
+        cls.seller_user = User.objects.create(
+            email="vendedor@negocio.com", role=cls.seller_role
+        )
+        cls.seller_user.set_password(cls.password)
+        cls.seller_user.save()
+
+        cls.warehouse = Warehouse.objects.create(name="Principal")
+        cls.supplier = Supplier.objects.create(
+            ruc_or_dni="20123456789", company_name="Proveedor SAC"
+        )
+        cls.category = Category.objects.create(name="Ropa")
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    def setUp(self):
+        cache.clear()
+
+    def _client_as(self, user):
+        client = APIClient(HTTP_HOST=self.domain.domain)
+        login = client.post(
+            "/api/v1/auth/login/",
+            {"email": user.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def _create_variant(self, sku="PO-SKU"):
+        from inventario.services import ProductVariantService
+
+        product = ProductVariantService.create_product(
+            product_data={
+                "type": "PRODUCT",
+                "name": "Producto de compra",
+                "category": self.category,
+                "unit_of_measure": "UND",
+            },
+            variants_data=[{"sku": sku, "cost": "5.00"}],
+        )
+        return product.variants.first()
+
+    def test_purchases_blocked_by_default_feature_flag(self):
+        # TenantSettings.purchases_enabled es True por defecto en el modelo,
+        # pero el signal de aprovisionamiento no lo toca -se fuerza aqui
+        # para probar el otro lado del flag.
+        settings = TenantSettings.objects.get(tenant=self.tenant)
+        settings.purchases_enabled = False
+        settings.save(update_fields=["purchases_enabled"])
+
+        response = self._client_as(self.admin_user).get(
+            "/api/v1/inventario/purchase-orders/"
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data["code"], "MODULE_DISABLED")
+
+        settings.purchases_enabled = True
+        settings.save(update_fields=["purchases_enabled"])
+
+    def test_seller_cannot_create_purchase_order(self):
+        variant = self._create_variant()
+        response = self._client_as(self.seller_user).post(
+            "/api/v1/inventario/purchase-orders/",
+            {
+                "supplier": self.supplier.id,
+                "warehouse": self.warehouse.id,
+                "details_input": [
+                    {"variant_id": variant.id, "quantity": "5", "unit_cost": "10.00"}
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_admin_creates_and_receives_purchase_order(self):
+        variant = self._create_variant()
+        admin = self._client_as(self.admin_user)
+
+        create_response = admin.post(
+            "/api/v1/inventario/purchase-orders/",
+            {
+                "supplier": self.supplier.id,
+                "warehouse": self.warehouse.id,
+                "details_input": [
+                    {"variant_id": variant.id, "quantity": "5", "unit_cost": "10.00"}
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(create_response.status_code, 201)
+        self.assertEqual(create_response.data["status"], "PENDING")
+        self.assertEqual(create_response.data["total"], "50.0000")
+
+        order_id = create_response.data["id"]
+        receive_response = admin.post(
+            f"/api/v1/inventario/purchase-orders/{order_id}/receive/"
+        )
+        self.assertEqual(receive_response.status_code, 200)
+        self.assertEqual(receive_response.data["status"], "RECEIVED")
+        self.assertEqual(receive_response.data["movements_created"], 1)
+
+        stock_response = admin.get(
+            f"/api/v1/inventario/stock/?variant={variant.id}&warehouse={self.warehouse.id}"
+        )
+        self.assertEqual(stock_response.data[0]["quantity"], "5.000")

@@ -291,12 +291,19 @@ class PurchaseOrder(models.Model):
     supplier = models.ForeignKey(
         Supplier, on_delete=models.PROTECT, related_name="purchase_orders"
     )
+    # A que almacen entra el stock al recibir la orden. No estaba en el
+    # modelo original -sin el, POST .../receive/ no tiene forma de saber
+    # donde aplicar StockService.adjust_stock() (Sprint 5).
+    warehouse = models.ForeignKey(
+        Warehouse, on_delete=models.PROTECT, related_name="purchase_orders"
+    )
     user = models.ForeignKey(
         User, on_delete=models.PROTECT, related_name="purchase_orders"
     )
     invoice_number = models.CharField(max_length=100, blank=True)
     status = models.CharField(
         max_length=15,
+        default="PENDING",
         choices=[
             ("PENDING", "PENDING"),
             ("RECEIVED", "RECEIVED"),
@@ -305,6 +312,7 @@ class PurchaseOrder(models.Model):
     )
     total = models.DecimalField(max_digits=12, decimal_places=4)
     currency = models.CharField(max_length=3, default="PEN")
+    received_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

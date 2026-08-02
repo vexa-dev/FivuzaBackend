@@ -1,18 +1,25 @@
 import json
+from datetime import timedelta
 
 from django.core.cache import cache
+from django.core.exceptions import ValidationError
+from django.db import transaction
+from django.utils import timezone
 
 from usuarios.models import (
     AuditLog,
+    PasswordResetToken,
     Permission,
     Role,
     RolePermission,
     RolePermissionsHistory,
+    User,
     UserPermission,
 )
 
 _PERMISSION_CACHE_TTL = 300
 _PERMISSION_CACHE_PREFIX = "usuarios:permissions"
+_RESET_TOKEN_TTL_MINUTES = 30
 
 
 class PermissionService:
@@ -132,3 +139,51 @@ class AuditLogService:
             entity_id=entity_id,
             details=details or "",
         )
+
+
+class PasswordResetService:
+    """Flujo de 'olvide mi contraseña' (Sprint 5, hueco #1). request_reset()
+    nunca revela si el correo existe -siempre se comporta igual desde
+    afuera, para no filtrar que correos estan registrados."""
+
+    @staticmethod
+    def request_reset(*, email: str, schema_name: str, frontend_origin: str) -> None:
+        try:
+            user = User.objects.get(email=email, is_active=True)
+        except User.DoesNotExist:
+            return
+
+        token = PasswordResetToken.objects.create(
+            user=user,
+            expires_at=timezone.now() + timedelta(minutes=_RESET_TOKEN_TTL_MINUTES),
+        )
+
+        from usuarios.tasks import send_password_reset_email
+
+        send_password_reset_email.delay(
+            user_id=user.id,
+            token=token.token,
+            schema_name=schema_name,
+            frontend_origin=frontend_origin,
+        )
+
+    @staticmethod
+    @transaction.atomic
+    def confirm_reset(*, token: str, new_password: str) -> User:
+        try:
+            reset_token = PasswordResetToken.objects.select_for_update().get(
+                token=token
+            )
+        except PasswordResetToken.DoesNotExist:
+            raise ValidationError("El enlace de recuperacion es invalido o ya expiro.")
+
+        if reset_token.used_at is not None or reset_token.expires_at < timezone.now():
+            raise ValidationError("El enlace de recuperacion es invalido o ya expiro.")
+
+        user = reset_token.user
+        user.set_password(new_password)
+        user.save(update_fields=["password"])
+
+        reset_token.used_at = timezone.now()
+        reset_token.save(update_fields=["used_at"])
+        return user

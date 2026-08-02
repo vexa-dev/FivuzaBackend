@@ -1,16 +1,27 @@
 # Pruebas de modelos: validaciones de campo, constraints, métodos del modelo.
+from datetime import timedelta
+
+from django.core import mail
+from django.core.exceptions import ValidationError
+from django.utils import timezone
 from django_tenants.test.cases import TenantTestCase
 
 from core.models import TenantSettings
 from usuarios.models import (
     AuditLog,
+    PasswordResetToken,
     Permission,
     Role,
     RolePermission,
     User,
     UserPermission,
 )
-from usuarios.services import AuditLogService, PermissionService, RoleService
+from usuarios.services import (
+    AuditLogService,
+    PasswordResetService,
+    PermissionService,
+    RoleService,
+)
 
 
 class PermissionServiceTests(TenantTestCase):
@@ -206,3 +217,86 @@ class AuditLogServiceTests(TenantTestCase):
         )
         entry = AuditLog.objects.get(user=self.user, action="USER_ROLE_CHANGED")
         self.assertEqual(entry.details, "detalle en texto plano")
+
+
+class PasswordResetServiceTests(TenantTestCase):
+    """Flujo de 'olvide mi contraseña' (Sprint 5, hueco #1)."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_usuarios_password_reset"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-usuarios-password-reset.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        role = Role.objects.create(name="admin", is_system_default=True)
+        cls.user = User.objects.create(email="admin@negocio.com", role=role)
+        cls.user.set_password("ClaveVieja123")
+        cls.user.save()
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    def test_request_reset_for_existing_email_sends_email(self):
+        PasswordResetService.request_reset(
+            email=self.user.email,
+            schema_name=self.tenant.schema_name,
+            frontend_origin="http://tenant1.localhost:5173",
+        )
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn(self.user.email, mail.outbox[0].to)
+        self.assertTrue(PasswordResetToken.objects.filter(user=self.user).exists())
+
+    def test_request_reset_for_unknown_email_sends_nothing(self):
+        PasswordResetService.request_reset(
+            email="no-existe@negocio.com",
+            schema_name=self.tenant.schema_name,
+            frontend_origin="http://tenant1.localhost:5173",
+        )
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_confirm_reset_changes_password_and_consumes_token(self):
+        token = PasswordResetToken.objects.create(
+            user=self.user, expires_at=timezone.now() + timedelta(minutes=30)
+        )
+        PasswordResetService.confirm_reset(
+            token=token.token, new_password="ClaveNueva456"
+        )
+
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password("ClaveNueva456"))
+
+        token.refresh_from_db()
+        self.assertIsNotNone(token.used_at)
+
+    def test_confirm_reset_rejects_expired_token(self):
+        token = PasswordResetToken.objects.create(
+            user=self.user, expires_at=timezone.now() - timedelta(minutes=1)
+        )
+        with self.assertRaises(ValidationError):
+            PasswordResetService.confirm_reset(
+                token=token.token, new_password="ClaveNueva456"
+            )
+
+    def test_confirm_reset_rejects_already_used_token(self):
+        token = PasswordResetToken.objects.create(
+            user=self.user,
+            expires_at=timezone.now() + timedelta(minutes=30),
+            used_at=timezone.now(),
+        )
+        with self.assertRaises(ValidationError):
+            PasswordResetService.confirm_reset(
+                token=token.token, new_password="ClaveNueva456"
+            )
+
+    def test_confirm_reset_rejects_unknown_token(self):
+        with self.assertRaises(ValidationError):
+            PasswordResetService.confirm_reset(
+                token="token-inexistente", new_password="ClaveNueva456"
+            )

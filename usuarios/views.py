@@ -1,3 +1,5 @@
+from django.conf import settings
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.exceptions import ValidationError
@@ -19,6 +21,8 @@ from usuarios.models import (
 from usuarios.permissions import HasModulePermission
 from usuarios.serializers import (
     AuditLogSerializer,
+    PasswordResetConfirmSerializer,
+    PasswordResetRequestSerializer,
     PermissionSerializer,
     RolePermissionSerializer,
     RolePermissionsHistorySerializer,
@@ -27,7 +31,12 @@ from usuarios.serializers import (
     UserPermissionSerializer,
     UserSerializer,
 )
-from usuarios.services import AuditLogService, PermissionService, RoleService
+from usuarios.services import (
+    AuditLogService,
+    PasswordResetService,
+    PermissionService,
+    RoleService,
+)
 
 
 class TenantUserLoginView(APIView):
@@ -59,6 +68,45 @@ class TenantUserLogoutView(APIView):
         except TokenError as exc:
             raise ValidationError({"refresh": str(exc)})
         return Response(status=status.HTTP_205_RESET_CONTENT)
+
+
+class PasswordResetRequestView(APIView):
+    """POST email -> siempre responde 200, exista o no ese correo (nunca
+    revela si un correo esta registrado). El envio real es asincrono via
+    Celery, la respuesta HTTP no espera a que el correo salga."""
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = PasswordResetRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        hostname = request.get_host().split(":")[0]
+        port_suffix = f":{settings.FRONTEND_PORT}" if settings.FRONTEND_PORT else ""
+        frontend_origin = f"{settings.FRONTEND_SCHEME}://{hostname}{port_suffix}"
+
+        PasswordResetService.request_reset(
+            email=serializer.validated_data["email"],
+            schema_name=request.tenant.schema_name,
+            frontend_origin=frontend_origin,
+        )
+        return Response(status=status.HTTP_200_OK)
+
+
+class PasswordResetConfirmView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = PasswordResetConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            PasswordResetService.confirm_reset(
+                token=serializer.validated_data["token"],
+                new_password=serializer.validated_data["new_password"],
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError(exc.message) from exc
+        return Response(status=status.HTTP_200_OK)
 
 
 class RoleViewSet(viewsets.ModelViewSet):

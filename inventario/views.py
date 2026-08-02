@@ -7,7 +7,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.permissions import TenantNotSuspended
+from core.permissions import RequiresFeature, TenantNotSuspended
 from core.services import FeatureFlagService
 from inventario import selectors
 from inventario.models import (
@@ -16,9 +16,12 @@ from inventario.models import (
     Category,
     InventoryMovement,
     Product,
+    ProductTax,
     ProductVariant,
+    PurchaseOrder,
     Stock,
     Supplier,
+    TaxRate,
     Warehouse,
 )
 from inventario.permissions import HasInventoryAccess
@@ -29,15 +32,25 @@ from inventario.serializers import (
     InventoryMovementSerializer,
     LowStockVariantSerializer,
     ProductSerializer,
+    ProductTaxSerializer,
     ProductVariantImageUploadURLSerializer,
     ProductVariantSerializer,
+    PurchaseOrderSerializer,
     StockAdjustSerializer,
     StockSerializer,
     SupplierSerializer,
+    TaxRateSerializer,
     WarehouseSerializer,
 )
+from usuarios.permissions import HasModulePermission
 
 _BASE_PERMISSIONS = [IsAuthenticated, TenantNotSuspended, HasInventoryAccess]
+_PURCHASES_PERMISSIONS = [
+    IsAuthenticated,
+    TenantNotSuspended,
+    RequiresFeature("HAS_PURCHASES_MODULE"),
+    HasModulePermission("PURCHASES_MANAGE"),
+]
 
 
 class WarehouseViewSet(viewsets.ModelViewSet):
@@ -291,3 +304,67 @@ class LowStockVariantsView(APIView):
     def get(self, request):
         variants = selectors.get_low_stock_variants()
         return Response(LowStockVariantSerializer(variants, many=True).data)
+
+
+class TaxRateViewSet(viewsets.ModelViewSet):
+    queryset = TaxRate.objects.all().order_by("name")
+    serializer_class = TaxRateSerializer
+    permission_classes = _PURCHASES_PERMISSIONS
+
+
+class ProductTaxViewSet(viewsets.ModelViewSet):
+    queryset = ProductTax.objects.select_related("variant", "tax_rate")
+    serializer_class = ProductTaxSerializer
+    permission_classes = _PURCHASES_PERMISSIONS
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        variant_id = self.request.query_params.get("variant")
+        if variant_id:
+            queryset = queryset.filter(variant_id=variant_id)
+        return queryset
+
+
+class PurchaseOrderViewSet(viewsets.ModelViewSet):
+    """Visible solo si tenant_settings.purchases_enabled=true
+    (RequiresFeature). La recepcion pasa siempre por PurchaseService, nunca
+    por un PATCH directo de `status` -por eso `status` es de solo lectura
+    en el serializer."""
+
+    queryset = PurchaseOrder.objects.select_related(
+        "supplier", "warehouse", "user"
+    ).prefetch_related("details")
+    serializer_class = PurchaseOrderSerializer
+    permission_classes = _PURCHASES_PERMISSIONS
+
+    def get_queryset(self):
+        queryset = super().get_queryset().order_by("-created_at")
+        status_param = self.request.query_params.get("status")
+        if status_param:
+            queryset = queryset.filter(status=status_param)
+        supplier_id = self.request.query_params.get("supplier")
+        if supplier_id:
+            queryset = queryset.filter(supplier_id=supplier_id)
+        return queryset
+
+    @action(detail=True, methods=["post"])
+    def receive(self, request, pk=None):
+        from inventario.services import PurchaseService
+
+        order = self.get_object()
+        try:
+            order = PurchaseService.receive_order(
+                purchase_order=order, user=request.user
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError(exc.message) from exc
+
+        movements_created = order.details.count()
+        return Response(
+            {
+                "id": order.id,
+                "status": order.status,
+                "movements_created": movements_created,
+            },
+            status=status.HTTP_200_OK,
+        )

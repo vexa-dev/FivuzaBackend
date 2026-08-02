@@ -29,6 +29,16 @@ urlpatterns = [
     path(
         "auth/logout/", views.TenantUserLogoutView.as_view(), name="tenant_user_logout"
     ),
+    path(
+        "auth/password-reset/",
+        views.PasswordResetRequestView.as_view(),
+        name="password_reset_request",
+    ),
+    path(
+        "auth/password-reset/confirm/",
+        views.PasswordResetConfirmView.as_view(),
+        name="password_reset_confirm",
+    ),
 ]
 
 urlpatterns += router.urls

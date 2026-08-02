@@ -121,6 +121,7 @@ class TenantProvisioningService:
         ("HR_MANAGE", "HR"),
         ("INVENTORY_VIEW", "INVENTORY"),
         ("INVENTORY_MANAGE", "INVENTORY"),
+        ("PURCHASES_MANAGE", "PURCHASES"),
     ]
     _ROLE_PERMISSIONS = {
         "admin": [
@@ -130,6 +131,7 @@ class TenantProvisioningService:
             "HR_MANAGE",
             "INVENTORY_VIEW",
             "INVENTORY_MANAGE",
+            "PURCHASES_MANAGE",
         ],
         "manager": [
             "USERS_MANAGE",
@@ -137,6 +139,7 @@ class TenantProvisioningService:
             "HR_MANAGE",
             "INVENTORY_VIEW",
             "INVENTORY_MANAGE",
+            "PURCHASES_MANAGE",
         ],
         "seller": ["INVENTORY_VIEW"],
     }
@@ -210,6 +213,7 @@ class FeatureFlagService:
         "HAS_MULTI_WAREHOUSE": "multi_warehouse_enabled",
         "HAS_HR_MODULE": "hr_module_enabled",
         "HAS_CASH_MODULE": "cash_module_enabled",
+        "HAS_PURCHASES_MODULE": "purchases_enabled",
     }
 
     @staticmethod
