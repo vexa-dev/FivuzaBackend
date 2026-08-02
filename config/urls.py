@@ -22,20 +22,36 @@ from drf_spectacular.views import (
     SpectacularRedocView,
     SpectacularSwaggerView,
 )
+from rest_framework.permissions import IsAuthenticated
+
 from core import views as core_views
+from core.permissions import IsPlatformStaff
+
+# La documentacion de la API expone el mapa completo de endpoints y schemas
+# del sistema -en produccion no debe quedar publica, solo accesible para el
+# equipo interno de Fivuza (platform_staff), igual que el resto del panel core.
+_DOCS_PERMISSIONS = {"permission_classes": [IsAuthenticated, IsPlatformStaff]}
 
 urlpatterns = [
     path("admin/", admin.site.urls),
     # OpenAPI Schema
-    path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
+    path(
+        "api/schema/",
+        SpectacularAPIView.as_view(**_DOCS_PERMISSIONS),
+        name="schema",
+    ),
     # Swagger UI
     path(
         "api/docs/",
-        SpectacularSwaggerView.as_view(url_name="schema"),
+        SpectacularSwaggerView.as_view(url_name="schema", **_DOCS_PERMISSIONS),
         name="swagger-ui",
     ),
     # ReDoc
-    path("api/redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
+    path(
+        "api/redoc/",
+        SpectacularRedocView.as_view(url_name="schema", **_DOCS_PERMISSIONS),
+        name="redoc",
+    ),
     # Health Check
     path("api/v1/health/", core_views.health_check, name="health_check"),
     path("api/v1/", include("core.urls")),

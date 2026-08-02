@@ -37,7 +37,12 @@ SECRET_KEY = os.getenv(
 )
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# Antes quedaba hardcodeado en True -si alguien olvidaba tocar este archivo
+# antes de desplegar a produccion, DEBUG=True quedaba expuesto (stack traces
+# con codigo fuente y variables de entorno visibles a cualquiera). Default
+# seguro (False) si la variable no esta definida; .env de desarrollo la fija
+# en True explicitamente.
+DEBUG = os.getenv("DEBUG", "False") == "True"
 
 # Antes se ignoraba la variable de entorno ALLOWED_HOSTS y quedaba en [] -en dev
 # eso "funcionaba por accidente" porque Django agrega '.localhost' cuando

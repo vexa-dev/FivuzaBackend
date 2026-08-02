@@ -612,3 +612,50 @@ class DashboardSummaryViewTests(APITestCase):
         self.assertEqual(float(data["mrr"]), 25.0)  # 300 ANNUAL / 12
         self.assertEqual(data["pending_payments_count"], 0)
         self.assertEqual(len(data["recently_suspended"]), 1)
+
+
+class ApiDocsAccessTests(APITestCase):
+    """La documentacion de la API (schema/Swagger/ReDoc) no debe quedar
+    publica en produccion -solo platform_staff autenticado (Sprint 7,
+    endurecimiento de produccion)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        public_tenant = Tenant.objects.create(
+            schema_name="public", company_name="Servicio Publico"
+        )
+        Domain.objects.create(
+            domain="public.localhost", tenant=public_tenant, is_primary=True
+        )
+        cls.password = "ClaveSegura123"
+        cls.staff = PlatformStaff.objects.create(
+            email="admin@fivuza.com", full_name="Admin Fivuza", role="SUPER_ADMIN"
+        )
+        cls.staff.set_password(cls.password)
+        cls.staff.save()
+
+    def _client_as_staff(self):
+        client = APIClient(HTTP_HOST="public.localhost")
+        login = client.post(
+            "/api/v1/platform/auth/login/",
+            {"email": self.staff.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def test_schema_anonymous_is_rejected(self):
+        response = APIClient(HTTP_HOST="public.localhost").get("/api/schema/")
+        self.assertEqual(response.status_code, 401)
+
+    def test_swagger_ui_anonymous_is_rejected(self):
+        response = APIClient(HTTP_HOST="public.localhost").get("/api/docs/")
+        self.assertEqual(response.status_code, 401)
+
+    def test_redoc_anonymous_is_rejected(self):
+        response = APIClient(HTTP_HOST="public.localhost").get("/api/redoc/")
+        self.assertEqual(response.status_code, 401)
+
+    def test_schema_platform_staff_is_allowed(self):
+        response = self._client_as_staff().get("/api/schema/")
+        self.assertEqual(response.status_code, 200)
