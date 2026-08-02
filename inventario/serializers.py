@@ -1,3 +1,6 @@
+from decimal import Decimal
+
+from django.db import transaction
 from rest_framework import serializers
 
 from inventario.models import (
@@ -6,9 +9,13 @@ from inventario.models import (
     Category,
     InventoryMovement,
     Product,
+    ProductTax,
     ProductVariant,
+    PurchaseOrder,
+    PurchaseOrderDetail,
     Stock,
     Supplier,
+    TaxRate,
     VariantAttributeValue,
     Warehouse,
 )
@@ -215,3 +222,87 @@ class StockAdjustSerializer(serializers.Serializer):
             concept=validated_data["concept"],
             user=self.context["request"].user,
         )
+
+
+class TaxRateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TaxRate
+        fields = ["id", "name", "percentage", "is_active"]
+
+
+class ProductTaxSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductTax
+        fields = ["id", "variant", "tax_rate"]
+
+
+class PurchaseOrderDetailSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PurchaseOrderDetail
+        fields = [
+            "id",
+            "purchase_order",
+            "variant_id",
+            "quantity",
+            "unit_cost",
+            "subtotal",
+        ]
+        read_only_fields = ["subtotal"]
+
+
+class PurchaseOrderSerializer(serializers.ModelSerializer):
+    """details es de solo lectura -las lineas se arman en create() a
+    partir de details_input, calculando subtotal/total en el servidor
+    (nunca confiando en el total que mande el cliente)."""
+
+    details = PurchaseOrderDetailSerializer(many=True, read_only=True)
+    details_input = serializers.ListField(
+        child=serializers.DictField(), write_only=True
+    )
+
+    class Meta:
+        model = PurchaseOrder
+        fields = [
+            "id",
+            "supplier",
+            "warehouse",
+            "user",
+            "invoice_number",
+            "status",
+            "total",
+            "currency",
+            "received_at",
+            "details",
+            "details_input",
+            "created_at",
+        ]
+        read_only_fields = ["user", "status", "total", "received_at", "created_at"]
+
+    def create(self, validated_data):
+        details_data = validated_data.pop("details_input", [])
+        if not details_data:
+            raise serializers.ValidationError(
+                {"details_input": "Se requiere al menos una linea."}
+            )
+
+        request = self.context["request"]
+        with transaction.atomic():
+            order = PurchaseOrder.objects.create(
+                user=request.user, total=Decimal("0"), **validated_data
+            )
+            total = Decimal("0")
+            for line in details_data:
+                quantity = Decimal(str(line["quantity"]))
+                unit_cost = Decimal(str(line["unit_cost"]))
+                subtotal = quantity * unit_cost
+                total += subtotal
+                PurchaseOrderDetail.objects.create(
+                    purchase_order=order,
+                    variant_id=line["variant_id"],
+                    quantity=quantity,
+                    unit_cost=unit_cost,
+                    subtotal=subtotal,
+                )
+            order.total = total
+            order.save(update_fields=["total"])
+        return order

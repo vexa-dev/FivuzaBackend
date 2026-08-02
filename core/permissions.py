@@ -44,6 +44,46 @@ class IsPlatformStaff(BasePermission):
         return isinstance(request.user, PlatformStaff)
 
 
+class ModuleDisabledError(APIException):
+    """403 con codigo MODULE_DISABLED -mismo formato ya usado a mano en
+    ProductViewSet/WarehouseViewSet (Sprint 3); se centraliza aqui para que
+    RequiresFeature() no tenga que repetir el dict a mano cada vez."""
+
+    status_code = 403
+    default_code = "MODULE_DISABLED"
+
+    def __init__(self, feature_code: str):
+        super().__init__(
+            {
+                "code": "MODULE_DISABLED",
+                "feature": feature_code,
+                "message": "Este modulo no esta disponible en tu plan/configuracion actual.",
+            }
+        )
+
+
+def RequiresFeature(feature_code: str):
+    """Factory de permiso: bloquea el ViewSet completo si FeatureFlagService
+    dice que `feature_code` esta apagado para el tenant (Esquema Backend
+    §8.2). Usar junto con el permiso de modulo (ej. HasModulePermission)
+    para que un usuario sin el permiso vea 403 "sin permiso" y no 403
+    "modulo apagado" -el orden en permission_classes importa: DRF evalua
+    en orden y devuelve el primer has_permission() que falle."""
+
+    class _RequiresFeature(BasePermission):
+        def has_permission(self, request, view):
+            from core.services import FeatureFlagService
+
+            tenant = getattr(request, "tenant", None)
+            if tenant is not None and not FeatureFlagService.is_enabled(
+                tenant, feature_code
+            ):
+                raise ModuleDisabledError(feature_code)
+            return True
+
+    return _RequiresFeature
+
+
 def require_platform_role(*roles):
     """Factory de permiso: exige ademas que PlatformStaff.role este en roles
     (Especificacion de API §2.5, ej. "Solo platform_staff (SUPER_ADMIN)").

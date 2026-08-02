@@ -6,10 +6,15 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
 
+from django.db.models import Sum
+from django.utils import timezone
+
 from inventario.models import (
     InventoryMovement,
     Product,
+    ProductPriceHistory,
     ProductVariant,
+    PurchaseOrder,
     Stock,
     VariantAttributeValue,
     Warehouse,
@@ -168,3 +173,87 @@ class StockService:
             },
         )
         return movement
+
+
+class PurchaseService:
+    """Recibir una orden de compra es la unica forma en que sus lineas
+    tocan Stock -siempre via StockService (nunca escribe Stock directo),
+    para heredar el mismo lock/auditoria/Kardex ya probado (Esquema
+    Backend §5.2)."""
+
+    @staticmethod
+    @transaction.atomic
+    def receive_order(*, purchase_order: PurchaseOrder, user) -> PurchaseOrder:
+        if purchase_order.status != "PENDING":
+            raise ValidationError(
+                "Solo se puede recibir una orden de compra en estado PENDING."
+            )
+
+        for detail in purchase_order.details.all():
+            variant = ProductVariant.objects.select_for_update().get(
+                id=detail.variant_id
+            )
+            stock = (
+                Stock.objects.select_for_update()
+                .filter(variant=variant, warehouse=purchase_order.warehouse)
+                .first()
+            )
+            current_quantity = stock.quantity if stock else Decimal("0")
+
+            # El costo promedio se recalcula ANTES de tocar Stock -el
+            # aggregate de abajo debe leer el stock total previo a este
+            # ingreso, o el calculo cuenta la cantidad entrante dos veces.
+            PurchaseService._update_weighted_average_cost(
+                variant=variant,
+                incoming_quantity=detail.quantity,
+                incoming_unit_cost=detail.unit_cost,
+                user=user,
+            )
+            StockService.adjust_stock(
+                variant=variant,
+                warehouse=purchase_order.warehouse,
+                counted_quantity=current_quantity + detail.quantity,
+                concept="PURCHASE",
+                user=user,
+            )
+
+        purchase_order.status = "RECEIVED"
+        purchase_order.received_at = timezone.now()
+        purchase_order.save(update_fields=["status", "received_at"])
+        return purchase_order
+
+    @staticmethod
+    def _update_weighted_average_cost(
+        *,
+        variant: ProductVariant,
+        incoming_quantity: Decimal,
+        incoming_unit_cost: Decimal,
+        user,
+    ) -> None:
+        # Promedio ponderado contra el stock TOTAL (todos los almacenes),
+        # porque ProductVariant.cost es un unico costo global, no uno por
+        # almacen -recibir en cualquier almacen mueve el mismo costo.
+        total_before = Stock.objects.filter(variant=variant).aggregate(
+            total=Sum("quantity")
+        )["total"] or Decimal("0")
+        total_after = total_before + incoming_quantity
+        if total_after <= 0:
+            return
+
+        old_cost = variant.cost
+        new_cost = (
+            (old_cost * total_before) + (incoming_unit_cost * incoming_quantity)
+        ) / total_after
+        if new_cost == old_cost:
+            return
+
+        ProductPriceHistory.objects.create(
+            variant=variant,
+            old_cost=old_cost,
+            new_cost=new_cost,
+            old_price=variant.price,
+            new_price=variant.price,
+            changed_by=user,
+        )
+        variant.cost = new_cost
+        variant.save(update_fields=["cost"])

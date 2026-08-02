@@ -25,6 +25,15 @@ router.register(
     views.InventoryMovementViewSet,
     basename="inventory-movement",
 )
+router.register("inventario/tax-rates", views.TaxRateViewSet, basename="tax-rate")
+router.register(
+    "inventario/product-taxes", views.ProductTaxViewSet, basename="product-tax"
+)
+router.register(
+    "inventario/purchase-orders",
+    views.PurchaseOrderViewSet,
+    basename="purchase-order",
+)
 
 urlpatterns = [
     path(

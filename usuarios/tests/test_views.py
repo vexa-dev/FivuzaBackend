@@ -229,3 +229,74 @@ class RoleRBACEndpointsTests(TenantTestCase):
                 action="GRANTED",
             ).exists()
         )
+
+
+class PasswordResetEndpointsTests(TenantTestCase):
+    """POST /auth/password-reset/ y /auth/password-reset/confirm/ (Sprint 5)."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_usuarios_password_reset_views"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-usuarios-password-reset-views.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        role = Role.objects.create(name="admin", is_system_default=True)
+        cls.password = "ClaveVieja123"
+        cls.user = User.objects.create(email="admin@negocio.com", role=role)
+        cls.user.set_password(cls.password)
+        cls.user.save()
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    def test_request_reset_always_returns_200(self):
+        client = APIClient(HTTP_HOST=self.domain.domain)
+        response = client.post(
+            "/api/v1/auth/password-reset/",
+            {"email": "no-existe@negocio.com"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_full_reset_flow_allows_login_with_new_password(self):
+        from django.core import mail
+
+        client = APIClient(HTTP_HOST=self.domain.domain)
+        client.post(
+            "/api/v1/auth/password-reset/", {"email": self.user.email}, format="json"
+        )
+        self.assertEqual(len(mail.outbox), 1)
+
+        from usuarios.models import PasswordResetToken
+
+        token = PasswordResetToken.objects.get(user=self.user)
+
+        confirm_response = client.post(
+            "/api/v1/auth/password-reset/confirm/",
+            {"token": token.token, "new_password": "ClaveNueva456"},
+            format="json",
+        )
+        self.assertEqual(confirm_response.status_code, 200)
+
+        login_response = client.post(
+            "/api/v1/auth/login/",
+            {"email": self.user.email, "password": "ClaveNueva456"},
+            format="json",
+        )
+        self.assertEqual(login_response.status_code, 200)
+
+    def test_confirm_with_invalid_token_fails(self):
+        client = APIClient(HTTP_HOST=self.domain.domain)
+        response = client.post(
+            "/api/v1/auth/password-reset/confirm/",
+            {"token": "invalido", "new_password": "ClaveNueva456"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)

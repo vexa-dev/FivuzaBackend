@@ -1,3 +1,5 @@
+import secrets
+
 from django.contrib.auth.hashers import check_password, make_password
 from django.db import models
 
@@ -279,6 +281,28 @@ class EmployeeAttendance(models.Model):
                 name="ck_employee_attendance_status",
             )
         ]
+
+
+def _generate_reset_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+class PasswordResetToken(models.Model):
+    """Token de un solo uso para 'olvide mi contraseña' (Sprint 5, hueco #1
+    del Plan de Implementacion). No se reutiliza el mecanismo de Django
+    (PasswordResetTokenGenerator) porque esta pensado para
+    settings.AUTH_USER_MODEL -usuarios.User es un modelo aparte."""
+
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="password_reset_tokens"
+    )
+    token = models.CharField(max_length=64, unique=True, default=_generate_reset_token)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    used_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "password_reset_tokens"
 
 
 class EmployeePayroll(models.Model):

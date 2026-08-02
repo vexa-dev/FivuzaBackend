@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 from datetime import timedelta
 from pathlib import Path
 import os
+import sys
 import dj_database_url
 import sentry_sdk
 from celery.schedules import crontab
@@ -200,6 +201,26 @@ CACHES = {
 AWS_STORAGE_BUCKET_NAME = os.getenv("AWS_STORAGE_BUCKET_NAME", "")
 AWS_S3_REGION = os.getenv("AWS_S3_REGION", "us-east-1")
 
+# Correo transaccional (Sprint 5, hueco #2). En dev/test, EMAIL_BACKEND
+# imprime el correo a consola en vez de enviarlo de verdad -no requiere
+# credenciales para desarrollar ni para correr los tests. En produccion,
+# Infra/QA solo necesita cambiar EMAIL_BACKEND a
+# "django_ses.SESBackend" (con SES ya verificado, TRD §5.4) y las demas
+# variables de entorno, sin tocar codigo.
+EMAIL_BACKEND = os.getenv(
+    "EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend"
+)
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "no-responder@fivuza.com")
+
+# URL del ERP del tenant que se linkea en los correos (ej. reseteo de
+# contraseña). El backend nunca sirve el frontend, asi que arma la URL a
+# partir del mismo host que recibio la request (mismo patron que
+# tenantApiClient.ts en el frontend, en sentido inverso) mas estas dos
+# variables -distintas entre dev (puerto 5173, http) y produccion
+# (sin puerto explicito, https).
+FRONTEND_SCHEME = os.getenv("FRONTEND_SCHEME", "http")
+FRONTEND_PORT = os.getenv("FRONTEND_PORT", "5173")
+
 
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
@@ -239,6 +260,11 @@ USE_TZ = True
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
 CELERY_RESULT_BACKEND = os.getenv("REDIS_URL", "redis://redis:6379/0")
 CELERY_TIMEZONE = TIME_ZONE
+# En tests, las tareas corren en el mismo proceso en vez de encolarse en
+# Redis -si no, mail.outbox (backend de correo en memoria) nunca ve el
+# envio, porque ocurriria en un worker de Celery aparte que ademas no
+# existe durante los tests.
+CELERY_TASK_ALWAYS_EAGER = "test" in sys.argv
 CELERY_BEAT_SCHEDULE = {
     # Dia 28 (nunca dia 1: hay que tener la particion del mes siguiente
     # lista ANTES de que empiece, con margen) a las 2am.
