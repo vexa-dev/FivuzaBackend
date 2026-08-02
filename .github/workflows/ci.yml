@@ -16,7 +16,14 @@ jobs:
       with:
         python-version: '3.12'
     - name: Install Ruff
-      run: pip install ruff==0.15.21
+      # Version fija hasta el Sprint 6 (Plan de Implementacion, deuda
+      # tecnica) mientras el proyecto no tenia un pyproject.toml propio -
+      # una version nueva de Ruff podia cambiar reglas por defecto y romper
+      # el CI sin aviso. Con la configuracion explicita en pyproject.toml
+      # (target-version + ignore de RUF012), el comportamiento ya no
+      # depende de que version se instale, asi que se libera a un piso
+      # minimo en vez de un pin exacto.
+      run: pip install "ruff>=0.15.21,<1.0"
     - name: Run Ruff Linter
       run: ruff check .
     - name: Run Ruff Formatter

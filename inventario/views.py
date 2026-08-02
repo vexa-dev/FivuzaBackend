@@ -1,8 +1,10 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -368,3 +370,52 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class CatalogImportTemplateView(APIView):
+    """GET plantilla CSV descargable para la importacion masiva (Sprint 6,
+    hueco #3)."""
+
+    permission_classes = _BASE_PERMISSIONS
+
+    def get(self, request):
+        from inventario.services import CatalogImportService
+
+        response = HttpResponse(
+            CatalogImportService.build_template_csv(), content_type="text/csv"
+        )
+        response["Content-Disposition"] = (
+            'attachment; filename="plantilla_catalogo.csv"'
+        )
+        return response
+
+
+class CatalogImportView(APIView):
+    """POST archivo CSV -valida fila por fila y confirma solo las validas,
+    con reporte de errores (Sprint 6, hueco #3)."""
+
+    permission_classes = _BASE_PERMISSIONS
+    parser_classes = [MultiPartParser]
+
+    def post(self, request):
+        from inventario.services import CatalogImportService
+
+        uploaded_file = request.FILES.get("file")
+        if not uploaded_file:
+            raise ValidationError({"file": "Este campo es requerido."})
+
+        try:
+            content = uploaded_file.read().decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise ValidationError(
+                {"file": "El archivo debe ser un CSV codificado en UTF-8."}
+            ) from exc
+
+        try:
+            report = CatalogImportService.import_csv(
+                file_content=content, user=request.user
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError(exc.message) from exc
+
+        return Response(report, status=status.HTTP_200_OK)

@@ -46,6 +46,16 @@ urlpatterns = [
         views.LowStockVariantsView.as_view(),
         name="stock-low-stock",
     ),
+    path(
+        "inventario/catalog-import/template/",
+        views.CatalogImportTemplateView.as_view(),
+        name="catalog-import-template",
+    ),
+    path(
+        "inventario/catalog-import/",
+        views.CatalogImportView.as_view(),
+        name="catalog-import",
+    ),
 ]
 
 urlpatterns += router.urls
