@@ -1,15 +1,17 @@
+import csv
+import io
 import uuid
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 import boto3
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
-
 from django.db.models import Sum
 from django.utils import timezone
 
 from inventario.models import (
+    Category,
     InventoryMovement,
     Product,
     ProductPriceHistory,
@@ -257,3 +259,178 @@ class PurchaseService:
         )
         variant.cost = new_cost
         variant.save(update_fields=["cost"])
+
+
+_IMPORT_TEMPLATE_HEADERS = [
+    "nombre_producto",
+    "categoria",
+    "sku",
+    "codigo_barras",
+    "costo",
+    "precio",
+    "stock_minimo",
+    "cantidad_inicial",
+    "almacen",
+]
+
+
+class CatalogImportService:
+    """Importación masiva de catálogo desde CSV (Sprint 6, hueco #3). Valida
+    fila por fila -incluida la detección de códigos de barras duplicados,
+    dentro del propio archivo y contra lo que ya existe en la BD- y confirma
+    solo las filas válidas; un typo en la fila 300 no debe tirar abajo las
+    primeras 299 (cada fila corre en su propio savepoint, no en una unica
+    transacción para todo el archivo)."""
+
+    @staticmethod
+    def build_template_csv() -> str:
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(_IMPORT_TEMPLATE_HEADERS)
+        writer.writerow(
+            [
+                "Camiseta básica",
+                "Ropa",
+                "CAM-001",
+                "7501234567890",
+                "10.00",
+                "25.90",
+                "5",
+                "20",
+                "Principal",
+            ]
+        )
+        return buffer.getvalue()
+
+    @staticmethod
+    def import_csv(*, file_content: str, user) -> dict:
+        reader = csv.DictReader(io.StringIO(file_content))
+        missing = set(_IMPORT_TEMPLATE_HEADERS) - set(reader.fieldnames or [])
+        if missing:
+            raise ValidationError(
+                f"Faltan columnas en el archivo: {', '.join(sorted(missing))}"
+            )
+
+        rows = list(reader)
+        seen_skus: set[str] = set()
+        seen_barcodes: set[str] = set()
+        results = []
+
+        for index, row in enumerate(rows, start=2):  # la fila 1 es el encabezado
+            error = CatalogImportService._validate_row(row, seen_skus, seen_barcodes)
+            if error:
+                results.append(
+                    {
+                        "row": index,
+                        "sku": row.get("sku", ""),
+                        "status": "error",
+                        "error": error,
+                    }
+                )
+                continue
+
+            try:
+                with transaction.atomic():
+                    CatalogImportService._create_row(row, user)
+            except Exception as exc:  # noqa: BLE001 -- una fila mala no debe frenar el resto del archivo
+                results.append(
+                    {
+                        "row": index,
+                        "sku": row.get("sku", ""),
+                        "status": "error",
+                        "error": str(exc),
+                    }
+                )
+                continue
+
+            results.append({"row": index, "sku": row["sku"], "status": "created"})
+
+        created = sum(1 for r in results if r["status"] == "created")
+        errors = sum(1 for r in results if r["status"] == "error")
+        return {
+            "total": len(rows),
+            "created": created,
+            "errors": errors,
+            "rows": results,
+        }
+
+    @staticmethod
+    def _validate_row(row: dict, seen_skus: set, seen_barcodes: set) -> str | None:
+        name = (row.get("nombre_producto") or "").strip()
+        category_name = (row.get("categoria") or "").strip()
+        sku = (row.get("sku") or "").strip()
+        barcode = (row.get("codigo_barras") or "").strip()
+        warehouse_name = (row.get("almacen") or "").strip()
+
+        if not name:
+            return "nombre_producto es requerido"
+        if not sku:
+            return "sku es requerido"
+        if sku in seen_skus:
+            return f"sku '{sku}' duplicado en el archivo"
+        if ProductVariant.objects.filter(sku=sku).exists():
+            return f"sku '{sku}' ya existe en el catálogo"
+        if barcode:
+            if barcode in seen_barcodes:
+                return f"código de barras '{barcode}' duplicado en el archivo"
+            if ProductVariant.objects.filter(barcode=barcode).exists():
+                return f"código de barras '{barcode}' ya existe en el catálogo"
+        if not category_name:
+            return "categoria es requerida"
+        if not Category.objects.filter(name__iexact=category_name).exists():
+            return f"categoria '{category_name}' no existe"
+
+        try:
+            cantidad_inicial = Decimal(row.get("cantidad_inicial") or "0")
+        except InvalidOperation:
+            return "cantidad_inicial invalida"
+        if cantidad_inicial > 0 and not warehouse_name:
+            return "almacen es requerido si hay cantidad_inicial"
+        if (
+            warehouse_name
+            and not Warehouse.objects.filter(name__iexact=warehouse_name).exists()
+        ):
+            return f"almacen '{warehouse_name}' no existe"
+
+        seen_skus.add(sku)
+        if barcode:
+            seen_barcodes.add(barcode)
+        return None
+
+    @staticmethod
+    def _create_row(row: dict, user) -> None:
+        name = row["nombre_producto"].strip()
+        category = Category.objects.get(name__iexact=row["categoria"].strip())
+        sku = row["sku"].strip()
+        barcode = (row.get("codigo_barras") or "").strip() or None
+
+        product = ProductVariantService.create_product(
+            product_data={
+                "type": "PRODUCT",
+                "name": name,
+                "category": category,
+                "unit_of_measure": "UND",
+            },
+            variants_data=[
+                {
+                    "sku": sku,
+                    "barcode": barcode,
+                    "cost": row.get("costo") or "0",
+                    "price": row.get("precio") or "0",
+                    "min_stock": row.get("stock_minimo") or "0",
+                }
+            ],
+        )
+
+        cantidad_inicial = Decimal(row.get("cantidad_inicial") or "0")
+        warehouse_name = (row.get("almacen") or "").strip()
+        if cantidad_inicial > 0 and warehouse_name:
+            warehouse = Warehouse.objects.get(name__iexact=warehouse_name)
+            variant = product.variants.first()
+            StockService.adjust_stock(
+                variant=variant,
+                warehouse=warehouse,
+                counted_quantity=cantidad_inicial,
+                concept="ADJUSTMENT",
+                user=user,
+            )

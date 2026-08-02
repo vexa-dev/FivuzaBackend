@@ -9,13 +9,19 @@ from inventario.models import (
     Category,
     InventoryMovement,
     ProductPriceHistory,
+    ProductVariant,
     PurchaseOrder,
     Stock,
     Supplier,
     Warehouse,
 )
 from inventario.selectors import get_low_stock_variant_ids
-from inventario.services import ProductVariantService, PurchaseService, StockService
+from inventario.services import (
+    CatalogImportService,
+    ProductVariantService,
+    PurchaseService,
+    StockService,
+)
 from usuarios.models import AuditLog, Role, User
 
 
@@ -387,3 +393,123 @@ class PurchaseServiceTests(TenantTestCase):
         PurchaseService.receive_order(purchase_order=order, user=self.user)
         with self.assertRaises(ValidationError):
             PurchaseService.receive_order(purchase_order=order, user=self.user)
+
+
+class CatalogImportServiceTests(TenantTestCase):
+    """Importacion masiva de catalogo desde CSV (Sprint 6, hueco #3)."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_inventario_catalog_import"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-inventario-catalog-import.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        role = Role.objects.create(name="admin", is_system_default=True)
+        cls.user = User.objects.create(email="admin@negocio.com", role=role)
+        cls.warehouse = Warehouse.objects.create(name="Principal")
+        Category.objects.create(name="Ropa")
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    _HEADER = (
+        "nombre_producto,categoria,sku,codigo_barras,costo,precio,"
+        "stock_minimo,cantidad_inicial,almacen"
+    )
+
+    def test_valid_row_creates_product_variant_and_stock(self):
+        csv_content = (
+            f"{self._HEADER}\n"
+            "Camiseta basica,Ropa,CAM-IMP-1,7501234567890,10.00,25.90,5,20,Principal\n"
+        )
+        report = CatalogImportService.import_csv(
+            file_content=csv_content, user=self.user
+        )
+
+        self.assertEqual(report["total"], 1)
+        self.assertEqual(report["created"], 1)
+        self.assertEqual(report["errors"], 0)
+
+        variant = ProductVariant.objects.get(sku="CAM-IMP-1")
+        self.assertEqual(variant.barcode, "7501234567890")
+        self.assertEqual(variant.price, Decimal("25.9000"))
+
+        stock = Stock.objects.get(variant=variant, warehouse=self.warehouse)
+        self.assertEqual(stock.quantity, 20)
+
+    def test_duplicate_barcode_within_file_reports_error_without_blocking_others(self):
+        csv_content = (
+            f"{self._HEADER}\n"
+            "Producto 1,Ropa,SKU-DUP-1,1111111111111,5,10,0,0,\n"
+            "Producto 2,Ropa,SKU-DUP-2,1111111111111,5,10,0,0,\n"
+            "Producto 3,Ropa,SKU-DUP-3,,5,10,0,0,\n"
+        )
+        report = CatalogImportService.import_csv(
+            file_content=csv_content, user=self.user
+        )
+
+        self.assertEqual(report["total"], 3)
+        self.assertEqual(report["created"], 2)
+        self.assertEqual(report["errors"], 1)
+        error_row = next(r for r in report["rows"] if r["status"] == "error")
+        self.assertIn("duplicado", error_row["error"])
+        self.assertTrue(ProductVariant.objects.filter(sku="SKU-DUP-1").exists())
+        self.assertFalse(ProductVariant.objects.filter(sku="SKU-DUP-2").exists())
+        self.assertTrue(ProductVariant.objects.filter(sku="SKU-DUP-3").exists())
+
+    def test_duplicate_barcode_against_existing_catalog_is_rejected(self):
+        ProductVariantService.create_product(
+            product_data={
+                "type": "PRODUCT",
+                "name": "Existente",
+                "category": Category.objects.get(name="Ropa"),
+                "unit_of_measure": "UND",
+            },
+            variants_data=[{"sku": "SKU-EXISTENTE", "barcode": "9999999999999"}],
+        )
+        csv_content = (
+            f"{self._HEADER}\nProducto nuevo,Ropa,SKU-NUEVO,9999999999999,5,10,0,0,\n"
+        )
+        report = CatalogImportService.import_csv(
+            file_content=csv_content, user=self.user
+        )
+        self.assertEqual(report["created"], 0)
+        self.assertEqual(report["errors"], 1)
+        self.assertIn("ya existe", report["rows"][0]["error"])
+
+    def test_unknown_category_is_rejected(self):
+        csv_content = (
+            f"{self._HEADER}\nProducto,Categoria Inexistente,SKU-CAT-X,,5,10,0,0,\n"
+        )
+        report = CatalogImportService.import_csv(
+            file_content=csv_content, user=self.user
+        )
+        self.assertEqual(report["errors"], 1)
+        self.assertIn("categoria", report["rows"][0]["error"])
+
+    def test_initial_quantity_without_warehouse_is_rejected(self):
+        csv_content = f"{self._HEADER}\nProducto,Ropa,SKU-NO-ALMACEN,,5,10,0,10,\n"
+        report = CatalogImportService.import_csv(
+            file_content=csv_content, user=self.user
+        )
+        self.assertEqual(report["errors"], 1)
+        self.assertIn("almacen", report["rows"][0]["error"])
+
+    def test_missing_columns_raises(self):
+        with self.assertRaises(ValidationError):
+            CatalogImportService.import_csv(
+                file_content="nombre_producto,sku\nX,Y\n", user=self.user
+            )
+
+    def test_template_csv_has_expected_headers(self):
+        template = CatalogImportService.build_template_csv()
+        first_line = template.splitlines()[0]
+        self.assertIn("nombre_producto", first_line)
+        self.assertIn("codigo_barras", first_line)

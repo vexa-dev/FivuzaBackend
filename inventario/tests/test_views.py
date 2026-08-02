@@ -321,3 +321,91 @@ class PurchaseOrderEndpointsTests(TenantTestCase):
             f"/api/v1/inventario/stock/?variant={variant.id}&warehouse={self.warehouse.id}"
         )
         self.assertEqual(stock_response.data[0]["quantity"], "5.000")
+
+
+class CatalogImportEndpointsTests(TenantTestCase):
+    """POST /inventario/catalog-import/ y GET .../template/ (Sprint 6)."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_inventario_catalog_import_views"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-inventario-catalog-import-views.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.password = "ClaveSegura123"
+        cls.admin_role = Role.objects.get(name="admin")
+        cls.seller_role = Role.objects.get(name="seller")
+
+        cls.admin_user = User.objects.create(
+            email="admin@negocio.com", role=cls.admin_role
+        )
+        cls.admin_user.set_password(cls.password)
+        cls.admin_user.save()
+
+        cls.seller_user = User.objects.create(
+            email="vendedor@negocio.com", role=cls.seller_role
+        )
+        cls.seller_user.set_password(cls.password)
+        cls.seller_user.save()
+
+        Category.objects.create(name="Ropa")
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    def setUp(self):
+        cache.clear()
+
+    def _client_as(self, user):
+        client = APIClient(HTTP_HOST=self.domain.domain)
+        login = client.post(
+            "/api/v1/auth/login/",
+            {"email": user.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def test_template_download(self):
+        response = self._client_as(self.admin_user).get(
+            "/api/v1/inventario/catalog-import/template/"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("nombre_producto", response.content.decode())
+
+    def test_seller_cannot_import(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        csv_content = b"nombre_producto,categoria,sku,codigo_barras,costo,precio,stock_minimo,cantidad_inicial,almacen\n"
+        upload = SimpleUploadedFile(
+            "catalogo.csv", csv_content, content_type="text/csv"
+        )
+        response = self._client_as(self.seller_user).post(
+            "/api/v1/inventario/catalog-import/", {"file": upload}, format="multipart"
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_admin_imports_valid_csv(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        csv_content = (
+            "nombre_producto,categoria,sku,codigo_barras,costo,precio,"
+            "stock_minimo,cantidad_inicial,almacen\n"
+            "Camiseta,Ropa,SKU-CSV-1,,10,20,0,0,\n"
+        ).encode()
+        upload = SimpleUploadedFile(
+            "catalogo.csv", csv_content, content_type="text/csv"
+        )
+        response = self._client_as(self.admin_user).post(
+            "/api/v1/inventario/catalog-import/", {"file": upload}, format="multipart"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["created"], 1)
+        self.assertEqual(response.data["errors"], 0)
