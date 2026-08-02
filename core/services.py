@@ -53,11 +53,11 @@ class TenantRegistrationService:
     def register(
         *,
         company_name: str,
-        ruc: str,
         schema_name: str,
         domain: str,
         plan_code: str,
         billing_cycle: str,
+        ruc: str | None = None,
     ) -> Tenant:
         plan = Plan.objects.get(code=plan_code, is_active=True)
 

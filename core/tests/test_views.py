@@ -460,6 +460,19 @@ class TenantRegisterViewTests(APITestCase):
         # TenantProvisioningService (signal post_save) ya debio correr:
         self.assertTrue(TenantSettings.objects.filter(tenant=tenant).exists())
 
+    def test_register_without_ruc_succeeds(self):
+        payload = self._payload(
+            schema_name="emp_sin_ruc", domain="sin-ruc.fivuza.localhost"
+        )
+        del payload["ruc"]
+
+        response = self._client_as(self.super_admin).post(
+            "/api/v1/core/tenants/register/", payload, format="json"
+        )
+        self.assertEqual(response.status_code, 202)
+        tenant = Tenant.objects.get(schema_name="emp_sin_ruc")
+        self.assertIsNone(tenant.ruc)
+
     def test_register_rejects_duplicate_schema_name(self):
         client = self._client_as(self.super_admin)
         client.post("/api/v1/core/tenants/register/", self._payload(), format="json")
@@ -655,6 +668,12 @@ class PlatformAuditLogFilteringTests(APITestCase):
         self.assertEqual(len(response.data["results"]), 1)
         self.assertEqual(response.data["results"][0]["entity"], "Plan")
 
+    def test_filter_by_entity_and_entity_id(self):
+        response = self._client_as(self.staff_a).get(
+            "/api/v1/core/platform-audit-logs/?entity=Tenant&entity_id=1"
+        )
+        self.assertEqual(len(response.data["results"]), 2)
+
     def test_ordering_ascending_by_created_at(self):
         response = self._client_as(self.staff_a).get(
             "/api/v1/core/platform-audit-logs/?ordering=created_at"
@@ -800,6 +819,40 @@ class SubscriptionPaymentConfirmViewTests(APITestCase):
                 action="PAYMENT_CONFIRMED", entity_id=self.payment.id
             ).exists()
         )
+
+    def test_payments_filtered_by_subscription(self):
+        from core.models import Subscription, SubscriptionPayment
+
+        other_subscription = Subscription.objects.create(
+            tenant=Tenant.objects.create(
+                schema_name="test_other_sub", company_name="Otro Negocio"
+            ),
+            plan=self.plan,
+            billing_cycle="MONTHLY",
+            price_paid=39,
+            status="active",
+            starts_at=self.starts_at,
+            expires_at=self.expires_at,
+        )
+        SubscriptionPayment.objects.create(
+            subscription=other_subscription,
+            amount=39,
+            payment_method="TRANSFER",
+            status="PENDING",
+        )
+
+        response = self._client_as(self.billing_staff).get(
+            f"/api/v1/core/subscription-payments/?subscription={self.subscription.id}"
+        )
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["id"], self.payment.id)
+
+    def test_subscriptions_filtered_by_tenant(self):
+        response = self._client_as(self.billing_staff).get(
+            f"/api/v1/core/subscriptions/?tenant={self.tenant.id}"
+        )
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["id"], self.subscription.id)
 
 
 class DashboardSummaryViewTests(APITestCase):
