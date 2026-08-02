@@ -2,13 +2,22 @@
 target-version = "py312"
 
 [tool.ruff.lint]
+# select explicito (no confiar en "el set por defecto de esta version de
+# ruff"): con el pin de CI liberado a un rango (>=0.15.21,<1.0), una
+# version nueva de Ruff puede ampliar sus reglas "por defecto" de un dia
+# para el otro (ej. 0.16 agrego EXE002 sobre permisos de archivo, que no
+# tiene nada que ver con calidad de codigo Python) y tumbar el CI sin que
+# nadie haya tocado una linea de codigo. Fijar select aqui es lo que de
+# verdad "libera" la version -el comportamiento ya no depende de que
+# version se instale.
+select = ["E4", "E7", "E9", "F"]
 # RUF012 ("mutable default value for class attribute") asume el patron de
 # dataclasses, donde un valor mutable compartido entre instancias es un bug
 # real. En Django/DRF ese patron -Meta.fields=[...], Meta.constraints=[...],
 # choices=[...], permission_classes=[...]- es la convencion estandar del
 # framework: son literales de configuracion leidos una sola vez a nivel de
-# clase, nunca mutados en runtime ni compartidos entre instancias. Activar
-# esta regla aqui obligaria a reescribir ~137 sitios (Sprint 6, deuda
-# tecnica) sin corregir ningun bug real, incluyendo migraciones que Django
-# regenera solo y volveria a "romper" en la siguiente makemigrations.
+# clase, nunca mutados en runtime ni compartidos entre instancias. Se deja
+# documentado por si en el futuro se agrega RUF al select: activarla
+# obligaria a reescribir ~137 sitios (Sprint 6, deuda tecnica) sin corregir
+# ningun bug real, incluyendo migraciones que Django regenera solo.
 ignore = ["RUF012"]
