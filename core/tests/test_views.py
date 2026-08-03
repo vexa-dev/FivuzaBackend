@@ -925,6 +925,102 @@ class SubscriptionPaymentConfirmViewTests(APITestCase):
         self.assertEqual(response.data[0]["id"], self.subscription.id)
 
 
+class TenantFeatureOverrideTests(APITestCase):
+    """PATCH/DELETE /core/tenants/{id}/feature-overrides/{feature_code}/
+    (Sprint 10, Especificacion de API §4.25). Solo SUPER_ADMIN escribe."""
+
+    @classmethod
+    def setUpTestData(cls):
+        public_tenant = Tenant.objects.create(
+            schema_name="public", company_name="Servicio Publico"
+        )
+        Domain.objects.create(
+            domain="public.localhost", tenant=public_tenant, is_primary=True
+        )
+        cls.password = "ClaveSegura123"
+        cls.super_admin = PlatformStaff.objects.create(
+            email="admin@fivuza.com", full_name="Super Admin", role="SUPER_ADMIN"
+        )
+        cls.super_admin.set_password(cls.password)
+        cls.super_admin.save()
+        cls.support = PlatformStaff.objects.create(
+            email="soporte@fivuza.com", full_name="Soporte", role="SUPPORT"
+        )
+        cls.support.set_password(cls.password)
+        cls.support.save()
+        cls.tenant = Tenant.objects.create(
+            schema_name="test_feature_override", company_name="Negocio Beta"
+        )
+
+    def _client_as(self, staff):
+        client = APIClient(HTTP_HOST="public.localhost")
+        login = client.post(
+            "/api/v1/platform/auth/login/",
+            {"email": staff.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def test_support_cannot_set_override(self):
+        response = self._client_as(self.support).patch(
+            f"/api/v1/core/tenants/{self.tenant.id}/feature-overrides/HAS_MULTI_WAREHOUSE/",
+            {"is_enabled": True},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_super_admin_can_force_enable_feature_plan_does_not_include(self):
+        from core.services import FeatureFlagService
+
+        response = self._client_as(self.super_admin).patch(
+            f"/api/v1/core/tenants/{self.tenant.id}/feature-overrides/HAS_MULTI_WAREHOUSE/",
+            {"is_enabled": True},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["is_enabled"], True)
+        self.assertTrue(
+            FeatureFlagService.is_enabled(self.tenant, "HAS_MULTI_WAREHOUSE")
+        )
+
+    def test_override_is_listed_and_can_be_removed(self):
+        client = self._client_as(self.super_admin)
+        client.patch(
+            f"/api/v1/core/tenants/{self.tenant.id}/feature-overrides/HAS_HR_MODULE/",
+            {"is_enabled": True},
+            format="json",
+        )
+
+        listed = client.get(f"/api/v1/core/tenants/{self.tenant.id}/feature-overrides/")
+        self.assertEqual(len(listed.data), 1)
+        self.assertEqual(listed.data[0]["feature_code"], "HAS_HR_MODULE")
+
+        deleted = client.delete(
+            f"/api/v1/core/tenants/{self.tenant.id}/feature-overrides/HAS_HR_MODULE/"
+        )
+        self.assertEqual(deleted.status_code, 204)
+
+        listed_after = client.get(
+            f"/api/v1/core/tenants/{self.tenant.id}/feature-overrides/"
+        )
+        self.assertEqual(len(listed_after.data), 0)
+
+    def test_setting_override_writes_audit_log(self):
+        from core.models import PlatformAuditLog
+
+        self._client_as(self.super_admin).patch(
+            f"/api/v1/core/tenants/{self.tenant.id}/feature-overrides/HAS_CASH_MODULE/",
+            {"is_enabled": False},
+            format="json",
+        )
+        self.assertTrue(
+            PlatformAuditLog.objects.filter(
+                action="TENANT_FEATURE_OVERRIDE_SET", entity_id=self.tenant.id
+            ).exists()
+        )
+
+
 class DashboardSummaryViewTests(APITestCase):
     """GET /api/v1/core/dashboard/summary/ (Especificacion de API §4.13)."""
 

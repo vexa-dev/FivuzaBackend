@@ -89,18 +89,24 @@ class Plan(models.Model):
         return self.name
 
 
+# Catalogo de feature flags compartido entre PlanFeature (a nivel de plan) y
+# TenantFeatureOverride (Sprint 10, a nivel de UN tenant especifico) -un solo
+# lugar para agregar un feature_code nuevo en vez de mantener dos listas.
+FEATURE_CODE_CHOICES = [
+    ("HAS_SALES_MODULE", "HAS_SALES_MODULE"),
+    ("HAS_PURCHASES_MODULE", "HAS_PURCHASES_MODULE"),
+    ("HAS_VARIANTS", "HAS_VARIANTS"),
+    ("HAS_MULTI_WAREHOUSE", "HAS_MULTI_WAREHOUSE"),
+    ("HAS_HR_MODULE", "HAS_HR_MODULE"),
+    ("HAS_CASH_MODULE", "HAS_CASH_MODULE"),
+]
+
+
 class PlanFeature(models.Model):
     plan = models.ForeignKey(Plan, on_delete=models.CASCADE, related_name="features")
     feature_code = models.CharField(
         max_length=50,
-        choices=[
-            ("HAS_SALES_MODULE", "HAS_SALES_MODULE"),
-            ("HAS_PURCHASES_MODULE", "HAS_PURCHASES_MODULE"),
-            ("HAS_VARIANTS", "HAS_VARIANTS"),
-            ("HAS_MULTI_WAREHOUSE", "HAS_MULTI_WAREHOUSE"),
-            ("HAS_HR_MODULE", "HAS_HR_MODULE"),
-            ("HAS_CASH_MODULE", "HAS_CASH_MODULE"),
-        ],
+        choices=FEATURE_CODE_CHOICES,
     )
     is_enabled = models.BooleanField(default=True)
 
@@ -271,3 +277,49 @@ class PlatformAuditLog(models.Model):
 
     def __str__(self):
         return f"{self.action} on {self.entity}#{self.entity_id}"
+
+
+class TenantImpersonationSession(models.Model):
+    """Sesion de soporte tecnico: platform_staff actua temporalmente como el
+    admin de un tenant, sin pedirle su contraseña (Especificacion de API
+    §4.24; Ficha de Producto §6). Se cierra sola a los 60 minutos
+    (expires_at) o antes, si platform_staff o el propio usuario impersonado
+    la termina explicitamente (ended_at)."""
+
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.PROTECT, related_name="impersonation_sessions"
+    )
+    platform_staff = models.ForeignKey(
+        PlatformStaff, on_delete=models.PROTECT, related_name="impersonation_sessions"
+    )
+    reason = models.TextField()
+    started_at = models.DateTimeField(auto_now_add=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField()
+
+    class Meta:
+        db_table = "tenant_impersonation_sessions"
+        ordering = ["-started_at"]
+
+
+class TenantFeatureOverride(models.Model):
+    """Activa/desactiva UNA caracteristica para UN tenant especifico, sin
+    tocar su plan contratado (Especificacion de API §4.25; Esquema Backend
+    §8.2). Tiene prioridad sobre PlanFeature en FeatureFlagService.is_enabled()
+    -a diferencia de PlanFeature/TenantSettings (que solo pueden apagar una
+    caracteristica), un override puede tambien PRENDERLA aunque el plan no
+    la incluya (ej. dar acceso beta antes de cambiar de plan)."""
+
+    tenant = models.ForeignKey(
+        Tenant, on_delete=models.CASCADE, related_name="feature_overrides"
+    )
+    feature_code = models.CharField(max_length=50, choices=FEATURE_CODE_CHOICES)
+    is_enabled = models.BooleanField()
+
+    class Meta:
+        db_table = "tenant_feature_overrides"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "feature_code"], name="uq_tenant_feature_override"
+            )
+        ]

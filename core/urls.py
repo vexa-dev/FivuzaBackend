@@ -70,6 +70,34 @@ urlpatterns = [
         name="subscription_payment_confirm",
     ),
     path(
+        "core/tenants/<int:pk>/impersonation/",
+        views.TenantImpersonationStartView.as_view(),
+        name="tenant_impersonation_start",
+    ),
+    path(
+        "core/tenants/<int:pk>/impersonation/<int:session_id>/",
+        views.TenantImpersonationEndView.as_view(),
+        name="tenant_impersonation_end",
+    ),
+    path(
+        "core/tenants/<int:pk>/feature-overrides/",
+        views.TenantFeatureOverrideListView.as_view(),
+        name="tenant_feature_overrides",
+    ),
+    path(
+        "core/tenants/<int:pk>/feature-overrides/<str:feature_code>/",
+        views.TenantFeatureOverrideView.as_view(),
+        name="tenant_feature_override",
+    ),
+    # Fuera de /core/: lo llama el ERP del tenant (autenticado con un token
+    # de tenant.users, no de platform_staff) para terminar su propia sesion
+    # de soporte desde el banner ("Salir").
+    path(
+        "impersonation/end/",
+        views.ImpersonationSelfEndView.as_view(),
+        name="impersonation_self_end",
+    ),
+    path(
         "core/dashboard/summary/",
         views.DashboardSummaryView.as_view(),
         name="dashboard_summary",

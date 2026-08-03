@@ -24,9 +24,11 @@ from core.models import (
     Subscription,
     SubscriptionPayment,
     Tenant,
+    TenantFeatureOverride,
+    TenantImpersonationSession,
     TenantSettings,
 )
-from core.permissions import IsPlatformStaff, require_platform_role
+from core.permissions import CanImpersonate, IsPlatformStaff, require_platform_role
 from core.serializers import (
     PlanFeatureSerializer,
     PlanSerializer,
@@ -35,6 +37,7 @@ from core.serializers import (
     PlatformStaffTokenObtainSerializer,
     SubscriptionPaymentSerializer,
     SubscriptionSerializer,
+    TenantFeatureOverrideSerializer,
     TenantRegisterSerializer,
     TenantSerializer,
     TenantSettingsSerializer,
@@ -44,6 +47,8 @@ from core.services import (
     PlatformAuditLogService,
     PlatformDashboardService,
     SubscriptionPaymentService,
+    TenantFeatureOverrideService,
+    TenantImpersonationService,
     TenantLifecycleService,
 )
 
@@ -214,6 +219,119 @@ class TenantCancelView(APIView):
                 + timedelta(days=DATA_RETENTION_GRACE_DAYS),
             }
         )
+
+
+class TenantImpersonationStartView(APIView):
+    """POST -> inicia una sesion de soporte tecnico (Especificacion de API
+    §4.24). Solo SUPER_ADMIN/SUPPORT."""
+
+    permission_classes = [IsAuthenticated, CanImpersonate]
+
+    def post(self, request, pk):
+        tenant = get_object_or_404(Tenant, pk=pk)
+        reason = request.data.get("reason", "")
+        result = TenantImpersonationService.start_impersonation(
+            request.user, tenant, reason
+        )
+        return Response(result, status=status.HTTP_201_CREATED)
+
+
+class TenantImpersonationEndView(APIView):
+    """DELETE -> termina una sesion de soporte antes de que expire sola
+    (Especificacion de API §4.24). Solo SUPER_ADMIN/SUPPORT -llamado desde
+    el panel core. El botón "Salir" del banner en el ERP del tenant usa
+    ImpersonationSelfEndView en su lugar, porque ese contexto esta
+    autenticado con el token de tenant.users, no con el de platform_staff."""
+
+    permission_classes = [IsAuthenticated, CanImpersonate]
+
+    def delete(self, request, pk, session_id):
+        session = get_object_or_404(
+            TenantImpersonationSession,
+            id=session_id,
+            tenant_id=pk,
+            ended_at__isnull=True,
+        )
+        TenantImpersonationService.end_session(session)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ImpersonationSelfEndView(APIView):
+    """POST -> el propio usuario impersonado termina la sesion desde el
+    banner del ERP ("Salir"). Se identifica la sesion por el claim
+    impersonation_session_id del token que autentico este request -no por
+    parametro, para que nadie pueda terminar la sesion de otro tenant."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        session_id = (
+            request.auth.get("impersonation_session_id") if request.auth else None
+        )
+        if session_id is None:
+            raise ValidationError("Esta sesion no es una sesion de soporte activa.")
+        session = get_object_or_404(
+            TenantImpersonationSession, id=session_id, ended_at__isnull=True
+        )
+        TenantImpersonationService.end_session(session)
+        return Response(status=status.HTTP_205_RESET_CONTENT)
+
+
+class TenantFeatureOverrideListView(APIView):
+    """GET -> caracteristicas con override individual para este tenant
+    (Especificacion de API §4.25). Cualquier platform_staff puede leer; solo
+    SUPER_ADMIN puede escribir (ver TenantFeatureOverrideView)."""
+
+    permission_classes = [IsAuthenticated, IsPlatformStaff]
+
+    def get(self, request, pk):
+        tenant = get_object_or_404(Tenant, pk=pk)
+        overrides = TenantFeatureOverride.objects.filter(tenant=tenant)
+        return Response(TenantFeatureOverrideSerializer(overrides, many=True).data)
+
+
+class TenantFeatureOverrideView(APIView):
+    """PATCH/DELETE -> activa, desactiva o retira el override de UNA
+    caracteristica para ESTE tenant (Especificacion de API §4.25). Solo
+    SUPER_ADMIN."""
+
+    permission_classes = [IsAuthenticated, require_platform_role("SUPER_ADMIN")]
+
+    def patch(self, request, pk, feature_code):
+        tenant = get_object_or_404(Tenant, pk=pk)
+        is_enabled = request.data.get("is_enabled")
+        if not isinstance(is_enabled, bool):
+            raise ValidationError({"is_enabled": "Este campo es requerido (booleano)."})
+
+        override = TenantFeatureOverrideService.set_override(
+            tenant, feature_code, is_enabled
+        )
+        PlatformAuditLogService.log_action(
+            staff=request.user,
+            action="TENANT_FEATURE_OVERRIDE_SET",
+            entity="Tenant",
+            entity_id=tenant.id,
+            details={"feature_code": feature_code, "is_enabled": is_enabled},
+        )
+        return Response(
+            {
+                "tenant_id": tenant.id,
+                "feature_code": override.feature_code,
+                "is_enabled": override.is_enabled,
+            }
+        )
+
+    def delete(self, request, pk, feature_code):
+        tenant = get_object_or_404(Tenant, pk=pk)
+        TenantFeatureOverrideService.remove_override(tenant, feature_code)
+        PlatformAuditLogService.log_action(
+            staff=request.user,
+            action="TENANT_FEATURE_OVERRIDE_REMOVED",
+            entity="Tenant",
+            entity_id=tenant.id,
+            details={"feature_code": feature_code},
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class TenantViewSet(

@@ -14,6 +14,7 @@ from core.models import (
     Subscription,
     SubscriptionPayment,
     Tenant,
+    TenantFeatureOverride,
     TenantSettings,
 )
 from core.services import TenantRegistrationService
@@ -89,6 +90,8 @@ class TenantSerializer(serializers.ModelSerializer):
     endpoint de accion propio (Especificacion de API §4.9), fuera del
     alcance de este CRUD (Sprint 1, tarea 5)."""
 
+    domain = serializers.SerializerMethodField()
+
     class Meta:
         model = Tenant
         fields = [
@@ -102,6 +105,7 @@ class TenantSerializer(serializers.ModelSerializer):
             "canceled_at",
             "provisioning_status",
             "created_on",
+            "domain",
         ]
         read_only_fields = [
             "status",
@@ -109,7 +113,15 @@ class TenantSerializer(serializers.ModelSerializer):
             "canceled_at",
             "provisioning_status",
             "created_on",
+            "domain",
         ]
+
+    def get_domain(self, tenant: Tenant) -> str | None:
+        # Sprint 10: el panel core necesita el dominio del tenant para
+        # redirigir el navegador a su subdominio al iniciar una sesion de
+        # soporte (impersonacion) -no existia ningun campo expuesto con esto.
+        domain = tenant.domains.filter(is_primary=True).first()
+        return domain.domain if domain else None
 
 
 class PlanSerializer(serializers.ModelSerializer):
@@ -182,6 +194,13 @@ class TenantSettingsSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["updated_at"]
+
+
+class TenantFeatureOverrideSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TenantFeatureOverride
+        fields = ["id", "tenant", "feature_code", "is_enabled"]
+        read_only_fields = ["tenant", "feature_code"]
 
 
 class PlatformStaffCRUDSerializer(serializers.ModelSerializer):

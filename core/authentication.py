@@ -1,6 +1,7 @@
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import AuthenticationFailed
 
+from core.impersonation_context import set_impersonating_staff
 from core.models import PlatformStaff
 
 
@@ -39,7 +40,37 @@ class TenantValidatedJWTAuthentication(JWTAuthentication):
             raise AuthenticationFailed(
                 "El token no corresponde a este tenant", code="tenant_mismatch"
             )
+
+        self._validate_impersonation_claim(validated_token)
         return self.get_user(validated_token), validated_token
+
+    def _validate_impersonation_claim(self, validated_token):
+        """Sprint 10: un token de impersonacion lleva impersonation_session_id
+        ademas de impersonated_by_staff_id. Se resetea el contexto siempre
+        (no solo cuando hay impersonacion) para que AuditLogService.log_action
+        nunca marque una accion normal como "de soporte" por un valor viejo
+        de un request anterior en el mismo worker."""
+        session_id = validated_token.get("impersonation_session_id")
+        if session_id is None:
+            set_impersonating_staff(None)
+            return
+
+        from django.utils import timezone
+
+        from core.models import TenantImpersonationSession
+
+        session = TenantImpersonationSession.objects.filter(id=session_id).first()
+        if (
+            session is None
+            or session.ended_at is not None
+            or session.expires_at < timezone.now()
+        ):
+            set_impersonating_staff(None)
+            raise AuthenticationFailed(
+                "La sesion de soporte ya termino.", code="impersonation_session_ended"
+            )
+
+        set_impersonating_staff(validated_token.get("impersonated_by_staff_id"))
 
     def get_user(self, validated_token):
         from usuarios.models import User as TenantUser
