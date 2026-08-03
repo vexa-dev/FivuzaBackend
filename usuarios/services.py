@@ -3,7 +3,7 @@ from datetime import timedelta
 
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 
 from usuarios.models import (
@@ -31,7 +31,14 @@ class PermissionService:
 
     @staticmethod
     def _cache_key(user_id: int) -> str:
-        return f"{_PERMISSION_CACHE_PREFIX}:{user_id}"
+        # usuarios.User.id NO es globalmente unico -cada esquema de tenant
+        # tiene su propia secuencia autoincremental, asi que el usuario #1
+        # existe en practicamente todos los tenants. Sin el schema_name en
+        # la key, el cache de permisos de un tenant se filtraba al usuario
+        # con el mismo id de OTRO tenant (encontrado via las pruebas de
+        # impersonacion del Sprint 10, que crean muchos tenants nuevos -cada
+        # uno con su propio usuario #1- en la misma corrida).
+        return f"{_PERMISSION_CACHE_PREFIX}:{connection.schema_name}:{user_id}"
 
     @staticmethod
     def _resolve_codes(user) -> set[str]:
@@ -132,6 +139,19 @@ class AuditLogService:
     ) -> AuditLog:
         if isinstance(details, dict):
             details = json.dumps(details, default=str)
+
+        # Sprint 10 (Especificacion de API §4.24): si esta accion ocurrio
+        # bajo una sesion de impersonacion, se marca explicitamente aqui -sin
+        # que cada call site (repartido en las 4 apps de negocio) tenga que
+        # saber nada de impersonacion. TenantValidatedJWTAuthentication fija
+        # este contexto por request.
+        from core.impersonation_context import get_impersonating_staff
+
+        staff_id = get_impersonating_staff()
+        if staff_id is not None:
+            marker = f"[accion de soporte Fivuza, platform_staff #{staff_id}] "
+            details = marker + (details or "")
+
         return AuditLog.objects.create(
             user=user,
             action=action,

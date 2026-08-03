@@ -142,6 +142,33 @@ def RequiresFeature(feature_code: str):
     return _RequiresFeature
 
 
+class ImpersonationNotPermittedError(APIException):
+    """403 con el formato exacto de la Especificacion de API §4.24 -distinto
+    del 403 generico de DRF (que responde {"detail": "..."})."""
+
+    status_code = 403
+    default_code = "PERMISSION_DENIED"
+    default_detail = {
+        "error": {
+            "code": "PERMISSION_DENIED",
+            "message": "Tu rol no tiene permiso para iniciar una sesion de soporte.",
+        }
+    }
+
+
+class CanImpersonate(BasePermission):
+    """Solo SUPER_ADMIN y SUPPORT pueden impersonar -BILLING no tiene motivo
+    operativo para entrar al sistema de un tenant (Especificacion de API
+    §4.24; Ficha de Producto §6)."""
+
+    def has_permission(self, request, view):
+        if not isinstance(request.user, PlatformStaff):
+            return False
+        if request.user.role not in ("SUPER_ADMIN", "SUPPORT"):
+            raise ImpersonationNotPermittedError()
+        return True
+
+
 def require_platform_role(*roles):
     """Factory de permiso: exige ademas que PlatformStaff.role este en roles
     (Especificacion de API §2.5, ej. "Solo platform_staff (SUPER_ADMIN)").
