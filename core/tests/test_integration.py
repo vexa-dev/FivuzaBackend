@@ -77,6 +77,46 @@ class TenantProvisioningServiceTests(TestCase):
         # guarda el tenant: alcanza con el schema_name para probar el guard.
         TenantProvisioningService.seed_default_roles(public_tenant)
 
+    def test_creating_a_tenant_seeds_default_warehouse_and_cash_register(self):
+        from django_tenants.utils import schema_context
+
+        from inventario.models import Warehouse
+        from ventas.models import CashRegister
+
+        tenant = Tenant.objects.create(
+            schema_name="test_provisioning_cash", company_name="Negocio de Prueba 4"
+        )
+
+        with schema_context(tenant.schema_name):
+            warehouse = Warehouse.objects.get(name="Principal")
+            register = CashRegister.objects.get(name="Caja Principal")
+            self.assertEqual(register.warehouse, warehouse)
+
+    def test_seeding_default_resources_is_idempotent(self):
+        from django_tenants.utils import schema_context
+
+        from core.services import TenantProvisioningService
+        from inventario.models import Warehouse
+        from ventas.models import CashRegister
+
+        tenant = Tenant.objects.create(
+            schema_name="test_provisioning_cash_2", company_name="Negocio de Prueba 5"
+        )
+
+        TenantProvisioningService.seed_default_resources(tenant)
+
+        with schema_context(tenant.schema_name):
+            self.assertEqual(Warehouse.objects.filter(name="Principal").count(), 1)
+            self.assertEqual(
+                CashRegister.objects.filter(name="Caja Principal").count(), 1
+            )
+
+    def test_seeding_default_resources_is_never_attempted_on_public_schema(self):
+        from core.services import TenantProvisioningService
+
+        public_tenant = Tenant(schema_name="public", company_name="Servicio Publico")
+        TenantProvisioningService.seed_default_resources(public_tenant)
+
 
 class TenantValidatedJWTAuthenticationTests(TenantTestCase):
     """Prueba la clase de autenticacion directamente, construyendo el token a
