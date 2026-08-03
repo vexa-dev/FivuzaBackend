@@ -61,6 +61,14 @@ if SENTRY_DSN:
         send_default_pii=False,
     )
 
+# Distinto del DSN de arriba (que es para ENVIAR eventos): esto es para
+# LEER eventos vía la API REST de Sentry, usado por el panel de salud por
+# tenant (Especificacion de API §4.26). Si no esta configurado,
+# TenantHealthService degrada con recent_errors_count=0 en vez de fallar.
+SENTRY_API_TOKEN = os.getenv("SENTRY_API_TOKEN", "")
+SENTRY_ORG_SLUG = os.getenv("SENTRY_ORG_SLUG", "")
+SENTRY_PROJECT_SLUG = os.getenv("SENTRY_PROJECT_SLUG", "")
+
 
 # Application definition
 
@@ -97,6 +105,9 @@ TENANT_DOMAIN_MODEL = "core.Domain"
 
 MIDDLEWARE = [
     "django_tenants.middleware.main.TenantMainMiddleware",
+    # Sprint 11 (Especificacion de API §4.26): despues de TenantMainMiddleware
+    # a proposito -necesita request.tenant ya resuelto.
+    "core.middleware.SentryTenantTagMiddleware",
     "corsheaders.middleware.CorsMiddleware",  # antes de CommonMiddleware (requisito de django-cors-headers)
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",

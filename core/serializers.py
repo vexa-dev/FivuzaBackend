@@ -12,9 +12,11 @@ from core.models import (
     Plan,
     PlanFeature,
     Subscription,
+    SubscriptionDiscount,
     SubscriptionPayment,
     Tenant,
     TenantFeatureOverride,
+    TenantNote,
     TenantSettings,
 )
 from core.services import TenantRegistrationService
@@ -201,6 +203,41 @@ class TenantFeatureOverrideSerializer(serializers.ModelSerializer):
         model = TenantFeatureOverride
         fields = ["id", "tenant", "feature_code", "is_enabled"]
         read_only_fields = ["tenant", "feature_code"]
+
+
+class TenantNoteSerializer(serializers.ModelSerializer):
+    """Solo lectura -se crea via TenantNoteService.add_note() en la vista,
+    nunca aceptando tenant/platform_staff del payload del cliente."""
+
+    platform_staff = serializers.SerializerMethodField()
+
+    class Meta:
+        model = TenantNote
+        fields = ["id", "tenant", "platform_staff", "text", "created_at"]
+        read_only_fields = fields
+
+    def get_platform_staff(self, note: TenantNote) -> dict:
+        return {
+            "id": note.platform_staff_id,
+            "full_name": note.platform_staff.full_name,
+        }
+
+
+class SubscriptionDiscountSerializer(serializers.ModelSerializer):
+    subscription_id = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = SubscriptionDiscount
+        fields = [
+            "id",
+            "subscription_id",
+            "discount_percent",
+            "override_price",
+            "reason",
+            "expires_at",
+            "created_at",
+        ]
+        read_only_fields = fields
 
 
 class PlatformStaffCRUDSerializer(serializers.ModelSerializer):
