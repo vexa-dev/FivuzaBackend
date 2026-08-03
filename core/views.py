@@ -22,6 +22,7 @@ from core.models import (
     Plan,
     PlanFeature,
     Subscription,
+    SubscriptionDiscount,
     SubscriptionPayment,
     Tenant,
     TenantFeatureOverride,
@@ -35,9 +36,11 @@ from core.serializers import (
     PlatformAuditLogSerializer,
     PlatformStaffCRUDSerializer,
     PlatformStaffTokenObtainSerializer,
+    SubscriptionDiscountSerializer,
     SubscriptionPaymentSerializer,
     SubscriptionSerializer,
     TenantFeatureOverrideSerializer,
+    TenantNoteSerializer,
     TenantRegisterSerializer,
     TenantSerializer,
     TenantSettingsSerializer,
@@ -46,10 +49,15 @@ from core.services import (
     DATA_RETENTION_GRACE_DAYS,
     PlatformAuditLogService,
     PlatformDashboardService,
+    SubscriptionDiscountService,
     SubscriptionPaymentService,
+    TenantConsumptionService,
     TenantFeatureOverrideService,
+    TenantHealthService,
     TenantImpersonationService,
     TenantLifecycleService,
+    TenantNoteService,
+    TenantOnboardingService,
 )
 
 
@@ -332,6 +340,128 @@ class TenantFeatureOverrideView(APIView):
             details={"feature_code": feature_code},
         )
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class TenantNoteListCreateView(APIView):
+    """GET/POST -> notas internas del equipo sobre un tenant (Especificacion
+    de API §4.25). Nunca visibles para el propio negocio -viven enteramente
+    en core, ningun endpoint de las 4 apps de negocio las expone. Cualquier
+    platform_staff puede leer y escribir."""
+
+    permission_classes = [IsAuthenticated, IsPlatformStaff]
+
+    def get(self, request, pk):
+        tenant = get_object_or_404(Tenant, pk=pk)
+        notes = tenant.notes.select_related("platform_staff")
+        return Response(TenantNoteSerializer(notes, many=True).data)
+
+    def post(self, request, pk):
+        tenant = get_object_or_404(Tenant, pk=pk)
+        text = request.data.get("text", "").strip()
+        if not text:
+            raise ValidationError({"text": "Este campo es requerido."})
+        note = TenantNoteService.add_note(tenant, request.user, text)
+        return Response(TenantNoteSerializer(note).data, status=status.HTTP_201_CREATED)
+
+
+class SubscriptionDiscountListCreateView(APIView):
+    """GET/POST -> descuento de suscripcion negociado con un tenant puntual
+    (Especificacion de API §4.25). Solo SUPER_ADMIN/BILLING."""
+
+    permission_classes = [
+        IsAuthenticated,
+        require_platform_role("SUPER_ADMIN", "BILLING"),
+    ]
+
+    def get(self, request):
+        queryset = SubscriptionDiscount.objects.all()
+        subscription_id = request.query_params.get("subscription")
+        if subscription_id:
+            queryset = queryset.filter(subscription_id=subscription_id)
+        return Response(SubscriptionDiscountSerializer(queryset, many=True).data)
+
+    def post(self, request):
+        subscription = get_object_or_404(
+            Subscription, pk=request.data.get("subscription_id")
+        )
+        discount = SubscriptionDiscountService.create_discount(
+            subscription=subscription,
+            discount_percent=request.data.get("discount_percent"),
+            override_price=request.data.get("override_price"),
+            reason=request.data.get("reason", ""),
+            expires_at=request.data.get("expires_at"),
+        )
+        PlatformAuditLogService.log_action(
+            staff=request.user,
+            action="SUBSCRIPTION_DISCOUNT_CREATED",
+            entity="Subscription",
+            entity_id=subscription.id,
+            details={
+                "discount_percent": request.data.get("discount_percent"),
+                "override_price": request.data.get("override_price"),
+                "reason": request.data.get("reason", ""),
+            },
+        )
+        return Response(
+            SubscriptionDiscountSerializer(discount).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class SubscriptionDiscountDetailView(APIView):
+    """DELETE -> quita un descuento de suscripcion (Especificacion de API
+    §4.25, seccion Frontend: "aplicar/quitar un descuento"). Solo
+    SUPER_ADMIN/BILLING."""
+
+    permission_classes = [
+        IsAuthenticated,
+        require_platform_role("SUPER_ADMIN", "BILLING"),
+    ]
+
+    def delete(self, request, pk):
+        discount = get_object_or_404(SubscriptionDiscount, pk=pk)
+        subscription_id = discount.subscription_id
+        SubscriptionDiscountService.remove_discount(discount)
+        PlatformAuditLogService.log_action(
+            staff=request.user,
+            action="SUBSCRIPTION_DISCOUNT_REMOVED",
+            entity="Subscription",
+            entity_id=subscription_id,
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class TenantOnboardingView(APIView):
+    """GET -> checklist de onboarding computado (Especificacion de API
+    §4.26). Solo lectura, cualquier platform_staff."""
+
+    permission_classes = [IsAuthenticated, IsPlatformStaff]
+
+    def get(self, request, pk):
+        tenant = get_object_or_404(Tenant, pk=pk)
+        return Response(TenantOnboardingService.get_checklist(tenant))
+
+
+class TenantHealthView(APIView):
+    """GET -> panel de salud tecnica por tenant (Especificacion de API
+    §4.26). Solo lectura, cualquier platform_staff."""
+
+    permission_classes = [IsAuthenticated, IsPlatformStaff]
+
+    def get(self, request, pk):
+        tenant = get_object_or_404(Tenant, pk=pk)
+        return Response(TenantHealthService.get_health(tenant))
+
+
+class TenantConsumptionView(APIView):
+    """GET -> reporte de consumo por tenant (Especificacion de API §4.26).
+    Solo lectura, cualquier platform_staff."""
+
+    permission_classes = [IsAuthenticated, IsPlatformStaff]
+
+    def get(self, request, pk):
+        tenant = get_object_or_404(Tenant, pk=pk)
+        return Response(TenantConsumptionService.get_report(tenant))
 
 
 class TenantViewSet(

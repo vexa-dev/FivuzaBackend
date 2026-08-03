@@ -102,6 +102,36 @@ urlpatterns = [
         views.DashboardSummaryView.as_view(),
         name="dashboard_summary",
     ),
+    path(
+        "core/tenants/<int:pk>/notes/",
+        views.TenantNoteListCreateView.as_view(),
+        name="tenant_notes",
+    ),
+    path(
+        "core/subscription-discounts/",
+        views.SubscriptionDiscountListCreateView.as_view(),
+        name="subscription_discounts",
+    ),
+    path(
+        "core/subscription-discounts/<int:pk>/",
+        views.SubscriptionDiscountDetailView.as_view(),
+        name="subscription_discount_detail",
+    ),
+    path(
+        "core/tenants/<int:pk>/onboarding/",
+        views.TenantOnboardingView.as_view(),
+        name="tenant_onboarding",
+    ),
+    path(
+        "core/tenants/<int:pk>/health/",
+        views.TenantHealthView.as_view(),
+        name="tenant_health",
+    ),
+    path(
+        "core/tenants/<int:pk>/consumption/",
+        views.TenantConsumptionView.as_view(),
+        name="tenant_consumption",
+    ),
 ]
 
 # El router va al final: suspend/reactivate/cancel/confirm deben resolverse

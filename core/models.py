@@ -323,3 +323,62 @@ class TenantFeatureOverride(models.Model):
                 fields=["tenant", "feature_code"], name="uq_tenant_feature_override"
             )
         ]
+
+
+class TenantNote(models.Model):
+    """Nota interna del equipo Fivuza sobre un tenant (Especificacion de API
+    §4.25) -nunca visible para el propio negocio, vive enteramente en el
+    esquema public junto al resto de la administracion de core."""
+
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="notes")
+    platform_staff = models.ForeignKey(
+        PlatformStaff, on_delete=models.PROTECT, related_name="tenant_notes"
+    )
+    text = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "tenant_notes"
+        ordering = ["-created_at"]
+
+
+class SubscriptionDiscount(models.Model):
+    """Condicion especial de precio negociada con un tenant puntual, sin
+    crear un plan nuevo solo para el (Especificacion de API §4.25). Exige
+    EXACTAMENTE uno de discount_percent/override_price -nunca ambos, nunca
+    ninguno (si no hay descuento, simplemente no se crea la fila)."""
+
+    subscription = models.ForeignKey(
+        Subscription, on_delete=models.CASCADE, related_name="discounts"
+    )
+    discount_percent = models.DecimalField(
+        max_digits=5, decimal_places=2, null=True, blank=True
+    )
+    override_price = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True
+    )
+    reason = models.TextField()
+    expires_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "subscription_discounts"
+        ordering = ["-created_at"]
+        constraints = [
+            models.CheckConstraint(
+                check=(
+                    models.Q(
+                        discount_percent__isnull=False, override_price__isnull=True
+                    )
+                    | models.Q(
+                        discount_percent__isnull=True, override_price__isnull=False
+                    )
+                ),
+                name="ck_subscription_discount_exactly_one_type",
+            )
+        ]
+
+    def is_active(self) -> bool:
+        from django.utils import timezone
+
+        return self.expires_at is None or self.expires_at > timezone.now()
