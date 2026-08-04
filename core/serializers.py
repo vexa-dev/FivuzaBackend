@@ -193,6 +193,7 @@ class TenantSettingsSerializer(serializers.ModelSerializer):
             "multi_warehouse_enabled",
             "hr_module_enabled",
             "cash_module_enabled",
+            "cash_difference_alert_threshold",
             "updated_at",
         ]
         read_only_fields = ["updated_at"]

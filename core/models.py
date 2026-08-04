@@ -205,6 +205,13 @@ class TenantSettings(models.Model):
     multi_warehouse_enabled = models.BooleanField(default=False)
     hr_module_enabled = models.BooleanField(default=False)
     cash_module_enabled = models.BooleanField(default=True)
+    # Umbral de diferencia de arqueo (valor absoluto, moneda del tenant) a
+    # partir del cual CashSessionService.close_session() dispara el aviso
+    # asincrono al administrador (TRD §5.4). No hay un valor "correcto" único
+    # documentado -se asume 20.00 como default razonable, ajustable por tenant.
+    cash_difference_alert_threshold = models.DecimalField(
+        max_digits=12, decimal_places=4, default=20
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

@@ -1,5 +1,10 @@
 # Pruebas de ViewSets/vistas: permisos, apertura/cierre de caja, arqueo.
+import os
+from unittest import mock
+
+from django.core import mail
 from django.core.cache import cache
+from django.test import override_settings
 from django_tenants.test.cases import TenantTestCase
 from rest_framework.test import APIClient
 
@@ -245,6 +250,179 @@ class CashSessionEndpointsTests(TenantTestCase):
         )
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]["amount"], "1.0000")
+
+    def test_sessions_filtered_by_user_and_date_range(self):
+        client = self._client_as(self.admin_user)
+        other_admin = User.objects.create(
+            email="admin2@negocio.com", role=self.admin_role
+        )
+        session_mine = CashSession.objects.create(
+            cash_register=self.cash_register,
+            user=self.admin_user,
+            opening_amount="0",
+            opening_at="2026-01-05T00:00:00Z",
+            status="OPEN",
+        )
+        CashSession.objects.create(
+            cash_register=self.cash_register,
+            user=other_admin,
+            opening_amount="0",
+            opening_at="2026-01-05T00:00:00Z",
+            status="CLOSED",
+        )
+        CashSession.objects.create(
+            cash_register=self.cash_register,
+            user=self.admin_user,
+            opening_amount="0",
+            opening_at="2020-01-01T00:00:00Z",
+            status="CLOSED",
+        )
+
+        response = client.get(
+            "/api/v1/ventas/cash-sessions/",
+            {
+                "user": self.admin_user.id,
+                "opening_from": "2026-01-01",
+                "opening_to": "2026-01-31",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([row["id"] for row in response.data], [session_mine.id])
+
+    def test_session_retrieve_includes_movements(self):
+        client = self._client_as(self.admin_user)
+        opened = client.post(
+            "/api/v1/ventas/cash-sessions/open/",
+            {"cash_register_id": self.cash_register.id, "opening_amount": "50.00"},
+            format="json",
+        )
+        session_id = opened.data["id"]
+        client.post(
+            "/api/v1/ventas/cash-movements/",
+            {
+                "cash_session": session_id,
+                "type": "IN",
+                "concept": "AJUSTE",
+                "amount": "10.00",
+                "reason": "Fondo extra",
+            },
+            format="json",
+        )
+
+        response = client.get(f"/api/v1/ventas/cash-sessions/{session_id}/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data["movements"]), 1)
+        self.assertEqual(response.data["movements"][0]["reason"], "Fondo extra")
+
+    def test_movement_accepts_reason_and_receipt_url(self):
+        client = self._client_as(self.admin_user)
+        opened = client.post(
+            "/api/v1/ventas/cash-sessions/open/",
+            {"cash_register_id": self.cash_register.id, "opening_amount": "50.00"},
+            format="json",
+        )
+        session_id = opened.data["id"]
+
+        response = client.post(
+            "/api/v1/ventas/cash-movements/",
+            {
+                "cash_session": session_id,
+                "type": "OUT",
+                "concept": "RETIRO",
+                "amount": "10.00",
+                "reason": "Pago de flete",
+                "receipt_url": "https://bucket.s3.amazonaws.com/cash-movement-receipts/x.jpg",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["reason"], "Pago de flete")
+        self.assertEqual(
+            response.data["receipt_url"],
+            "https://bucket.s3.amazonaws.com/cash-movement-receipts/x.jpg",
+        )
+
+    @override_settings(AWS_STORAGE_BUCKET_NAME="fivuza-test-bucket")
+    @mock.patch.dict(
+        os.environ,
+        {"AWS_ACCESS_KEY_ID": "test", "AWS_SECRET_ACCESS_KEY": "test"},
+    )
+    def test_upload_receipt_url_returns_presigned_url(self):
+        client = self._client_as(self.admin_user)
+        response = client.post(
+            "/api/v1/ventas/cash-movements/upload-receipt-url/",
+            {"content_type": "image/jpeg"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("upload_url", response.data)
+        self.assertTrue(
+            response.data["receipt_url"].startswith("https://")
+            and "cash-movement-receipts/" in response.data["receipt_url"]
+        )
+
+    def test_upload_receipt_url_rejects_unsupported_content_type(self):
+        client = self._client_as(self.admin_user)
+        response = client.post(
+            "/api/v1/ventas/cash-movements/upload-receipt-url/",
+            {"content_type": "application/zip"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_seller_cannot_request_receipt_upload_url(self):
+        client = self._client_as(self.seller_user)
+        response = client.post(
+            "/api/v1/ventas/cash-movements/upload-receipt-url/",
+            {"content_type": "image/jpeg"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_close_session_sends_alert_when_difference_exceeds_threshold(self):
+        settings_row = TenantSettings.objects.get(tenant=self.tenant)
+        settings_row.cash_difference_alert_threshold = "5.00"
+        settings_row.save(update_fields=["cash_difference_alert_threshold"])
+
+        client = self._client_as(self.admin_user)
+        opened = client.post(
+            "/api/v1/ventas/cash-sessions/open/",
+            {"cash_register_id": self.cash_register.id, "opening_amount": "50.00"},
+            format="json",
+        )
+        session_id = opened.data["id"]
+
+        mail.outbox.clear()
+        response = client.post(
+            f"/api/v1/ventas/cash-sessions/{session_id}/close/",
+            {"counted_closing_amount": "20.00"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn(self.admin_user.email, mail.outbox[0].to)
+
+    def test_close_session_no_alert_when_difference_within_threshold(self):
+        settings_row = TenantSettings.objects.get(tenant=self.tenant)
+        settings_row.cash_difference_alert_threshold = "5.00"
+        settings_row.save(update_fields=["cash_difference_alert_threshold"])
+
+        client = self._client_as(self.admin_user)
+        opened = client.post(
+            "/api/v1/ventas/cash-sessions/open/",
+            {"cash_register_id": self.cash_register.id, "opening_amount": "50.00"},
+            format="json",
+        )
+        session_id = opened.data["id"]
+
+        mail.outbox.clear()
+        response = client.post(
+            f"/api/v1/ventas/cash-sessions/{session_id}/close/",
+            {"counted_closing_amount": "50.00"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(mail.outbox), 0)
 
     def test_cash_module_disabled_blocks_access(self):
         from core.models import TenantSettings

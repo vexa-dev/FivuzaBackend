@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Diferencia de arqueo detectada</title>
+  </head>
+  <body style="font-family: -apple-system, 'Segoe UI', sans-serif; background: #E9EEF3; padding: 32px 0; margin: 0;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="background: #FFFFFF; border-radius: 12px; padding: 32px;">
+            <tr>
+              <td>
+                <h1 style="font-size: 20px; color: #0E202B; margin: 0 0 16px;">FIVUZA</h1>
+                <p style="font-size: 14px; color: #3C4F5D; line-height: 1.6; margin: 0 0 20px;">
+                  El cierre de la sesión de caja #{{ session_id }} en <strong>{{ cash_register_name }}</strong> registró una diferencia de arqueo que supera el umbral configurado.
+                </p>
+                <p style="font-size: 14px; color: #3C4F5D; line-height: 1.8; margin: 0 0 20px;">
+                  Esperado: {{ expected_closing_amount }}<br />
+                  Contado: {{ counted_closing_amount }}<br />
+                  Diferencia: <strong>{{ difference }}</strong>
+                </p>
+                <p style="font-size: 12px; color: #7C8D95; line-height: 1.5; margin: 0;">
+                  Revisa el historial de sesiones de caja para ver el detalle completo de los movimientos.
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

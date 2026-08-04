@@ -1,7 +1,7 @@
 from rest_framework import serializers
 
 from ventas.models import CashMovement, CashRegister, CashSession
-from ventas.services import CashSessionService
+from ventas.services import CashMovementReceiptService, CashSessionService
 
 
 class CashRegisterSerializer(serializers.ModelSerializer):
@@ -50,6 +50,8 @@ class CashMovementSerializer(serializers.ModelSerializer):
             "type",
             "concept",
             "amount",
+            "reason",
+            "receipt_url",
             "user",
             "created_at",
         ]
@@ -62,7 +64,36 @@ class CashMovementSerializer(serializers.ModelSerializer):
             concept=validated_data["concept"],
             amount=validated_data["amount"],
             user=self.context["request"].user,
+            reason=validated_data.get("reason", ""),
+            receipt_url=validated_data.get("receipt_url"),
         )
+
+
+class CashSessionDetailSerializer(CashSessionSerializer):
+    """Retrieve de una sesion incluye sus movimientos anidados -"detalle de
+    una sesion cerrada con todos sus movimientos" (Especificacion de API
+    §2.3), sin requerir una segunda llamada a /cash-movements/?cash_session=."""
+
+    movements = CashMovementSerializer(many=True, read_only=True)
+
+    class Meta(CashSessionSerializer.Meta):
+        fields = CashSessionSerializer.Meta.fields + ["movements"]
+
+
+class CashMovementReceiptUploadURLSerializer(serializers.Serializer):
+    """No es un ModelSerializer: un CashMovement todavia no existe cuando se
+    pide la URL prefirmada -mismo motivo por el que la key de S3 no depende
+    de un pk existente (ver ventas.services.CashMovementReceiptService)."""
+
+    content_type = serializers.CharField()
+
+    def create(self, validated_data):
+        try:
+            return CashMovementReceiptService.build_receipt_upload_url(
+                validated_data["content_type"]
+            )
+        except ValueError as exc:
+            raise serializers.ValidationError({"content_type": str(exc)}) from exc
 
 
 class CashSessionOpenSerializer(serializers.Serializer):
@@ -96,5 +127,6 @@ class CashSessionCloseSerializer(serializers.Serializer):
             session=self.context["session"],
             counted_closing_amount=validated_data["counted_closing_amount"],
             user=self.context["request"].user,
+            tenant=self.context["request"].tenant,
             notes=validated_data.get("notes"),
         )
