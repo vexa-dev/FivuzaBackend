@@ -153,6 +153,7 @@ class TenantProvisioningService:
         ("INVENTORY_MANAGE", "INVENTORY"),
         ("PURCHASES_MANAGE", "PURCHASES"),
         ("CASH_MANAGE", "CASH"),
+        ("SALES_MANAGE", "SALES"),
     ]
     _ROLE_PERMISSIONS = {
         "admin": [
@@ -164,6 +165,7 @@ class TenantProvisioningService:
             "INVENTORY_MANAGE",
             "PURCHASES_MANAGE",
             "CASH_MANAGE",
+            "SALES_MANAGE",
         ],
         "manager": [
             "USERS_MANAGE",
@@ -173,15 +175,18 @@ class TenantProvisioningService:
             "INVENTORY_MANAGE",
             "PURCHASES_MANAGE",
             "CASH_MANAGE",
+            "SALES_MANAGE",
         ],
-        # "seller" no recibe CASH_MANAGE todavia a proposito: quien
-        # opera la caja del dia a dia (tipicamente el propio cajero/seller
-        # en un POS real) es una decision de negocio que no esta definida
-        # en el Plan de Implementacion para este sprint -el modulo de Ventas/
-        # POS (que es quien realmente necesitaria que un seller abra su
-        # propia caja) todavia no existe. Se deja para cuando ese sprint
-        # aterrice, en vez de adivinar ahora.
-        "seller": ["INVENTORY_VIEW"],
+        # "seller" no recibe CASH_MANAGE todavia a proposito (ver nota
+        # historica de Sprint 12), pero SI recibe SALES_MANAGE desde este
+        # sprint: registrar/editar un cliente o buscarlo durante una venta es
+        # el caso de uso central de un vendedor en un POS real -a diferencia
+        # de abrir su propia caja, que sigue siendo una decision de negocio
+        # pendiente. Las promociones (mismo permiso, sin split fino todavia)
+        # tambien quedan editables por un seller; si el negocio quiere
+        # restringir eso a admin/manager solamente, se puede separar en un
+        # codigo propio (ej. PROMOTIONS_MANAGE) en un sprint futuro.
+        "seller": ["INVENTORY_VIEW", "SALES_MANAGE"],
     }
 
     @staticmethod

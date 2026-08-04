@@ -11,7 +11,7 @@ from rest_framework.test import APIClient
 from core.models import TenantSettings
 from inventario.models import Warehouse
 from usuarios.models import Role, User
-from ventas.models import CashMovement, CashRegister, CashSession
+from ventas.models import CashMovement, CashRegister, CashSession, Customer, Promotion
 
 
 class CashSessionEndpointsTests(TenantTestCase):
@@ -439,3 +439,174 @@ class CashSessionEndpointsTests(TenantTestCase):
         finally:
             settings.cash_module_enabled = True
             settings.save(update_fields=["cash_module_enabled"])
+
+
+class SalesCatalogEndpointsTests(TenantTestCase):
+    """Clientes y promociones (Sprint 14): CRUD, busqueda y permisos."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_ventas_catalogo"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-ventas-catalogo.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.password = "ClaveSegura123"
+        cls.admin_role = Role.objects.get(name="admin")
+        cls.seller_role = Role.objects.get(name="seller")
+        cls.no_sales_role = Role.objects.create(name="auditor")
+
+        cls.admin_user = User.objects.create(
+            email="admin@negocio.com", role=cls.admin_role
+        )
+        cls.admin_user.set_password(cls.password)
+        cls.admin_user.save()
+
+        cls.seller_user = User.objects.create(
+            email="vendedor@negocio.com", role=cls.seller_role
+        )
+        cls.seller_user.set_password(cls.password)
+        cls.seller_user.save()
+
+        cls.auditor_user = User.objects.create(
+            email="auditor@negocio.com", role=cls.no_sales_role
+        )
+        cls.auditor_user.set_password(cls.password)
+        cls.auditor_user.save()
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    def setUp(self):
+        cache.clear()
+
+    def _client_as(self, user):
+        client = APIClient(HTTP_HOST=self.domain.domain)
+        login = client.post(
+            "/api/v1/auth/login/",
+            {"email": user.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def test_seller_can_create_and_search_customer(self):
+        client = self._client_as(self.seller_user)
+        response = client.post(
+            "/api/v1/ventas/customers/",
+            {
+                "document_type": "DNI",
+                "document_number": "12345678",
+                "name": "Juan Perez",
+                "phone": "987654321",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+
+        by_document = client.get("/api/v1/ventas/customers/?search=12345678")
+        self.assertEqual(len(by_document.data), 1)
+
+        by_name = client.get("/api/v1/ventas/customers/?search=Perez")
+        self.assertEqual(len(by_name.data), 1)
+
+        by_phone = client.get("/api/v1/ventas/customers/?search=987654")
+        self.assertEqual(len(by_phone.data), 1)
+
+        no_match = client.get("/api/v1/ventas/customers/?search=nadie")
+        self.assertEqual(len(no_match.data), 0)
+
+    def test_auditor_without_sales_manage_cannot_create_customer(self):
+        client = self._client_as(self.auditor_user)
+        response = client.post(
+            "/api/v1/ventas/customers/",
+            {
+                "document_type": "DNI",
+                "document_number": "87654321",
+                "name": "Sin Permiso",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_auditor_can_still_read_customers(self):
+        Customer.objects.create(
+            document_type="DNI", document_number="11111111", name="Lectura Libre"
+        )
+        client = self._client_as(self.auditor_user)
+        response = client.get("/api/v1/ventas/customers/")
+        self.assertEqual(response.status_code, 200)
+
+    def test_deleted_customer_excluded_from_list(self):
+        client = self._client_as(self.admin_user)
+        created = client.post(
+            "/api/v1/ventas/customers/",
+            {
+                "document_type": "DNI",
+                "document_number": "22222222",
+                "name": "Cliente Borrado",
+            },
+            format="json",
+        )
+        customer_id = created.data["id"]
+
+        delete_response = client.delete(f"/api/v1/ventas/customers/{customer_id}/")
+        self.assertEqual(delete_response.status_code, 204)
+
+        list_response = client.get("/api/v1/ventas/customers/")
+        self.assertNotIn(customer_id, [row["id"] for row in list_response.data])
+
+    def test_promotion_crud_with_targets(self):
+        client = self._client_as(self.admin_user)
+        created = client.post(
+            "/api/v1/ventas/promotions/",
+            {
+                "name": "Descuento verano",
+                "type": "PERCENTAGE",
+                "value": "15.00",
+                "start_date": "2026-01-01T00:00:00Z",
+                "end_date": "2026-12-31T23:59:59Z",
+            },
+            format="json",
+        )
+        self.assertEqual(created.status_code, 201)
+        promotion_id = created.data["id"]
+
+        detail = client.get(f"/api/v1/ventas/promotions/{promotion_id}/")
+        self.assertEqual(detail.data["targets"], [])
+
+    def test_promotion_product_requires_exactly_one_target(self):
+        client = self._client_as(self.admin_user)
+        promotion = Promotion.objects.create(
+            name="Promo",
+            type="FIXED_AMOUNT",
+            value="5.00",
+            start_date="2026-01-01T00:00:00Z",
+            end_date="2026-12-31T23:59:59Z",
+        )
+        response = client.post(
+            "/api/v1/ventas/promotion-products/",
+            {"promotion": promotion.id},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_seller_cannot_manage_promotion_products_without_write_access(self):
+        client = self._client_as(self.auditor_user)
+        promotion = Promotion.objects.create(
+            name="Promo",
+            type="FIXED_AMOUNT",
+            value="5.00",
+            start_date="2026-01-01T00:00:00Z",
+            end_date="2026-12-31T23:59:59Z",
+        )
+        response = client.get(
+            f"/api/v1/ventas/promotion-products/?promotion={promotion.id}"
+        )
+        self.assertEqual(response.status_code, 403)
