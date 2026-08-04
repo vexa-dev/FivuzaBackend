@@ -6,7 +6,7 @@ from django.db.models import Sum
 from django.utils import timezone
 from rest_framework.exceptions import APIException
 
-from ventas.models import CashMovement, CashRegister, CashSession
+from ventas.models import CashMovement, CashRegister, CashSession, Promotion
 
 # Comprobantes de movimientos de caja: mismo patron de URL prefirmada de S3
 # que inventario.services.MediaService, pero self-contenido aqui -un
@@ -210,3 +210,34 @@ class CashMovementReceiptService:
             f"{settings.AWS_S3_REGION}.amazonaws.com/{key}"
         )
         return {"upload_url": upload_url, "receipt_url": receipt_url}
+
+
+class PromotionService:
+    """Resuelve la promocion vigente aplicable a una variante en una fecha
+    dada (Esquema Backend §6.2). El POS (Sprint 15+) la usara para calcular
+    el descuento de cada linea del carrito al vuelo.
+
+    Reglas de prioridad (sin una cifra "oficial" documentada, se asume lo
+    siguiente como razonable y determinista):
+    1. Una promocion dirigida a la variante especifica gana sobre una que
+       solo apunta a su categoria -mas especifico gana.
+    2. Si hay mas de una promocion vigente al mismo nivel de especificidad,
+       gana la mas reciente (id mas alto). No se comparan los `value` entre
+       si porque PERCENTAGE y FIXED_AMOUNT no son magnitudes comparables."""
+
+    @staticmethod
+    def resolve_active_promotion(*, variant, at=None) -> Promotion | None:
+        at = at or timezone.now()
+        active = Promotion.objects.filter(
+            is_active=True, start_date__lte=at, end_date__gte=at
+        )
+
+        direct = active.filter(targets__variant=variant).order_by("-id").first()
+        if direct is not None:
+            return direct
+
+        return (
+            active.filter(targets__category=variant.product.category)
+            .order_by("-id")
+            .first()
+        )

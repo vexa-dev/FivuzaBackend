@@ -1,4 +1,6 @@
+from django.db import models
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -7,7 +9,14 @@ from rest_framework.views import APIView
 
 from core.permissions import RequiresFeature, TenantNotCanceled, TenantNotSuspended
 from usuarios.permissions import HasModulePermission
-from ventas.models import CashMovement, CashRegister, CashSession
+from ventas.models import (
+    CashMovement,
+    CashRegister,
+    CashSession,
+    Customer,
+    Promotion,
+    PromotionProduct,
+)
 from ventas.serializers import (
     CashMovementReceiptUploadURLSerializer,
     CashMovementSerializer,
@@ -16,6 +25,9 @@ from ventas.serializers import (
     CashSessionDetailSerializer,
     CashSessionOpenSerializer,
     CashSessionSerializer,
+    CustomerSerializer,
+    PromotionProductSerializer,
+    PromotionSerializer,
 )
 
 # Lectura: cualquier tenant.users autenticado con el modulo de caja activo
@@ -33,6 +45,23 @@ _CASH_WRITE_PERMISSIONS = [
     TenantNotCanceled,
     RequiresFeature("HAS_CASH_MODULE"),
     HasModulePermission("CASH_MANAGE"),
+]
+
+# Mismo esquema lectura/escritura que Caja (Sprint 12): lectura abierta a
+# cualquier tenant.users autenticado con el modulo de ventas activo,
+# escritura requiere SALES_MANAGE.
+_SALES_READ_PERMISSIONS = [
+    IsAuthenticated,
+    TenantNotSuspended,
+    TenantNotCanceled,
+    RequiresFeature("HAS_SALES_MODULE"),
+]
+_SALES_WRITE_PERMISSIONS = [
+    IsAuthenticated,
+    TenantNotSuspended,
+    TenantNotCanceled,
+    RequiresFeature("HAS_SALES_MODULE"),
+    HasModulePermission("SALES_MANAGE"),
 ]
 
 
@@ -150,3 +179,64 @@ class CashSessionCloseView(APIView):
         serializer.is_valid(raise_exception=True)
         session = serializer.save()
         return Response(CashSessionSerializer(session).data)
+
+
+class CustomerViewSet(viewsets.ModelViewSet):
+    """Sin ActiveManager (Customer no hereda SoftDeleteModel -es preexistente
+    a la BDD v5, no un modelo nuevo de este sprint): el filtrado de bajas se
+    hace a mano en get_queryset(), mismo resultado que Warehouse/Category."""
+
+    queryset = Customer.objects.all().order_by("name")
+    serializer_class = CustomerSerializer
+
+    def get_permissions(self):
+        if self.action in ("list", "retrieve"):
+            return [permission() for permission in _SALES_READ_PERMISSIONS]
+        return [permission() for permission in _SALES_WRITE_PERMISSIONS]
+
+    def get_queryset(self):
+        queryset = super().get_queryset().filter(deleted_at__isnull=True)
+        search = self.request.query_params.get("search")
+        if search:
+            queryset = queryset.filter(
+                models.Q(document_number__icontains=search)
+                | models.Q(name__icontains=search)
+                | models.Q(phone__icontains=search)
+            )
+        return queryset
+
+    def perform_destroy(self, instance):
+        instance.deleted_at = timezone.now()
+        instance.deleted_by = self.request.user
+        instance.is_active = False
+        instance.save(update_fields=["deleted_at", "deleted_by", "is_active"])
+
+
+class PromotionViewSet(viewsets.ModelViewSet):
+    queryset = Promotion.objects.all().order_by("-start_date")
+    serializer_class = PromotionSerializer
+
+    def get_permissions(self):
+        if self.action in ("list", "retrieve"):
+            return [permission() for permission in _SALES_READ_PERMISSIONS]
+        return [permission() for permission in _SALES_WRITE_PERMISSIONS]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        search = self.request.query_params.get("search")
+        if search:
+            queryset = queryset.filter(name__icontains=search)
+        return queryset
+
+
+class PromotionProductViewSet(viewsets.ModelViewSet):
+    queryset = PromotionProduct.objects.all()
+    serializer_class = PromotionProductSerializer
+    permission_classes = _SALES_WRITE_PERMISSIONS
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        promotion_id = self.request.query_params.get("promotion")
+        if promotion_id:
+            queryset = queryset.filter(promotion_id=promotion_id)
+        return queryset

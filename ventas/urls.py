@@ -13,6 +13,13 @@ router.register(
 router.register(
     "ventas/cash-movements", views.CashMovementViewSet, basename="cash-movement"
 )
+router.register("ventas/customers", views.CustomerViewSet, basename="customer")
+router.register("ventas/promotions", views.PromotionViewSet, basename="promotion")
+router.register(
+    "ventas/promotion-products",
+    views.PromotionProductViewSet,
+    basename="promotion-product",
+)
 
 urlpatterns = [
     path(

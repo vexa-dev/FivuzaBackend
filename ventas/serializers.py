@@ -1,6 +1,13 @@
 from rest_framework import serializers
 
-from ventas.models import CashMovement, CashRegister, CashSession
+from ventas.models import (
+    CashMovement,
+    CashRegister,
+    CashSession,
+    Customer,
+    Promotion,
+    PromotionProduct,
+)
 from ventas.services import CashMovementReceiptService, CashSessionService
 
 
@@ -94,6 +101,57 @@ class CashMovementReceiptUploadURLSerializer(serializers.Serializer):
             )
         except ValueError as exc:
             raise serializers.ValidationError({"content_type": str(exc)}) from exc
+
+
+class CustomerSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Customer
+        fields = [
+            "id",
+            "document_type",
+            "document_number",
+            "name",
+            "phone",
+            "address",
+            "is_active",
+            "updated_at",
+            "created_at",
+        ]
+        read_only_fields = ["updated_at", "created_at"]
+
+
+class PromotionProductSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PromotionProduct
+        fields = ["id", "promotion", "variant", "category"]
+
+    def validate(self, attrs):
+        variant = attrs.get("variant")
+        category = attrs.get("category")
+        if bool(variant) == bool(category):
+            raise serializers.ValidationError(
+                "Especifique variant o category, nunca ambos ni ninguno."
+            )
+        return attrs
+
+
+class PromotionSerializer(serializers.ModelSerializer):
+    targets = PromotionProductSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Promotion
+        fields = [
+            "id",
+            "name",
+            "type",
+            "value",
+            "start_date",
+            "end_date",
+            "is_active",
+            "targets",
+            "updated_at",
+        ]
+        read_only_fields = ["updated_at"]
 
 
 class CashSessionOpenSerializer(serializers.Serializer):
