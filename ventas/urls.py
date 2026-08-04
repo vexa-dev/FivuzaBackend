@@ -1,0 +1,33 @@
+from django.urls import path
+from rest_framework.routers import DefaultRouter
+
+from ventas import views
+
+router = DefaultRouter()
+router.register(
+    "ventas/cash-registers", views.CashRegisterViewSet, basename="cash-register"
+)
+router.register(
+    "ventas/cash-sessions", views.CashSessionViewSet, basename="cash-session"
+)
+router.register(
+    "ventas/cash-movements", views.CashMovementViewSet, basename="cash-movement"
+)
+
+urlpatterns = [
+    path(
+        "ventas/cash-sessions/open/",
+        views.CashSessionOpenView.as_view(),
+        name="cash-session-open",
+    ),
+    path(
+        "ventas/cash-sessions/<int:pk>/close/",
+        views.CashSessionCloseView.as_view(),
+        name="cash-session-close",
+    ),
+]
+
+# El router va al final: open/ debe resolverse antes de que el patron de
+# detalle del router (ventas/cash-sessions/<pk>/) intente tomar "open" como
+# si fuera un pk.
+urlpatterns += router.urls

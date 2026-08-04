@@ -138,21 +138,17 @@ class InventoryCatalogEndpointsTests(TenantTestCase):
         self.assertEqual(response.status_code, 400)
 
     def test_second_warehouse_blocked_without_multi_warehouse_flag(self):
+        # El tenant ya nace con su almacen "Principal" por defecto (Sprint 12,
+        # TenantProvisioningService.seed_default_resources) -cualquier otro
+        # almacen que se intente crear sin el flag ya es el "segundo".
         admin = self._client_as(self.admin_user)
-        first = admin.post(
-            "/api/v1/inventario/warehouses/",
-            {"name": "Principal"},
-            format="json",
-        )
-        self.assertEqual(first.status_code, 201)
-
-        second = admin.post(
+        response = admin.post(
             "/api/v1/inventario/warehouses/",
             {"name": "Sucursal 2"},
             format="json",
         )
-        self.assertEqual(second.status_code, 403)
-        self.assertEqual(second.data["code"], "MODULE_DISABLED")
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data["code"], "MODULE_DISABLED")
 
     def test_multi_warehouse_flag_allows_second_warehouse(self):
         settings = TenantSettings.objects.get(tenant=self.tenant)

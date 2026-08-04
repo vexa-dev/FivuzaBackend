@@ -411,7 +411,11 @@ class CatalogImportServiceTests(TenantTestCase):
         super().setUpClass()
         role = Role.objects.create(name="admin", is_system_default=True)
         cls.user = User.objects.create(email="admin@negocio.com", role=role)
-        cls.warehouse = Warehouse.objects.create(name="Principal")
+        # "Principal" ya existe por defecto (Sprint 12,
+        # TenantProvisioningService.seed_default_resources) -crearlo de
+        # nuevo aqui duplicaria el nombre y Warehouse.objects.get(name__iexact=...)
+        # en CatalogImportService reventaria con MultipleObjectsReturned.
+        cls.warehouse = Warehouse.objects.get(name="Principal")
         Category.objects.create(name="Ropa")
 
     @classmethod

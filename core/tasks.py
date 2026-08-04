@@ -51,6 +51,7 @@ def provision_tenant_async(tenant_id: int) -> None:
 
     try:
         TenantProvisioningService.seed_default_roles(tenant)
+        TenantProvisioningService.seed_default_resources(tenant)
     except Exception:
         tenant.provisioning_status = "FAILED"
         tenant.save(update_fields=["provisioning_status"])

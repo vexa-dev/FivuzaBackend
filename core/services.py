@@ -152,6 +152,7 @@ class TenantProvisioningService:
         ("INVENTORY_VIEW", "INVENTORY"),
         ("INVENTORY_MANAGE", "INVENTORY"),
         ("PURCHASES_MANAGE", "PURCHASES"),
+        ("CASH_MANAGE", "CASH"),
     ]
     _ROLE_PERMISSIONS = {
         "admin": [
@@ -162,6 +163,7 @@ class TenantProvisioningService:
             "INVENTORY_VIEW",
             "INVENTORY_MANAGE",
             "PURCHASES_MANAGE",
+            "CASH_MANAGE",
         ],
         "manager": [
             "USERS_MANAGE",
@@ -170,7 +172,15 @@ class TenantProvisioningService:
             "INVENTORY_VIEW",
             "INVENTORY_MANAGE",
             "PURCHASES_MANAGE",
+            "CASH_MANAGE",
         ],
+        # "seller" no recibe CASH_MANAGE todavia a proposito: quien
+        # opera la caja del dia a dia (tipicamente el propio cajero/seller
+        # en un POS real) es una decision de negocio que no esta definida
+        # en el Plan de Implementacion para este sprint -el modulo de Ventas/
+        # POS (que es quien realmente necesitaria que un seller abra su
+        # propia caja) todavia no existe. Se deja para cuando ese sprint
+        # aterrice, en vez de adivinar ahora.
         "seller": ["INVENTORY_VIEW"],
     }
 
@@ -228,6 +238,29 @@ class TenantProvisioningService:
                 RolePermission.objects.get_or_create(
                     role=role, permission=permissions_by_code[code]
                 )
+
+    @staticmethod
+    def seed_default_resources(tenant: Tenant) -> None:
+        """Crea el almacen 'Principal' y la caja 'Caja Principal' por
+        defecto al aprovisionar un tenant (Sprint 12) -cierra el pendiente
+        que TenantProvisioningService.provision() dejo explicitamente
+        anotado desde el Sprint 1 ("cuando esos modelos ya existan").
+        Idempotente via get_or_create, mismo criterio que seed_default_roles."""
+        if tenant.schema_name == get_public_schema_name():
+            return
+
+        from django_tenants.utils import schema_context
+
+        with schema_context(tenant.schema_name):
+            from inventario.models import Warehouse
+            from ventas.models import CashRegister
+
+            warehouse, _ = Warehouse.objects.get_or_create(
+                name="Principal", defaults={"is_active": True}
+            )
+            CashRegister.objects.get_or_create(
+                warehouse=warehouse, name="Caja Principal", defaults={"is_active": True}
+            )
 
 
 class PaymentAlreadyConfirmedError(APIException):
