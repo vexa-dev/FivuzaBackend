@@ -1,5 +1,6 @@
 from django.shortcuts import get_object_or_404
 from rest_framework import mixins, status, viewsets
+from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -8,9 +9,11 @@ from core.permissions import RequiresFeature, TenantNotCanceled, TenantNotSuspen
 from usuarios.permissions import HasModulePermission
 from ventas.models import CashMovement, CashRegister, CashSession
 from ventas.serializers import (
+    CashMovementReceiptUploadURLSerializer,
     CashMovementSerializer,
     CashRegisterSerializer,
     CashSessionCloseSerializer,
+    CashSessionDetailSerializer,
     CashSessionOpenSerializer,
     CashSessionSerializer,
 )
@@ -54,14 +57,29 @@ class CashSessionViewSet(
     serializer_class = CashSessionSerializer
     permission_classes = _CASH_READ_PERMISSIONS
 
+    def get_serializer_class(self):
+        if self.action == "retrieve":
+            return CashSessionDetailSerializer
+        return CashSessionSerializer
+
     def get_queryset(self):
         queryset = super().get_queryset()
-        cash_register_id = self.request.query_params.get("cash_register")
+        params = self.request.query_params
+        cash_register_id = params.get("cash_register")
         if cash_register_id:
             queryset = queryset.filter(cash_register_id=cash_register_id)
-        status_param = self.request.query_params.get("status")
+        status_param = params.get("status")
         if status_param:
             queryset = queryset.filter(status=status_param)
+        user_id = params.get("user")
+        if user_id:
+            queryset = queryset.filter(user_id=user_id)
+        opening_from = params.get("opening_from")
+        if opening_from:
+            queryset = queryset.filter(opening_at__date__gte=opening_from)
+        opening_to = params.get("opening_to")
+        if opening_to:
+            queryset = queryset.filter(opening_at__date__lte=opening_to)
         return queryset
 
 
@@ -89,6 +107,16 @@ class CashMovementViewSet(
         if session_id:
             queryset = queryset.filter(cash_session_id=session_id)
         return queryset
+
+    @action(detail=False, methods=["post"], url_path="upload-receipt-url")
+    def upload_receipt_url(self, request):
+        """No es detail-route: un CashMovement no tiene id todavia cuando se
+        pide la URL de subida del comprobante (a diferencia de
+        ProductVariantViewSet.upload_image_url, que si opera sobre un objeto
+        ya existente)."""
+        serializer = CashMovementReceiptUploadURLSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        return Response(serializer.save())
 
 
 class CashSessionOpenView(APIView):

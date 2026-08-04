@@ -1,8 +1,25 @@
+import uuid
+
+import boto3
+from django.conf import settings
 from django.db.models import Sum
 from django.utils import timezone
 from rest_framework.exceptions import APIException
 
 from ventas.models import CashMovement, CashRegister, CashSession
+
+# Comprobantes de movimientos de caja: mismo patron de URL prefirmada de S3
+# que inventario.services.MediaService, pero self-contenido aqui -un
+# CashMovement no existe todavia cuando se pide la URL (a diferencia de una
+# ProductVariant, que ya tiene id antes de subir su imagen), asi que la key
+# se genera con un uuid propio en vez de depender de un pk existente.
+_PRESIGNED_URL_TTL_SECONDS = 300
+_ALLOWED_RECEIPT_CONTENT_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "application/pdf",
+}
 
 
 class CashSessionAlreadyOpenError(APIException):
@@ -52,7 +69,12 @@ class CashSessionService:
 
     @staticmethod
     def close_session(
-        *, session: CashSession, counted_closing_amount, user, notes: str | None = None
+        *,
+        session: CashSession,
+        counted_closing_amount,
+        user,
+        tenant=None,
+        notes: str | None = None,
     ) -> CashSession:
         if session.status != "OPEN":
             raise CashSessionNotOpenError()
@@ -90,7 +112,26 @@ class CashSessionService:
             },
         )
 
+        if tenant is not None:
+            CashSessionService._maybe_alert_on_difference(
+                session=session, tenant=tenant
+            )
+
         return session
+
+    @staticmethod
+    def _maybe_alert_on_difference(*, session: CashSession, tenant) -> None:
+        from core.models import TenantSettings
+
+        threshold = TenantSettings.objects.get(
+            tenant=tenant
+        ).cash_difference_alert_threshold
+        if abs(session.difference) <= threshold:
+            return
+
+        from ventas.tasks import send_cash_difference_alert
+
+        send_cash_difference_alert.delay(tenant.schema_name, session.id)
 
     @staticmethod
     def _calculate_expected_closing_amount(session: CashSession):
@@ -119,11 +160,53 @@ class CashSessionService:
 
     @staticmethod
     def add_movement(
-        *, session: CashSession, type: str, concept: str, amount, user
+        *,
+        session: CashSession,
+        type: str,
+        concept: str,
+        amount,
+        user,
+        reason: str = "",
+        receipt_url: str | None = None,
     ) -> CashMovement:
         if session.status != "OPEN":
             raise CashSessionNotOpenError()
 
         return CashMovement.objects.create(
-            cash_session=session, type=type, concept=concept, amount=amount, user=user
+            cash_session=session,
+            type=type,
+            concept=concept,
+            amount=amount,
+            user=user,
+            reason=reason,
+            receipt_url=receipt_url,
         )
+
+
+class CashMovementReceiptService:
+    """URLs prefirmadas de S3 para el comprobante de un movimiento de caja
+    (Convenciones §5.1) -mismo patron que inventario.services.MediaService."""
+
+    @staticmethod
+    def build_receipt_upload_url(content_type: str) -> dict:
+        if content_type not in _ALLOWED_RECEIPT_CONTENT_TYPES:
+            raise ValueError(f"Tipo de archivo no permitido: {content_type}")
+
+        extension = content_type.split("/")[-1]
+        key = f"cash-movement-receipts/{uuid.uuid4()}.{extension}"
+
+        client = boto3.client("s3", region_name=settings.AWS_S3_REGION)
+        upload_url = client.generate_presigned_url(
+            "put_object",
+            Params={
+                "Bucket": settings.AWS_STORAGE_BUCKET_NAME,
+                "Key": key,
+                "ContentType": content_type,
+            },
+            ExpiresIn=_PRESIGNED_URL_TTL_SECONDS,
+        )
+        receipt_url = (
+            f"https://{settings.AWS_STORAGE_BUCKET_NAME}.s3."
+            f"{settings.AWS_S3_REGION}.amazonaws.com/{key}"
+        )
+        return {"upload_url": upload_url, "receipt_url": receipt_url}

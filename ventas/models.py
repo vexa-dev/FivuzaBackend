@@ -69,6 +69,8 @@ class CashMovement(models.Model):
         ],
     )
     amount = models.DecimalField(max_digits=12, decimal_places=4)
+    reason = models.TextField(blank=True)
+    receipt_url = models.URLField(max_length=500, null=True, blank=True)
     user = models.ForeignKey(
         User, on_delete=models.PROTECT, related_name="cash_movements"
     )
