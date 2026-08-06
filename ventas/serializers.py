@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from rest_framework import serializers
 
 from ventas.models import (
@@ -7,8 +9,11 @@ from ventas.models import (
     Customer,
     Promotion,
     PromotionProduct,
+    Sale,
+    SaleDetail,
+    SalePayment,
 )
-from ventas.services import CashMovementReceiptService, CashSessionService
+from ventas.services import CashMovementReceiptService, CashSessionService, SaleService
 
 
 class CashRegisterSerializer(serializers.ModelSerializer):
@@ -152,6 +157,108 @@ class PromotionSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["updated_at"]
+
+
+class SaleDetailSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SaleDetail
+        fields = [
+            "id",
+            "variant_id",
+            "product_name_snapshot",
+            "sku_snapshot",
+            "quantity",
+            "unit_price",
+            "discount_amount",
+            "subtotal",
+        ]
+
+
+class SalePaymentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SalePayment
+        fields = ["id", "method", "amount", "created_at"]
+
+
+class SaleSerializer(serializers.ModelSerializer):
+    details = SaleDetailSerializer(many=True, read_only=True)
+    payments = SalePaymentSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Sale
+        fields = [
+            "id",
+            "invoice_number",
+            "customer",
+            "user",
+            "warehouse",
+            "cash_session",
+            "subtotal",
+            "discount_total",
+            "total",
+            "currency",
+            "payment_status",
+            "status",
+            "sync_status",
+            "details",
+            "payments",
+            "created_at",
+        ]
+
+
+class SaleLineInputSerializer(serializers.Serializer):
+    variant_id = serializers.IntegerField()
+    quantity = serializers.DecimalField(
+        max_digits=12, decimal_places=3, min_value=Decimal("0.001")
+    )
+    discount_amount = serializers.DecimalField(
+        max_digits=12, decimal_places=4, min_value=0, required=False, allow_null=True
+    )
+
+
+class SalePaymentInputSerializer(serializers.Serializer):
+    method = serializers.ChoiceField(
+        choices=["CASH", "CARD", "YAPE", "CREDIT_LEDGER", "BALANCE"]
+    )
+    amount = serializers.DecimalField(
+        max_digits=12, decimal_places=4, min_value=Decimal("0.01")
+    )
+
+
+class SaleCreateSerializer(serializers.Serializer):
+    """No es un ModelSerializer -delega toda la validacion de negocio
+    (stock, pagos, sesion de caja) en SaleService.create_sale(), mismo
+    patron que CashSessionOpenSerializer/CloseSerializer (Sprint 12)."""
+
+    customer_id = serializers.PrimaryKeyRelatedField(
+        source="customer", queryset=Customer.objects.all()
+    )
+    cash_session_id = serializers.PrimaryKeyRelatedField(
+        source="cash_session", queryset=CashSession.objects.all()
+    )
+    client_side_uuid = serializers.CharField(required=False, allow_blank=True)
+    lines = SaleLineInputSerializer(many=True)
+    payments = SalePaymentInputSerializer(many=True)
+
+    def validate_lines(self, value):
+        if not value:
+            raise serializers.ValidationError("Agrega al menos una linea.")
+        return value
+
+    def validate_payments(self, value):
+        if not value:
+            raise serializers.ValidationError("Agrega al menos un pago.")
+        return value
+
+    def create(self, validated_data):
+        return SaleService.create_sale(
+            customer=validated_data["customer"],
+            cash_session=validated_data["cash_session"],
+            user=self.context["request"].user,
+            lines=validated_data["lines"],
+            payments=validated_data["payments"],
+            client_side_uuid=validated_data.get("client_side_uuid") or None,
+        )
 
 
 class CashSessionOpenSerializer(serializers.Serializer):
