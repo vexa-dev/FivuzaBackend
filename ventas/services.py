@@ -1,12 +1,24 @@
 import uuid
+from decimal import Decimal
 
 import boto3
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
-from rest_framework.exceptions import APIException
+from rest_framework.exceptions import APIException, ValidationError
 
-from ventas.models import CashMovement, CashRegister, CashSession, Promotion
+from inventario.models import ProductVariant, Stock
+from inventario.services import StockService
+from ventas.models import (
+    CashMovement,
+    CashRegister,
+    CashSession,
+    Promotion,
+    Sale,
+    SaleDetail,
+    SalePayment,
+)
 
 # Comprobantes de movimientos de caja: mismo patron de URL prefirmada de S3
 # que inventario.services.MediaService, pero self-contenido aqui -un
@@ -241,3 +253,229 @@ class PromotionService:
             .order_by("-id")
             .first()
         )
+
+
+class InsufficientStockError(APIException):
+    status_code = 409
+    default_code = "INSUFFICIENT_STOCK"
+
+    def __init__(self, *, sku: str, available: Decimal, requested: Decimal):
+        super().__init__(
+            {
+                "error": {
+                    "code": "INSUFFICIENT_STOCK",
+                    "message": (
+                        f"Stock insuficiente para {sku}: disponible {available}, "
+                        f"solicitado {requested}."
+                    ),
+                }
+            }
+        )
+
+
+class PaymentMismatchError(APIException):
+    status_code = 409
+    default_code = "PAYMENT_MISMATCH"
+    default_detail = {
+        "error": {
+            "code": "PAYMENT_MISMATCH",
+            "message": "La suma de los pagos no coincide con el total de la venta.",
+        }
+    }
+
+
+class NoCashSessionError(APIException):
+    status_code = 409
+    default_code = "NO_CASH_SESSION"
+    default_detail = {
+        "error": {
+            "code": "NO_CASH_SESSION",
+            "message": "No hay una sesion de caja abierta para registrar la venta.",
+        }
+    }
+
+
+class SaleService:
+    """SaleService.create_sale(): el endpoint mas complejo del proyecto
+    (Esquema Backend §6.2; API Spec §4.1). Todo ocurre en una sola
+    transaccion atomica -si cualquier linea falla (stock insuficiente) o los
+    pagos no cuadran, no queda ningun efecto parcial (ni Sale, ni
+    SaleDetail, ni movimiento de stock, ni SalePayment).
+
+    Decisiones asumidas, sin una cifra/regla "oficial" documentada:
+    - El almacen de la venta se deriva de cash_session.cash_register.warehouse
+      (no se pide aparte): una caja pertenece a un unico almacen, pedirlo
+      dos veces solo abre la puerta a que no coincidan.
+    - Snapshot de "impuesto" por linea (mencionado en el Plan de
+      Implementacion) queda deferido: TaxRate ya trae su propio comentario
+      desde el Sprint 5 ("no calcula ni desglosa impuestos todavia") y
+      SaleDetail (BDD v5) no tiene un campo para ese desglose -agregarlo
+      hoy seria diseñar para un requisito que todavia no esta especificado.
+    - Sin descuento manual explicito por linea, se resuelve automaticamente
+      la promocion vigente via PromotionService; si el caller SI manda
+      discount_amount, ese valor manual gana (el cajero puede anular el
+      descuento automatico).
+    - payment_status siempre queda en PAID y status en COMPLETED: la unica
+      forma de crear una venta hoy es que los pagos cuadren exactamente con
+      el total (PAYMENT_MISMATCH en caso contrario); PARTIAL/UNPAID y el
+      credito/fiado (CREDIT_LEDGER/BALANCE contra CustomerDebtLedger/
+      CustomerBalanceLedger) son responsabilidad de un sprint posterior
+      (Fase 3, credito/fiado) -este sprint solo persiste el SalePayment,
+      sin tocar esos libros todavia.
+    - invoice_number es un correlativo simple (`V-000123`), sin intentar
+      cumplir un esquema fiscal real (boleta/factura electronica SUNAT) -no
+      hay ningun sprint de facturacion electronica en el plan todavia.
+    """
+
+    @staticmethod
+    @transaction.atomic
+    def create_sale(
+        *,
+        customer,
+        cash_session: CashSession,
+        user,
+        lines: list[dict],
+        payments: list[dict],
+        client_side_uuid: str | None = None,
+        at=None,
+    ) -> Sale:
+        if cash_session.status != "OPEN":
+            raise NoCashSessionError()
+
+        at = at or timezone.now()
+        warehouse = cash_session.cash_register.warehouse
+
+        subtotal = Decimal("0")
+        discount_total = Decimal("0")
+        prepared_lines = []
+        for line in lines:
+            try:
+                variant = ProductVariant.objects.select_related("product").get(
+                    id=line["variant_id"]
+                )
+            except ProductVariant.DoesNotExist as exc:
+                raise ValidationError(
+                    f"La variante {line['variant_id']} no existe."
+                ) from exc
+            quantity = Decimal(str(line["quantity"]))
+
+            # Mismo patron que PurchaseService.receive_order (Sprint 5): se
+            # lee el stock BAJO el lock de select_for_update, para que el
+            # chequeo de disponibilidad y el ajuste posterior operen sobre el
+            # mismo valor, sin ventana para que otra venta concurrente se
+            # cuele entre medio.
+            stock = (
+                Stock.objects.select_for_update()
+                .filter(variant=variant, warehouse=warehouse)
+                .first()
+            )
+            current_quantity = stock.quantity if stock else Decimal("0")
+            if current_quantity < quantity:
+                raise InsufficientStockError(
+                    sku=variant.sku, available=current_quantity, requested=quantity
+                )
+
+            unit_price = variant.price
+            line_subtotal = unit_price * quantity
+
+            discount_amount = line.get("discount_amount")
+            if discount_amount is None:
+                discount_amount = SaleService._resolve_promotion_discount(
+                    variant=variant, quantity=quantity, unit_price=unit_price, at=at
+                )
+            else:
+                discount_amount = min(Decimal(str(discount_amount)), line_subtotal)
+
+            prepared_lines.append(
+                {
+                    "variant": variant,
+                    "quantity": quantity,
+                    "unit_price": unit_price,
+                    "discount_amount": discount_amount,
+                    "subtotal": line_subtotal - discount_amount,
+                    "current_quantity": current_quantity,
+                }
+            )
+            subtotal += line_subtotal
+            discount_total += discount_amount
+
+        total = subtotal - discount_total
+        payments_total = sum((p["amount"] for p in payments), Decimal("0"))
+        if payments_total != total:
+            raise PaymentMismatchError()
+
+        sale = Sale.objects.create(
+            invoice_number=SaleService._next_invoice_number(),
+            customer=customer,
+            user=user,
+            warehouse=warehouse,
+            cash_session=cash_session,
+            subtotal=subtotal,
+            discount_total=discount_total,
+            total=total,
+            payment_status="PAID",
+            status="COMPLETED",
+            client_side_uuid=client_side_uuid or uuid.uuid4().hex,
+            sync_status="SYNCED",
+        )
+
+        for prepared in prepared_lines:
+            variant = prepared["variant"]
+            SaleDetail.objects.create(
+                sale=sale,
+                variant_id=variant.id,
+                product_name_snapshot=variant.product.name,
+                sku_snapshot=variant.sku,
+                quantity=prepared["quantity"],
+                unit_price=prepared["unit_price"],
+                discount_amount=prepared["discount_amount"],
+                subtotal=prepared["subtotal"],
+            )
+            StockService.adjust_stock(
+                variant=variant,
+                warehouse=warehouse,
+                counted_quantity=prepared["current_quantity"] - prepared["quantity"],
+                concept="SALE",
+                user=user,
+            )
+
+        for payment in payments:
+            SalePayment.objects.create(
+                sale=sale, method=payment["method"], amount=payment["amount"]
+            )
+
+        from usuarios.services import AuditLogService
+
+        AuditLogService.log_action(
+            user=user,
+            action="SALE_CREATED",
+            entity="Sale",
+            entity_id=sale.id,
+            details={
+                "invoice_number": sale.invoice_number,
+                "total": str(total),
+                "lines": len(prepared_lines),
+            },
+        )
+
+        return sale
+
+    @staticmethod
+    def _resolve_promotion_discount(
+        *, variant, quantity: Decimal, unit_price: Decimal, at
+    ) -> Decimal:
+        promotion = PromotionService.resolve_active_promotion(variant=variant, at=at)
+        if promotion is None:
+            return Decimal("0")
+
+        line_subtotal = unit_price * quantity
+        if promotion.type == "PERCENTAGE":
+            return line_subtotal * promotion.value / Decimal("100")
+        # FIXED_AMOUNT: monto fijo por unidad, nunca mas que el subtotal de
+        # la linea (sin regla documentada sobre si escala con la cantidad;
+        # se asume por unidad, tope al subtotal para no dejarlo negativo).
+        return min(promotion.value * quantity, line_subtotal)
+
+    @staticmethod
+    def _next_invoice_number() -> str:
+        return f"V-{Sale.objects.count() + 1:06d}"

@@ -1,15 +1,30 @@
 # Pruebas de flujo completo a través de la capa de servicios (ej. crear una venta
 # de punta a punta), no solo de una unidad aislada.
 from datetime import timedelta
+from decimal import Decimal
 
 from django.utils import timezone
 from django_tenants.test.cases import TenantTestCase
 
 from core.models import TenantSettings
-from inventario.models import Category
-from inventario.services import ProductVariantService
-from ventas.models import Promotion, PromotionProduct
-from ventas.services import PromotionService
+from inventario.models import Category, Stock, Warehouse
+from inventario.services import ProductVariantService, StockService
+from usuarios.models import AuditLog, Role, User
+from ventas.models import (
+    CashRegister,
+    CashSession,
+    Customer,
+    Promotion,
+    PromotionProduct,
+    Sale,
+)
+from ventas.services import (
+    InsufficientStockError,
+    NoCashSessionError,
+    PaymentMismatchError,
+    PromotionService,
+    SaleService,
+)
 
 
 class PromotionServiceTests(TenantTestCase):
@@ -131,3 +146,241 @@ class PromotionServiceTests(TenantTestCase):
 
         result = PromotionService.resolve_active_promotion(variant=variant)
         self.assertIsNone(result)
+
+
+class SaleServiceTests(TenantTestCase):
+    """SaleService.create_sale(): el servicio con mayor superficie de riesgo
+    del proyecto (TRD §7.2). Cubre los 6 escenarios que el Plan de
+    Implementacion pide explicitamente para el Sprint 15."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_ventas_sale_service"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-ventas-sale-service.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        role = Role.objects.get(name="admin")
+        cls.user = User.objects.create(email="admin@negocio.com", role=role)
+        cls.warehouse = Warehouse.objects.create(name="Principal")
+        cls.category = Category.objects.create(name="Ropa")
+        cls.customer = Customer.objects.create(
+            document_type="DNI", document_number="11111111", name="Cliente Uno"
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    _sku_counter = 0
+
+    def _create_variant(self, *, price="20.00", stock_quantity="10"):
+        SaleServiceTests._sku_counter += 1
+        product = ProductVariantService.create_product(
+            product_data={
+                "type": "PRODUCT",
+                "name": "Camiseta",
+                "category": self.category,
+                "unit_of_measure": "UND",
+            },
+            variants_data=[
+                {"sku": f"SKU-SALE-{SaleServiceTests._sku_counter}", "price": price}
+            ],
+        )
+        variant = product.variants.first()
+        StockService.adjust_stock(
+            variant=variant,
+            warehouse=self.warehouse,
+            counted_quantity=Decimal(stock_quantity),
+            concept="ADJUSTMENT",
+            user=self.user,
+        )
+        return variant
+
+    def _open_session(self):
+        SaleServiceTests._sku_counter += 1
+        register = CashRegister.objects.create(
+            warehouse=self.warehouse, name=f"Caja {SaleServiceTests._sku_counter}"
+        )
+        return CashSession.objects.create(
+            cash_register=register,
+            user=self.user,
+            opening_amount="0",
+            opening_at=timezone.now(),
+            status="OPEN",
+        )
+
+    def test_creates_simple_sale_and_discounts_stock(self):
+        variant = self._create_variant(price="20.00", stock_quantity="10")
+        session = self._open_session()
+
+        sale = SaleService.create_sale(
+            customer=self.customer,
+            cash_session=session,
+            user=self.user,
+            lines=[{"variant_id": variant.id, "quantity": "3"}],
+            payments=[{"method": "CASH", "amount": Decimal("60.00")}],
+        )
+
+        self.assertEqual(sale.status, "COMPLETED")
+        self.assertEqual(sale.payment_status, "PAID")
+        self.assertEqual(sale.subtotal, Decimal("60.0000"))
+        self.assertEqual(sale.total, Decimal("60.0000"))
+        self.assertEqual(sale.details.count(), 1)
+        self.assertEqual(sale.payments.count(), 1)
+
+        stock = Stock.objects.get(variant=variant, warehouse=self.warehouse)
+        self.assertEqual(stock.quantity, Decimal("7.000"))
+
+    def test_creates_sale_with_multiple_payments(self):
+        variant = self._create_variant(price="20.00", stock_quantity="10")
+        session = self._open_session()
+
+        sale = SaleService.create_sale(
+            customer=self.customer,
+            cash_session=session,
+            user=self.user,
+            lines=[{"variant_id": variant.id, "quantity": "2"}],
+            payments=[
+                {"method": "CASH", "amount": Decimal("25.00")},
+                {"method": "CARD", "amount": Decimal("15.00")},
+            ],
+        )
+
+        self.assertEqual(sale.total, Decimal("40.0000"))
+        self.assertEqual(sale.payments.count(), 2)
+
+    def test_creates_sale_applies_active_promotion(self):
+        variant = self._create_variant(price="100.00", stock_quantity="10")
+        promotion = Promotion.objects.create(
+            name="20% descuento",
+            type="PERCENTAGE",
+            value="20.00",
+            start_date=timezone.now() - timedelta(days=1),
+            end_date=timezone.now() + timedelta(days=1),
+            is_active=True,
+        )
+        PromotionProduct.objects.create(promotion=promotion, variant=variant)
+        session = self._open_session()
+
+        sale = SaleService.create_sale(
+            customer=self.customer,
+            cash_session=session,
+            user=self.user,
+            lines=[{"variant_id": variant.id, "quantity": "1"}],
+            payments=[{"method": "CASH", "amount": Decimal("80.00")}],
+        )
+
+        self.assertEqual(sale.discount_total, Decimal("20.0000"))
+        self.assertEqual(sale.total, Decimal("80.0000"))
+
+    def test_manual_discount_overrides_promotion(self):
+        variant = self._create_variant(price="100.00", stock_quantity="10")
+        promotion = Promotion.objects.create(
+            name="20% descuento",
+            type="PERCENTAGE",
+            value="20.00",
+            start_date=timezone.now() - timedelta(days=1),
+            end_date=timezone.now() + timedelta(days=1),
+            is_active=True,
+        )
+        PromotionProduct.objects.create(promotion=promotion, variant=variant)
+        session = self._open_session()
+
+        sale = SaleService.create_sale(
+            customer=self.customer,
+            cash_session=session,
+            user=self.user,
+            lines=[
+                {
+                    "variant_id": variant.id,
+                    "quantity": "1",
+                    "discount_amount": Decimal("5.00"),
+                }
+            ],
+            payments=[{"method": "CASH", "amount": Decimal("95.00")}],
+        )
+
+        self.assertEqual(sale.discount_total, Decimal("5.00"))
+        self.assertEqual(sale.total, Decimal("95.00"))
+
+    def test_insufficient_stock_rolls_back_everything(self):
+        variant = self._create_variant(price="20.00", stock_quantity="2")
+        session = self._open_session()
+        sales_before = Sale.objects.count()
+
+        with self.assertRaises(InsufficientStockError):
+            SaleService.create_sale(
+                customer=self.customer,
+                cash_session=session,
+                user=self.user,
+                lines=[{"variant_id": variant.id, "quantity": "5"}],
+                payments=[{"method": "CASH", "amount": Decimal("100.00")}],
+            )
+
+        self.assertEqual(Sale.objects.count(), sales_before)
+        stock = Stock.objects.get(variant=variant, warehouse=self.warehouse)
+        self.assertEqual(stock.quantity, Decimal("2.000"))
+
+    def test_payment_mismatch_rolls_back_everything(self):
+        variant = self._create_variant(price="20.00", stock_quantity="10")
+        session = self._open_session()
+        sales_before = Sale.objects.count()
+
+        with self.assertRaises(PaymentMismatchError):
+            SaleService.create_sale(
+                customer=self.customer,
+                cash_session=session,
+                user=self.user,
+                lines=[{"variant_id": variant.id, "quantity": "2"}],
+                payments=[{"method": "CASH", "amount": Decimal("10.00")}],
+            )
+
+        self.assertEqual(Sale.objects.count(), sales_before)
+        stock = Stock.objects.get(variant=variant, warehouse=self.warehouse)
+        self.assertEqual(stock.quantity, Decimal("10.000"))
+
+    def test_no_open_cash_session_raises(self):
+        variant = self._create_variant(price="20.00", stock_quantity="10")
+        session = self._open_session()
+        session.status = "CLOSED"
+        session.save(update_fields=["status"])
+
+        with self.assertRaises(NoCashSessionError):
+            SaleService.create_sale(
+                customer=self.customer,
+                cash_session=session,
+                user=self.user,
+                lines=[{"variant_id": variant.id, "quantity": "1"}],
+                payments=[{"method": "CASH", "amount": Decimal("20.00")}],
+            )
+
+    def test_sale_writes_audit_log_and_unique_invoice_numbers(self):
+        variant = self._create_variant(price="20.00", stock_quantity="10")
+        session_a = self._open_session()
+        session_b = self._open_session()
+
+        sale_a = SaleService.create_sale(
+            customer=self.customer,
+            cash_session=session_a,
+            user=self.user,
+            lines=[{"variant_id": variant.id, "quantity": "1"}],
+            payments=[{"method": "CASH", "amount": Decimal("20.00")}],
+        )
+        sale_b = SaleService.create_sale(
+            customer=self.customer,
+            cash_session=session_b,
+            user=self.user,
+            lines=[{"variant_id": variant.id, "quantity": "1"}],
+            payments=[{"method": "CASH", "amount": Decimal("20.00")}],
+        )
+
+        self.assertNotEqual(sale_a.invoice_number, sale_b.invoice_number)
+        self.assertTrue(
+            AuditLog.objects.filter(action="SALE_CREATED", entity_id=sale_a.id).exists()
+        )

@@ -9,7 +9,8 @@ from django_tenants.test.cases import TenantTestCase
 from rest_framework.test import APIClient
 
 from core.models import TenantSettings
-from inventario.models import Warehouse
+from inventario.models import Category, Warehouse
+from inventario.services import ProductVariantService, StockService
 from usuarios.models import Role, User
 from ventas.models import CashMovement, CashRegister, CashSession, Customer, Promotion
 
@@ -610,3 +611,187 @@ class SalesCatalogEndpointsTests(TenantTestCase):
             f"/api/v1/ventas/promotion-products/?promotion={promotion.id}"
         )
         self.assertEqual(response.status_code, 403)
+
+
+class SaleEndpointsTests(TenantTestCase):
+    """POST /ventas/sales/ (SaleService.create_sale) y su listado/detalle
+    (Sprint 15, API Spec §4.1, §2.3)."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_ventas_sales_endpoints"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-ventas-sales-endpoints.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.password = "ClaveSegura123"
+        cls.admin_role = Role.objects.get(name="admin")
+        cls.seller_role = Role.objects.get(name="seller")
+        cls.no_sales_role = Role.objects.create(name="auditor")
+
+        cls.admin_user = User.objects.create(
+            email="admin@negocio.com", role=cls.admin_role
+        )
+        cls.admin_user.set_password(cls.password)
+        cls.admin_user.save()
+
+        cls.seller_user = User.objects.create(
+            email="vendedor@negocio.com", role=cls.seller_role
+        )
+        cls.seller_user.set_password(cls.password)
+        cls.seller_user.save()
+
+        cls.auditor_user = User.objects.create(
+            email="auditor@negocio.com", role=cls.no_sales_role
+        )
+        cls.auditor_user.set_password(cls.password)
+        cls.auditor_user.save()
+
+        cls.warehouse = Warehouse.objects.create(name="Principal")
+        category = Category.objects.create(name="Ropa")
+        product = ProductVariantService.create_product(
+            product_data={
+                "type": "PRODUCT",
+                "name": "Camiseta",
+                "category": category,
+                "unit_of_measure": "UND",
+            },
+            variants_data=[{"sku": "SALE-ENDPOINT-SKU", "price": "20.00"}],
+        )
+        cls.variant = product.variants.first()
+        StockService.adjust_stock(
+            variant=cls.variant,
+            warehouse=cls.warehouse,
+            counted_quantity=10,
+            concept="ADJUSTMENT",
+            user=cls.admin_user,
+        )
+        cls.customer = Customer.objects.create(
+            document_type="DNI", document_number="55555555", name="Cliente Endpoint"
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    _register_counter = 0
+
+    def setUp(self):
+        cache.clear()
+
+    def _client_as(self, user):
+        client = APIClient(HTTP_HOST=self.domain.domain)
+        login = client.post(
+            "/api/v1/auth/login/",
+            {"email": user.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def _open_session(self, client=None):
+        # Siempre se abre con el admin -un seller no tiene CASH_MANAGE
+        # (decision deliberada desde Sprint 12), asi que no podria abrir su
+        # propia caja aunque si pueda vender contra una ya abierta. Cada
+        # test usa su propio CashRegister porque CashSessionService no
+        # permite dos sesiones abiertas sobre el mismo registro.
+        SaleEndpointsTests._register_counter += 1
+        register = CashRegister.objects.create(
+            warehouse=self.warehouse,
+            name=f"Caja {SaleEndpointsTests._register_counter}",
+        )
+        response = self._client_as(self.admin_user).post(
+            "/api/v1/ventas/cash-sessions/open/",
+            {"cash_register_id": register.id, "opening_amount": "0"},
+            format="json",
+        )
+        return response.data["id"]
+
+    def test_seller_can_create_sale(self):
+        client = self._client_as(self.seller_user)
+        session_id = self._open_session(client)
+
+        response = client.post(
+            "/api/v1/ventas/sales/",
+            {
+                "customer_id": self.customer.id,
+                "cash_session_id": session_id,
+                "lines": [{"variant_id": self.variant.id, "quantity": "2"}],
+                "payments": [{"method": "CASH", "amount": "40.00"}],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["status"], "COMPLETED")
+        self.assertEqual(response.data["total"], "40.0000")
+        self.assertEqual(len(response.data["details"]), 1)
+
+    def test_sale_rejects_payment_mismatch(self):
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session(client)
+
+        response = client.post(
+            "/api/v1/ventas/sales/",
+            {
+                "customer_id": self.customer.id,
+                "cash_session_id": session_id,
+                "lines": [{"variant_id": self.variant.id, "quantity": "1"}],
+                "payments": [{"method": "CASH", "amount": "5.00"}],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["error"]["code"], "PAYMENT_MISMATCH")
+
+    def test_auditor_cannot_create_sale(self):
+        client = self._client_as(self.auditor_user)
+        response = client.post(
+            "/api/v1/ventas/sales/",
+            {
+                "customer_id": self.customer.id,
+                "cash_session_id": 1,
+                "lines": [{"variant_id": self.variant.id, "quantity": "1"}],
+                "payments": [{"method": "CASH", "amount": "20.00"}],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_auditor_can_read_sales(self):
+        client = self._client_as(self.auditor_user)
+        response = client.get("/api/v1/ventas/sales/")
+        self.assertEqual(response.status_code, 200)
+
+    def test_sales_filtered_by_customer(self):
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session(client)
+        client.post(
+            "/api/v1/ventas/sales/",
+            {
+                "customer_id": self.customer.id,
+                "cash_session_id": session_id,
+                "lines": [{"variant_id": self.variant.id, "quantity": "1"}],
+                "payments": [{"method": "CASH", "amount": "20.00"}],
+            },
+            format="json",
+        )
+        other_customer = Customer.objects.create(
+            document_type="DNI", document_number="66666666", name="Otro Cliente"
+        )
+
+        response = client.get(f"/api/v1/ventas/sales/?customer={self.customer.id}")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(len(response.data) >= 1)
+        self.assertTrue(
+            all(row["customer"] == self.customer.id for row in response.data)
+        )
+
+        response_other = client.get(
+            f"/api/v1/ventas/sales/?customer={other_customer.id}"
+        )
+        self.assertEqual(response_other.data, [])

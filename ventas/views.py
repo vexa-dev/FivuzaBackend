@@ -16,6 +16,7 @@ from ventas.models import (
     Customer,
     Promotion,
     PromotionProduct,
+    Sale,
 )
 from ventas.serializers import (
     CashMovementReceiptUploadURLSerializer,
@@ -28,6 +29,8 @@ from ventas.serializers import (
     CustomerSerializer,
     PromotionProductSerializer,
     PromotionSerializer,
+    SaleCreateSerializer,
+    SaleSerializer,
 )
 
 # Lectura: cualquier tenant.users autenticado con el modulo de caja activo
@@ -240,3 +243,56 @@ class PromotionProductViewSet(viewsets.ModelViewSet):
         if promotion_id:
             queryset = queryset.filter(promotion_id=promotion_id)
         return queryset
+
+
+class SaleViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.CreateModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Sin update/destroy: una venta es un registro de auditoria -se corrige
+    con una devolucion (SaleReturn, sprint posterior), nunca editando o
+    borrando la venta original (mismo principio que CashMovement).
+    create() usa un serializer distinto de list/retrieve (SaleCreateSerializer
+    no es un ModelSerializer -delega toda la validacion de negocio en
+    SaleService.create_sale(), Especificacion de API §4.1)."""
+
+    queryset = Sale.objects.all().order_by("-created_at")
+    serializer_class = SaleSerializer
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return SaleCreateSerializer
+        return SaleSerializer
+
+    def get_permissions(self):
+        if self.action in ("list", "retrieve"):
+            return [permission() for permission in _SALES_READ_PERMISSIONS]
+        return [permission() for permission in _SALES_WRITE_PERMISSIONS]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        params = self.request.query_params
+        customer_id = params.get("customer")
+        if customer_id:
+            queryset = queryset.filter(customer_id=customer_id)
+        user_id = params.get("user")
+        if user_id:
+            queryset = queryset.filter(user_id=user_id)
+        cash_register_id = params.get("cash_register")
+        if cash_register_id:
+            queryset = queryset.filter(cash_session__cash_register_id=cash_register_id)
+        date_from = params.get("date_from")
+        if date_from:
+            queryset = queryset.filter(created_at__date__gte=date_from)
+        date_to = params.get("date_to")
+        if date_to:
+            queryset = queryset.filter(created_at__date__lte=date_to)
+        return queryset
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        sale = serializer.save()
+        return Response(SaleSerializer(sale).data, status=status.HTTP_201_CREATED)
