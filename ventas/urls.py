@@ -33,6 +33,16 @@ urlpatterns = [
         views.CashSessionCloseView.as_view(),
         name="cash-session-close",
     ),
+    path(
+        "ventas/pos/catalog/",
+        views.POSCatalogView.as_view(),
+        name="pos-catalog",
+    ),
+    path(
+        "ventas/pos/search/",
+        views.POSSearchView.as_view(),
+        name="pos-search",
+    ),
 ]
 
 # El router va al final: open/ debe resolverse antes de que el patron de

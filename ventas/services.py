@@ -4,7 +4,7 @@ from decimal import Decimal
 import boto3
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import Q, Sum
 from django.utils import timezone
 from rest_framework.exceptions import APIException, ValidationError
 
@@ -253,6 +253,123 @@ class PromotionService:
             .order_by("-id")
             .first()
         )
+
+    @staticmethod
+    def build_active_promotion_index(
+        *, at=None
+    ) -> tuple[dict[int, Promotion], dict[int, Promotion]]:
+        """Misma regla de prioridad que resolve_active_promotion(), pero
+        precalculada de una sola pasada para N variantes -evita el problema
+        N+1 de llamar resolve_active_promotion() en un loop (POSCatalogService
+        sirve el catalogo completo de un tenant, Sprint 16, TRD §4.4).
+        Devuelve (variant_id -> Promotion, category_id -> Promotion);
+        order_by("-id") hace que dict.setdefault() se quede con la promocion
+        mas reciente en cada bucket, igual que el "-id" de arriba."""
+        at = at or timezone.now()
+        promotions = (
+            Promotion.objects.filter(
+                is_active=True, start_date__lte=at, end_date__gte=at
+            )
+            .order_by("-id")
+            .prefetch_related("targets")
+        )
+
+        by_variant: dict[int, Promotion] = {}
+        by_category: dict[int, Promotion] = {}
+        for promotion in promotions:
+            for target in promotion.targets.all():
+                if target.variant_id is not None:
+                    by_variant.setdefault(target.variant_id, promotion)
+                elif target.category_id is not None:
+                    by_category.setdefault(target.category_id, promotion)
+        return by_variant, by_category
+
+
+class POSCatalogService:
+    """Catalogo y busqueda optimizados para el POS (Sprint 16, Esquema
+    Backend §6.2): payload reducido (variante, precio, stock, promocion
+    vigente) pensado para cachearse en el cliente -base del futuro modo
+    offline. Vive en ventas (no en inventario) porque combina datos de
+    Stock/ProductVariant con PromotionService, que es un concepto propio
+    de ventas; inventario nunca importa de ventas (capa inferior)."""
+
+    @staticmethod
+    def search(*, warehouse, query: str) -> list[dict]:
+        # Prioridad de escaneo: un codigo de barras exacto resuelve de
+        # inmediato, sin competir con resultados de texto parecido -si el
+        # escaneo no encuentra nada, recien ahi se cae a busqueda difusa
+        # por nombre/sku. Sin search_vector (mismo alcance ya documentado
+        # en Sprint 14: la columna existe en el modelo pero ningun punto
+        # del codigo la popula todavia), se usa icontains, consistente con
+        # el resto del catalogo de inventario.
+        exact = list(
+            ProductVariant.objects.filter(
+                is_active=True,
+                product__is_for_sale=True,
+                product__is_active=True,
+                barcode=query,
+            ).select_related("product")
+        )
+        if exact:
+            variants = exact
+        else:
+            variants = list(
+                ProductVariant.objects.filter(
+                    is_active=True, product__is_for_sale=True, product__is_active=True
+                )
+                .filter(Q(sku__icontains=query) | Q(product__name__icontains=query))
+                .select_related("product")
+                .order_by("product__name")[:20]
+            )
+        return POSCatalogService._serialize(variants, warehouse)
+
+    @staticmethod
+    def catalog(*, warehouse) -> list[dict]:
+        variants = (
+            ProductVariant.objects.filter(
+                is_active=True, product__is_for_sale=True, product__is_active=True
+            )
+            .select_related("product")
+            .order_by("product__name")
+        )
+        return POSCatalogService._serialize(list(variants), warehouse)
+
+    @staticmethod
+    def _serialize(variants: list[ProductVariant], warehouse) -> list[dict]:
+        variant_ids = [variant.id for variant in variants]
+        stock_by_variant = dict(
+            Stock.objects.filter(
+                warehouse=warehouse, variant_id__in=variant_ids
+            ).values_list("variant_id", "quantity")
+        )
+        by_variant, by_category = PromotionService.build_active_promotion_index()
+
+        results = []
+        for variant in variants:
+            promotion = by_variant.get(variant.id) or by_category.get(
+                variant.product.category_id
+            )
+            results.append(
+                {
+                    "id": variant.id,
+                    "sku": variant.sku,
+                    "barcode": variant.barcode,
+                    "product_name": variant.product.name,
+                    "price": str(variant.price),
+                    "stock": str(stock_by_variant.get(variant.id, Decimal("0"))),
+                    "promotion": (
+                        {
+                            "id": promotion.id,
+                            "name": promotion.name,
+                            "type": promotion.type,
+                            "value": str(promotion.value),
+                        }
+                        if promotion is not None
+                        else None
+                    ),
+                }
+            )
+        return results
 
 
 class InsufficientStockError(APIException):
