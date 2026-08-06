@@ -22,6 +22,7 @@ from ventas.services import (
     InsufficientStockError,
     NoCashSessionError,
     PaymentMismatchError,
+    POSCatalogService,
     PromotionService,
     SaleService,
 )
@@ -384,3 +385,137 @@ class SaleServiceTests(TenantTestCase):
         self.assertTrue(
             AuditLog.objects.filter(action="SALE_CREATED", entity_id=sale_a.id).exists()
         )
+
+
+class POSCatalogServiceTests(TenantTestCase):
+    """POSCatalogService.search()/catalog() (Sprint 16, Esquema Backend
+    §6.2): prioridad de escaneo por barcode, fallback difuso por nombre/sku,
+    stock por almacen y promocion vigente en el mismo payload."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_ventas_pos_catalog"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-ventas-pos-catalog.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        role = Role.objects.get(name="admin")
+        cls.user = User.objects.create(email="admin@negocio.com", role=role)
+        cls.warehouse = Warehouse.objects.create(name="Principal")
+        cls.other_warehouse = Warehouse.objects.create(name="Sucursal")
+        cls.category = Category.objects.create(name="Ropa")
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    _sku_counter = 0
+
+    def _create_variant(
+        self, *, name="Camiseta", barcode=None, price="20.00", stock="5"
+    ):
+        POSCatalogServiceTests._sku_counter += 1
+        product = ProductVariantService.create_product(
+            product_data={
+                "type": "PRODUCT",
+                "name": name,
+                "category": self.category,
+                "unit_of_measure": "UND",
+            },
+            variants_data=[
+                {
+                    "sku": f"SKU-POS-{POSCatalogServiceTests._sku_counter}",
+                    "barcode": barcode,
+                    "price": price,
+                }
+            ],
+        )
+        variant = product.variants.first()
+        StockService.adjust_stock(
+            variant=variant,
+            warehouse=self.warehouse,
+            counted_quantity=Decimal(stock),
+            concept="ADJUSTMENT",
+            user=self.user,
+        )
+        return variant
+
+    def test_search_exact_barcode_match_wins_over_fuzzy_results(self):
+        scanned = self._create_variant(name="Camiseta Roja", barcode="7501234567890")
+        # Otro producto cuyo nombre tambien matchearia una busqueda difusa
+        # por "7501234567890" si el barcode no tuviera prioridad -no debiera
+        # aparecer en el resultado.
+        self._create_variant(name="Producto 7501234567890 promocionado")
+
+        results = POSCatalogService.search(
+            warehouse=self.warehouse, query="7501234567890"
+        )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["id"], scanned.id)
+
+    def test_search_falls_back_to_fuzzy_name_and_sku_match(self):
+        variant = self._create_variant(name="Pantalon Azul")
+
+        by_name = POSCatalogService.search(warehouse=self.warehouse, query="Pantalon")
+        self.assertEqual([row["id"] for row in by_name], [variant.id])
+
+        by_sku = POSCatalogService.search(warehouse=self.warehouse, query=variant.sku)
+        self.assertEqual([row["id"] for row in by_sku], [variant.id])
+
+    def test_search_no_match_returns_empty_list(self):
+        self._create_variant(name="Camiseta")
+        results = POSCatalogService.search(
+            warehouse=self.warehouse, query="inexistente"
+        )
+        self.assertEqual(results, [])
+
+    def test_catalog_includes_stock_for_the_given_warehouse_only(self):
+        variant = self._create_variant(stock="7")
+
+        catalog_here = POSCatalogService.catalog(warehouse=self.warehouse)
+        row = next(row for row in catalog_here if row["id"] == variant.id)
+        self.assertEqual(row["stock"], "7.000")
+
+        catalog_elsewhere = POSCatalogService.catalog(warehouse=self.other_warehouse)
+        row_elsewhere = next(
+            row for row in catalog_elsewhere if row["id"] == variant.id
+        )
+        self.assertEqual(row_elsewhere["stock"], "0")
+
+    def test_catalog_includes_active_promotion_for_variant(self):
+        variant = self._create_variant(price="100.00")
+        promotion = Promotion.objects.create(
+            name="20% descuento",
+            type="PERCENTAGE",
+            value="20.00",
+            start_date=timezone.now() - timedelta(days=1),
+            end_date=timezone.now() + timedelta(days=1),
+            is_active=True,
+        )
+        PromotionProduct.objects.create(promotion=promotion, variant=variant)
+
+        catalog = POSCatalogService.catalog(warehouse=self.warehouse)
+        row = next(row for row in catalog if row["id"] == variant.id)
+        self.assertIsNotNone(row["promotion"])
+        self.assertEqual(row["promotion"]["type"], "PERCENTAGE")
+        self.assertEqual(row["promotion"]["value"], "20.0000")
+
+    def test_catalog_variant_without_promotion_has_none(self):
+        variant = self._create_variant()
+        catalog = POSCatalogService.catalog(warehouse=self.warehouse)
+        row = next(row for row in catalog if row["id"] == variant.id)
+        self.assertIsNone(row["promotion"])
+
+    def test_catalog_excludes_inactive_and_non_sellable_products(self):
+        variant = self._create_variant(name="Descontinuado")
+        variant.is_active = False
+        variant.save(update_fields=["is_active"])
+
+        catalog = POSCatalogService.catalog(warehouse=self.warehouse)
+        self.assertNotIn(variant.id, [row["id"] for row in catalog])

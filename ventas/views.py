@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.permissions import RequiresFeature, TenantNotCanceled, TenantNotSuspended
+from inventario.models import Warehouse
 from usuarios.permissions import HasModulePermission
 from ventas.models import (
     CashMovement,
@@ -32,6 +33,7 @@ from ventas.serializers import (
     SaleCreateSerializer,
     SaleSerializer,
 )
+from ventas.services import POSCatalogService
 
 # Lectura: cualquier tenant.users autenticado con el modulo de caja activo
 # (Especificacion de API §2.3: sin permiso de escritura listado = "-" =
@@ -296,3 +298,35 @@ class SaleViewSet(
         serializer.is_valid(raise_exception=True)
         sale = serializer.save()
         return Response(SaleSerializer(sale).data, status=status.HTTP_201_CREATED)
+
+
+class POSCatalogView(APIView):
+    """GET -> catalogo completo optimizado para el POS (Sprint 16, Esquema
+    Backend §6.2): payload reducido pensado para cachearse en el cliente,
+    base del futuro modo offline."""
+
+    permission_classes = _SALES_READ_PERMISSIONS
+
+    def get(self, request):
+        warehouse = get_object_or_404(
+            Warehouse, pk=request.query_params.get("warehouse")
+        )
+        return Response(POSCatalogService.catalog(warehouse=warehouse))
+
+
+class POSSearchView(APIView):
+    """GET -> busqueda del POS con prioridad de escaneo (Sprint 16): primero
+    coincidencia exacta por barcode, y solo si falla, busqueda difusa por
+    nombre/sku. Un escaneo debe resolver de inmediato, sin competir con
+    resultados de texto parecidos."""
+
+    permission_classes = _SALES_READ_PERMISSIONS
+
+    def get(self, request):
+        warehouse = get_object_or_404(
+            Warehouse, pk=request.query_params.get("warehouse")
+        )
+        query = request.query_params.get("q", "").strip()
+        if not query:
+            return Response([])
+        return Response(POSCatalogService.search(warehouse=warehouse, query=query))

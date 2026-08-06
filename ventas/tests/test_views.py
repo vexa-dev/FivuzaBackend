@@ -795,3 +795,39 @@ class SaleEndpointsTests(TenantTestCase):
             f"/api/v1/ventas/sales/?customer={other_customer.id}"
         )
         self.assertEqual(response_other.data, [])
+
+    def test_pos_catalog_returns_variant_with_stock_and_price(self):
+        client = self._client_as(self.seller_user)
+        response = client.get(
+            f"/api/v1/ventas/pos/catalog/?warehouse={self.warehouse.id}"
+        )
+        self.assertEqual(response.status_code, 200)
+        row = next(row for row in response.data if row["id"] == self.variant.id)
+        self.assertEqual(row["sku"], self.variant.sku)
+        self.assertEqual(row["stock"], "10.000")
+
+    def test_pos_search_by_sku(self):
+        client = self._client_as(self.seller_user)
+        response = client.get(
+            f"/api/v1/ventas/pos/search/?warehouse={self.warehouse.id}&q={self.variant.sku}"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([row["id"] for row in response.data], [self.variant.id])
+
+    def test_pos_search_without_query_returns_empty_list(self):
+        client = self._client_as(self.seller_user)
+        response = client.get(
+            f"/api/v1/ventas/pos/search/?warehouse={self.warehouse.id}"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, [])
+
+    def test_pos_catalog_requires_sales_module_access(self):
+        client = self._client_as(self.auditor_user)
+        response = client.get(
+            f"/api/v1/ventas/pos/catalog/?warehouse={self.warehouse.id}"
+        )
+        # El auditor si tiene acceso de lectura al modulo de ventas (mismo
+        # esquema que customers/promotions): solo escritura requiere
+        # SALES_MANAGE, lectura esta abierta a cualquier tenant.users.
+        self.assertEqual(response.status_code, 200)
