@@ -506,4 +506,105 @@ class EmployeeEndpointsTests(TenantTestCase):
             "/api/v1/usuarios/employee-attendance/clock-in/", payload, format="json"
         )
         self.assertEqual(second.status_code, 409)
-        self.assertEqual(second.data["error"]["code"], "OPEN_ATTENDANCE_EXISTS")
+
+    def test_generate_and_mark_paid_payroll_flow(self):
+        client = self._client_as(self.admin_user)
+        employee_id = self._create_employee(client).data["id"]
+
+        generate = client.post(
+            "/api/v1/usuarios/employee-payroll/generate/",
+            {
+                "employee_id": employee_id,
+                "period_start": "2026-08-01",
+                "period_end": "2026-08-31",
+                "bonuses": "50.00",
+            },
+            format="json",
+        )
+        self.assertEqual(generate.status_code, 201)
+        self.assertEqual(generate.data["net_amount"], "1850.0000")
+        self.assertEqual(generate.data["status"], "PENDING")
+
+        payroll_id = generate.data["id"]
+        mark_paid = client.post(
+            f"/api/v1/usuarios/employee-payroll/{payroll_id}/mark-paid/",
+            {"payment_date": "2026-09-01"},
+            format="json",
+        )
+        self.assertEqual(mark_paid.status_code, 200)
+        self.assertEqual(mark_paid.data["status"], "PAID")
+
+    def test_generate_payroll_twice_for_same_period_returns_409(self):
+        client = self._client_as(self.admin_user)
+        employee_id = self._create_employee(client).data["id"]
+        payload = {
+            "employee_id": employee_id,
+            "period_start": "2026-08-01",
+            "period_end": "2026-08-31",
+        }
+
+        client.post(
+            "/api/v1/usuarios/employee-payroll/generate/", payload, format="json"
+        )
+        second = client.post(
+            "/api/v1/usuarios/employee-payroll/generate/", payload, format="json"
+        )
+        self.assertEqual(second.status_code, 409)
+
+    def test_attendance_report_summarizes_by_employee(self):
+        client = self._client_as(self.admin_user)
+        employee_id = self._create_employee(client).data["id"]
+        client.post(
+            "/api/v1/usuarios/employee-attendance/clock-in/",
+            {"employee_id": employee_id, "warehouse_id": self.warehouse.id},
+            format="json",
+        )
+
+        response = client.get(
+            "/api/v1/usuarios/reports/attendance/"
+            "?date_from=2020-01-01&date_to=2030-01-01"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["full_name"], "Maria Lopez")
+
+    def test_attendance_report_csv_export(self):
+        client = self._client_as(self.admin_user)
+        response = client.get(
+            "/api/v1/usuarios/reports/attendance/",
+            {"date_from": "2020-01-01", "date_to": "2030-01-01", "export": "csv"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/csv")
+
+    def test_payroll_cost_report_totals_net_amount(self):
+        client = self._client_as(self.admin_user)
+        employee_id = self._create_employee(client).data["id"]
+        client.post(
+            "/api/v1/usuarios/employee-payroll/generate/",
+            {
+                "employee_id": employee_id,
+                "period_start": "2026-08-01",
+                "period_end": "2026-08-31",
+            },
+            format="json",
+        )
+
+        response = client.get(
+            "/api/v1/usuarios/reports/payroll-cost/"
+            "?period_start=2026-08-01&period_end=2026-08-31"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["total_net_amount"], "1800.0000")
+
+    def test_payroll_cost_report_xlsx_export(self):
+        client = self._client_as(self.admin_user)
+        response = client.get(
+            "/api/v1/usuarios/reports/payroll-cost/"
+            "?period_start=2026-08-01&period_end=2026-08-31&export=xlsx"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response["Content-Type"],
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )

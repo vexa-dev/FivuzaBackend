@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.utils import timezone
 from rest_framework import serializers
 
@@ -11,6 +13,7 @@ from usuarios.models import (
     AuditLog,
     Employee,
     EmployeeAttendance,
+    EmployeePayroll,
     EmployeeSchedule,
     Permission,
     Role,
@@ -261,6 +264,54 @@ class ClockInSerializer(serializers.Serializer):
     warehouse_id = serializers.PrimaryKeyRelatedField(
         source="warehouse", queryset=Warehouse.objects.all()
     )
+
+
+class EmployeePayrollSerializer(serializers.ModelSerializer):
+    """Solo lectura -los montos se fijan via PayrollService.generate_payroll()
+    y se congelan al crearse; status/payment_date solo cambian via
+    mark_paid() (Sprint 23)."""
+
+    class Meta:
+        model = EmployeePayroll
+        fields = [
+            "id",
+            "employee",
+            "period_start",
+            "period_end",
+            "base_salary",
+            "bonuses",
+            "deductions",
+            "net_amount",
+            "status",
+            "payment_date",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class PayrollGenerateSerializer(serializers.Serializer):
+    employee_id = serializers.PrimaryKeyRelatedField(
+        source="employee", queryset=Employee.objects.all()
+    )
+    period_start = serializers.DateField()
+    period_end = serializers.DateField()
+    bonuses = serializers.DecimalField(
+        max_digits=12, decimal_places=4, default=Decimal("0")
+    )
+    deductions = serializers.DecimalField(
+        max_digits=12, decimal_places=4, default=Decimal("0")
+    )
+
+    def validate(self, attrs):
+        if attrs["period_start"] > attrs["period_end"]:
+            raise serializers.ValidationError(
+                "El inicio del periodo debe ser antes que el fin."
+            )
+        return attrs
+
+
+class PayrollMarkPaidSerializer(serializers.Serializer):
+    payment_date = serializers.DateField(default=timezone.localdate)
 
 
 class PasswordResetRequestSerializer(serializers.Serializer):
