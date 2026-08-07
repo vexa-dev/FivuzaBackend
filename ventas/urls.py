@@ -21,6 +21,7 @@ router.register(
     basename="promotion-product",
 )
 router.register("ventas/sales", views.SaleViewSet, basename="sale")
+router.register("ventas/sale-returns", views.SaleReturnViewSet, basename="sale-return")
 
 urlpatterns = [
     path(

@@ -19,6 +19,7 @@ from ventas.models import (
     Promotion,
     PromotionProduct,
     Sale,
+    SaleReturn,
 )
 from ventas.serializers import (
     CashMovementReceiptUploadURLSerializer,
@@ -32,7 +33,10 @@ from ventas.serializers import (
     PromotionProductSerializer,
     PromotionSerializer,
     SaleCreateSerializer,
+    SaleReturnCreateSerializer,
+    SaleReturnSerializer,
     SaleSerializer,
+    SaleVoidSerializer,
 )
 from ventas.services import POSCatalogService, ReceiptService, SaleNotFoundError
 
@@ -68,6 +72,23 @@ _SALES_WRITE_PERMISSIONS = [
     TenantNotCanceled,
     RequiresFeature("HAS_SALES_MODULE"),
     HasModulePermission("SALES_MANAGE"),
+]
+# Separados de SALES_MANAGE a proposito (Sprint 18): un cajero puede vender
+# sin poder anular lo ya cobrado, pero si puede procesar una devolucion en
+# el mostrador (ver core/services.py _ROLE_PERMISSIONS).
+_SALES_VOID_PERMISSIONS = [
+    IsAuthenticated,
+    TenantNotSuspended,
+    TenantNotCanceled,
+    RequiresFeature("HAS_SALES_MODULE"),
+    HasModulePermission("SALES_VOID"),
+]
+_SALES_RETURN_PERMISSIONS = [
+    IsAuthenticated,
+    TenantNotSuspended,
+    TenantNotCanceled,
+    RequiresFeature("HAS_SALES_MODULE"),
+    HasModulePermission("SALES_RETURN"),
 ]
 
 
@@ -255,8 +276,8 @@ class SaleViewSet(
     viewsets.GenericViewSet,
 ):
     """Sin update/destroy: una venta es un registro de auditoria -se corrige
-    con una devolucion (SaleReturn, sprint posterior), nunca editando o
-    borrando la venta original (mismo principio que CashMovement).
+    con una devolucion (SaleReturn) o una anulacion (accion void), nunca
+    editando o borrando la venta original (mismo principio que CashMovement).
     create() usa un serializer distinto de list/retrieve (SaleCreateSerializer
     no es un ModelSerializer -delega toda la validacion de negocio en
     SaleService.create_sale(), Especificacion de API §4.1)."""
@@ -272,6 +293,8 @@ class SaleViewSet(
     def get_permissions(self):
         if self.action in ("list", "retrieve", "receipt"):
             return [permission() for permission in _SALES_READ_PERMISSIONS]
+        if self.action == "void":
+            return [permission() for permission in _SALES_VOID_PERMISSIONS]
         return [permission() for permission in _SALES_WRITE_PERMISSIONS]
 
     def get_queryset(self):
@@ -313,6 +336,54 @@ class SaleViewSet(
         width_mm = int(width_mm) if width_mm in ("58", "80") else 58
         html = ReceiptService.render_html(sale, request.tenant, width_mm=width_mm)
         return HttpResponse(html, content_type="text/html")
+
+    @action(detail=True, methods=["post"], url_path="void")
+    def void(self, request, pk=None):
+        sale = get_object_or_404(self.get_queryset(), pk=pk)
+        serializer = SaleVoidSerializer(
+            data=request.data, context={"sale": sale, "request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        sale = serializer.save()
+        return Response(SaleSerializer(sale).data)
+
+
+class SaleReturnViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.CreateModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Sin update/destroy: una devolucion, igual que la venta que revierte,
+    es un registro de auditoria (misma logica que SaleViewSet)."""
+
+    queryset = SaleReturn.objects.all().order_by("-created_at")
+    serializer_class = SaleReturnSerializer
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return SaleReturnCreateSerializer
+        return SaleReturnSerializer
+
+    def get_permissions(self):
+        if self.action in ("list", "retrieve"):
+            return [permission() for permission in _SALES_READ_PERMISSIONS]
+        return [permission() for permission in _SALES_RETURN_PERMISSIONS]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        sale_id = self.request.query_params.get("sale")
+        if sale_id:
+            queryset = queryset.filter(sale_id=sale_id)
+        return queryset
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        sale_return = serializer.save()
+        return Response(
+            SaleReturnSerializer(sale_return).data, status=status.HTTP_201_CREATED
+        )
 
 
 class POSCatalogView(APIView):

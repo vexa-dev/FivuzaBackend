@@ -67,8 +67,12 @@ class TenantProvisioningServiceTests(TestCase):
             # Sprint 3: seller obtiene INVENTORY_VIEW (necesita consultar el
             # catalogo, aunque no pueda editarlo). Sprint 14: tambien
             # SALES_MANAGE (registrar/buscar clientes es el caso de uso
-            # central de un vendedor en el POS).
-            self.assertEqual(seller_codes, {"INVENTORY_VIEW", "SALES_MANAGE"})
+            # central de un vendedor en el POS). Sprint 18: tambien
+            # SALES_RETURN (procesar una devolucion es rutina de mostrador),
+            # pero NO SALES_VOID (anular una venta queda para admin/manager).
+            self.assertEqual(
+                seller_codes, {"INVENTORY_VIEW", "SALES_MANAGE", "SALES_RETURN"}
+            )
 
     def test_seeding_default_roles_is_never_attempted_on_public_schema(self):
         from core.services import TenantProvisioningService

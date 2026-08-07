@@ -12,8 +12,15 @@ from ventas.models import (
     Sale,
     SaleDetail,
     SalePayment,
+    SaleReturn,
+    SaleReturnDetail,
 )
-from ventas.services import CashMovementReceiptService, CashSessionService, SaleService
+from ventas.services import (
+    CashMovementReceiptService,
+    CashSessionService,
+    ReturnService,
+    SaleService,
+)
 
 
 class CashRegisterSerializer(serializers.ModelSerializer):
@@ -258,6 +265,85 @@ class SaleCreateSerializer(serializers.Serializer):
             lines=validated_data["lines"],
             payments=validated_data["payments"],
             client_side_uuid=validated_data.get("client_side_uuid") or None,
+        )
+
+
+class SaleVoidSerializer(serializers.Serializer):
+    """No es un ModelSerializer -delega toda la validacion de negocio en
+    SaleService.void_sale(), mismo patron que SaleCreateSerializer."""
+
+    reason = serializers.CharField()
+
+    def create(self, validated_data):
+        return SaleService.void_sale(
+            self.context["sale"],
+            reason=validated_data["reason"],
+            user=self.context["request"].user,
+        )
+
+
+class SaleReturnDetailSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SaleReturnDetail
+        fields = ["id", "sale_detail", "quantity_returned", "restock", "subtotal"]
+
+
+class SaleReturnSerializer(serializers.ModelSerializer):
+    details = SaleReturnDetailSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = SaleReturn
+        fields = [
+            "id",
+            "sale",
+            "user",
+            "reason",
+            "total_refund_amount",
+            "refund_type",
+            "details",
+            "created_at",
+        ]
+
+
+class SaleReturnItemInputSerializer(serializers.Serializer):
+    sale_detail_id = serializers.IntegerField()
+    quantity_returned = serializers.DecimalField(
+        max_digits=12, decimal_places=3, min_value=Decimal("0.001")
+    )
+    restock = serializers.BooleanField(required=False, default=True)
+
+
+class SaleReturnCreateSerializer(serializers.Serializer):
+    """No es un ModelSerializer -delega toda la validacion de negocio
+    (cantidad devuelta vs. vendida, reingreso de stock, reembolso) en
+    ReturnService.create_return(), mismo patron que SaleCreateSerializer."""
+
+    sale_id = serializers.PrimaryKeyRelatedField(
+        source="sale", queryset=Sale.objects.all()
+    )
+    reason = serializers.CharField(required=False, allow_blank=True)
+    refund_type = serializers.ChoiceField(choices=["BALANCE", "CASH"])
+    cash_session_id = serializers.PrimaryKeyRelatedField(
+        source="cash_session",
+        queryset=CashSession.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    items = SaleReturnItemInputSerializer(many=True)
+
+    def validate_items(self, value):
+        if not value:
+            raise serializers.ValidationError("Agrega al menos una linea a devolver.")
+        return value
+
+    def create(self, validated_data):
+        return ReturnService.create_return(
+            sale=validated_data["sale"],
+            items=validated_data["items"],
+            reason=validated_data.get("reason", ""),
+            refund_type=validated_data["refund_type"],
+            user=self.context["request"].user,
+            cash_session=validated_data.get("cash_session"),
         )
 
 
