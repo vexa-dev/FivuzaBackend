@@ -16,6 +16,8 @@ from ventas.models import (
     CashRegister,
     CashSession,
     Customer,
+    CustomerBalanceLedger,
+    CustomerDebtLedger,
     Promotion,
     PromotionProduct,
     Sale,
@@ -29,16 +31,24 @@ from ventas.serializers import (
     CashSessionDetailSerializer,
     CashSessionOpenSerializer,
     CashSessionSerializer,
+    CustomerBalanceLedgerSerializer,
+    CustomerDebtLedgerSerializer,
     CustomerSerializer,
     PromotionProductSerializer,
     PromotionSerializer,
+    RegisterDebtPaymentSerializer,
     SaleCreateSerializer,
     SaleReturnCreateSerializer,
     SaleReturnSerializer,
     SaleSerializer,
     SaleVoidSerializer,
 )
-from ventas.services import POSCatalogService, ReceiptService, SaleNotFoundError
+from ventas.services import (
+    CreditLedgerService,
+    POSCatalogService,
+    ReceiptService,
+    SaleNotFoundError,
+)
 
 # Lectura: cualquier tenant.users autenticado con el modulo de caja activo
 # (Especificacion de API §2.3: sin permiso de escritura listado = "-" =
@@ -237,6 +247,69 @@ class CustomerViewSet(viewsets.ModelViewSet):
         instance.deleted_by = self.request.user
         instance.is_active = False
         instance.save(update_fields=["deleted_at", "deleted_by", "is_active"])
+
+
+class CustomerDebtLedgerViewSet(
+    mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet
+):
+    """Libro de fiado (Especificacion de API §2.3, §4.5): solo lectura
+    directa -el unico punto de escritura es la accion register-payment, que
+    delega en CreditLedgerService.register_payment(). Las ventas a credito
+    tampoco escriben aca directamente (SaleService.create_sale -> mismo
+    servicio)."""
+
+    queryset = CustomerDebtLedger.objects.all().order_by("-created_at")
+    serializer_class = CustomerDebtLedgerSerializer
+    permission_classes = _SALES_READ_PERMISSIONS
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        customer_id = self.request.query_params.get("customer")
+        if customer_id:
+            queryset = queryset.filter(customer_id=customer_id)
+        return queryset
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="register-payment",
+        permission_classes=_SALES_WRITE_PERMISSIONS,
+    )
+    def register_payment(self, request):
+        serializer = RegisterDebtPaymentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        entry = serializer.save()
+        return Response(
+            {
+                "id": entry.id,
+                "type": entry.type,
+                "amount": str(entry.amount),
+                "customer_current_debt": str(
+                    CreditLedgerService.get_debt(entry.customer)
+                ),
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class CustomerBalanceLedgerViewSet(
+    mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet
+):
+    """Libro de saldo a favor (Especificacion de API §2.3): solo lectura
+    -se alimenta unicamente desde ReturnService (devolucion con
+    refund_type=BALANCE) y CreditLedgerService.register_balance_use()
+    (pago de una venta con saldo a favor)."""
+
+    queryset = CustomerBalanceLedger.objects.all().order_by("-created_at")
+    serializer_class = CustomerBalanceLedgerSerializer
+    permission_classes = _SALES_READ_PERMISSIONS
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        customer_id = self.request.query_params.get("customer")
+        if customer_id:
+            queryset = queryset.filter(customer_id=customer_id)
+        return queryset
 
 
 class PromotionViewSet(viewsets.ModelViewSet):

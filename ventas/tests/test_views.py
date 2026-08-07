@@ -5,6 +5,7 @@ from unittest import mock
 
 from django.core import mail
 from django.core.cache import cache
+from django.db.models import Q, Sum
 from django.test import override_settings
 from django_tenants.test.cases import TenantTestCase
 from rest_framework.test import APIClient
@@ -1240,6 +1241,285 @@ class SaleVoidAndReturnTests(TenantTestCase):
                 "refund_type": "BALANCE",
                 "items": [{"sale_detail_id": detail_id, "quantity_returned": "1"}],
             },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+
+class CreditLedgerTests(TenantTestCase):
+    """CreditLedgerService: credito/fiado y saldo a favor (Sprint 18,
+    Plan de Implementacion)."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_ventas_credit_ledger"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-ventas-credit-ledger.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.password = "ClaveSegura123"
+        cls.admin_role = Role.objects.get(name="admin")
+        cls.seller_role = Role.objects.get(name="seller")
+        cls.auditor_role = Role.objects.create(name="auditor")
+
+        cls.admin_user = User.objects.create(
+            email="admin@negocio.com", role=cls.admin_role
+        )
+        cls.admin_user.set_password(cls.password)
+        cls.admin_user.save()
+
+        cls.seller_user = User.objects.create(
+            email="vendedor@negocio.com", role=cls.seller_role
+        )
+        cls.seller_user.set_password(cls.password)
+        cls.seller_user.save()
+
+        cls.auditor_user = User.objects.create(
+            email="auditor@negocio.com", role=cls.auditor_role
+        )
+        cls.auditor_user.set_password(cls.password)
+        cls.auditor_user.save()
+
+        cls.warehouse = Warehouse.objects.create(name="Principal")
+        category = Category.objects.create(name="Ropa")
+        product = ProductVariantService.create_product(
+            product_data={
+                "type": "PRODUCT",
+                "name": "Camiseta",
+                "category": category,
+                "unit_of_measure": "UND",
+            },
+            variants_data=[{"sku": "CREDIT-SKU", "price": "20.00"}],
+        )
+        cls.variant = product.variants.first()
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    _register_counter = 0
+
+    def setUp(self):
+        cache.clear()
+        StockService.adjust_stock(
+            variant=self.variant,
+            warehouse=self.warehouse,
+            counted_quantity=20,
+            concept="ADJUSTMENT",
+            user=self.admin_user,
+        )
+        self.customer = Customer.objects.create(
+            document_type="DNI",
+            document_number=f"9{CreditLedgerTests._register_counter}",
+            name="Cliente Fiado",
+        )
+
+    def _client_as(self, user):
+        client = APIClient(HTTP_HOST=self.domain.domain)
+        login = client.post(
+            "/api/v1/auth/login/",
+            {"email": user.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def _open_session(self):
+        CreditLedgerTests._register_counter += 1
+        register = CashRegister.objects.create(
+            warehouse=self.warehouse,
+            name=f"Caja {CreditLedgerTests._register_counter}",
+        )
+        response = self._client_as(self.admin_user).post(
+            "/api/v1/ventas/cash-sessions/open/",
+            {"cash_register_id": register.id, "opening_amount": "0"},
+            format="json",
+        )
+        return response.data["id"]
+
+    def _create_sale(self, client, session_id, quantity="1", method="CREDIT_LEDGER"):
+        return client.post(
+            "/api/v1/ventas/sales/",
+            {
+                "customer_id": self.customer.id,
+                "cash_session_id": session_id,
+                "lines": [{"variant_id": self.variant.id, "quantity": quantity}],
+                "payments": [
+                    {
+                        "method": method,
+                        "amount": str(Decimal(quantity) * Decimal("20.00")),
+                    }
+                ],
+            },
+            format="json",
+        )
+
+    def test_credit_sale_writes_debt(self):
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session()
+        response = self._create_sale(client, session_id, quantity="2")
+        self.assertEqual(response.status_code, 201)
+
+        customer_response = client.get(f"/api/v1/ventas/customers/{self.customer.id}/")
+        self.assertEqual(customer_response.data["current_debt"], "40.0000")
+
+    def test_credit_sale_blocked_by_credit_limit(self):
+        self.customer.credit_limit = Decimal("30.00")
+        self.customer.save()
+
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session()
+        response = self._create_sale(client, session_id, quantity="2")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["error"]["code"], "CREDIT_LIMIT_EXCEEDED")
+
+    def test_credit_sale_within_limit_succeeds(self):
+        self.customer.credit_limit = Decimal("100.00")
+        self.customer.save()
+
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session()
+        response = self._create_sale(client, session_id, quantity="2")
+        self.assertEqual(response.status_code, 201)
+
+    def test_register_payment_reduces_debt(self):
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session()
+        self._create_sale(client, session_id, quantity="2")
+
+        response = client.post(
+            "/api/v1/ventas/customer-debt-ledger/register-payment/",
+            {
+                "customer_id": self.customer.id,
+                "amount": "15.00",
+                "description": "Abono",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["customer_current_debt"], "25.0000")
+
+    def test_balance_payment_consumes_and_depletes_balance(self):
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session()
+
+        # Genera saldo a favor: venta al contado + devolucion con refund_type=BALANCE.
+        cash_sale = self._create_sale(client, session_id, quantity="2", method="CASH")
+        detail_id = cash_sale.data["details"][0]["id"]
+        client.post(
+            "/api/v1/ventas/sale-returns/",
+            {
+                "sale_id": cash_sale.data["id"],
+                "reason": "Devolucion para generar saldo",
+                "refund_type": "BALANCE",
+                "items": [{"sale_detail_id": detail_id, "quantity_returned": "2"}],
+            },
+            format="json",
+        )
+        customer_response = client.get(f"/api/v1/ventas/customers/{self.customer.id}/")
+        self.assertEqual(customer_response.data["current_balance"], "40.0000")
+
+        # Paga otra venta con ese saldo.
+        balance_sale = self._create_sale(
+            client, session_id, quantity="1", method="BALANCE"
+        )
+        self.assertEqual(balance_sale.status_code, 201)
+
+        customer_response = client.get(f"/api/v1/ventas/customers/{self.customer.id}/")
+        self.assertEqual(customer_response.data["current_balance"], "20.0000")
+
+    def test_balance_payment_fails_if_insufficient(self):
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session()
+
+        response = self._create_sale(client, session_id, quantity="1", method="BALANCE")
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["error"]["code"], "INSUFFICIENT_BALANCE")
+
+    def test_voiding_credit_sale_reverses_debt(self):
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session()
+        sale = self._create_sale(client, session_id, quantity="2").data
+
+        client.post(
+            f"/api/v1/ventas/sales/{sale['id']}/void/",
+            {"reason": "Error de cobro"},
+            format="json",
+        )
+        customer_response = client.get(f"/api/v1/ventas/customers/{self.customer.id}/")
+        self.assertEqual(customer_response.data["current_debt"], "0.0000")
+
+    def test_ledger_sum_matches_reported_balance_after_mixed_operations(self):
+        from ventas.models import CustomerBalanceLedger, CustomerDebtLedger
+        from ventas.services import CreditLedgerService
+
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session()
+
+        # Venta a credito, abono parcial, venta al contado devuelta a saldo,
+        # y esa venta a credito anulada -todo intercalado.
+        credit_sale = self._create_sale(client, session_id, quantity="3").data
+        client.post(
+            "/api/v1/ventas/customer-debt-ledger/register-payment/",
+            {"customer_id": self.customer.id, "amount": "10.00"},
+            format="json",
+        )
+        cash_sale = self._create_sale(
+            client, session_id, quantity="1", method="CASH"
+        ).data
+        client.post(
+            "/api/v1/ventas/sale-returns/",
+            {
+                "sale_id": cash_sale["id"],
+                "refund_type": "BALANCE",
+                "items": [
+                    {
+                        "sale_detail_id": cash_sale["details"][0]["id"],
+                        "quantity_returned": "1",
+                    }
+                ],
+            },
+            format="json",
+        )
+        client.post(
+            f"/api/v1/ventas/sales/{credit_sale['id']}/void/",
+            {"reason": "Cliente se arrepintio"},
+            format="json",
+        )
+
+        expected_debt = CustomerDebtLedger.objects.filter(
+            customer=self.customer
+        ).aggregate(
+            debit=Sum("amount", filter=Q(type="DEBIT")),
+            credit=Sum("amount", filter=Q(type="CREDIT")),
+        )
+        expected_balance = CustomerBalanceLedger.objects.filter(
+            customer=self.customer
+        ).aggregate(
+            credit=Sum("amount", filter=Q(type="CREDIT")),
+            debit=Sum("amount", filter=Q(type="DEBIT")),
+        )
+        self.assertEqual(
+            CreditLedgerService.get_debt(self.customer),
+            (expected_debt["debit"] or Decimal("0"))
+            - (expected_debt["credit"] or Decimal("0")),
+        )
+        self.assertEqual(
+            CreditLedgerService.get_balance(self.customer),
+            (expected_balance["credit"] or Decimal("0"))
+            - (expected_balance["debit"] or Decimal("0")),
+        )
+
+    def test_auditor_cannot_register_payment(self):
+        response = self._client_as(self.auditor_user).post(
+            "/api/v1/ventas/customer-debt-ledger/register-payment/",
+            {"customer_id": self.customer.id, "amount": "10.00"},
             format="json",
         )
         self.assertEqual(response.status_code, 403)

@@ -22,6 +22,16 @@ router.register(
 )
 router.register("ventas/sales", views.SaleViewSet, basename="sale")
 router.register("ventas/sale-returns", views.SaleReturnViewSet, basename="sale-return")
+router.register(
+    "ventas/customer-debt-ledger",
+    views.CustomerDebtLedgerViewSet,
+    basename="customer-debt-ledger",
+)
+router.register(
+    "ventas/customer-balance-ledger",
+    views.CustomerBalanceLedgerViewSet,
+    basename="customer-balance-ledger",
+)
 
 urlpatterns = [
     path(

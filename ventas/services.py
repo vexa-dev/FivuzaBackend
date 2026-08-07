@@ -16,6 +16,7 @@ from ventas.models import (
     CashRegister,
     CashSession,
     CustomerBalanceLedger,
+    CustomerDebtLedger,
     Promotion,
     Sale,
     SaleDetail,
@@ -615,6 +616,19 @@ class SaleService:
             SalePayment.objects.create(
                 sale=sale, method=payment["method"], amount=payment["amount"]
             )
+            # CreditLedgerService.register_*() puede levantar
+            # CreditLimitExceededError/InsufficientBalanceError -al estar
+            # todo dentro de esta misma transaccion atomica, el rollback
+            # deshace tambien el Sale/SaleDetail/movimiento de stock ya
+            # creados en este mismo request (Sprint 19).
+            if payment["method"] == "CREDIT_LEDGER":
+                CreditLedgerService.register_credit_sale(
+                    customer=customer, sale=sale, amount=payment["amount"]
+                )
+            elif payment["method"] == "BALANCE":
+                CreditLedgerService.register_balance_use(
+                    customer=customer, sale=sale, amount=payment["amount"]
+                )
 
         from usuarios.services import AuditLogService
 
@@ -642,13 +656,10 @@ class SaleService:
         abierta (es "deshacer algo que acaba de pasar", no un flujo que
         pueda ocurrir dias despues) y reingresa el 100% del stock.
 
-        La reversa de CREDIT_LEDGER/BALANCE queda deferida a proposito: hoy
-        create_sale() persiste esos SalePayment sin escribir todavia en
-        CustomerDebtLedger/CustomerBalanceLedger (ver su propio docstring,
-        "sin tocar esos libros todavia" -CreditLedgerService llega recien en
-        el Sprint 19). Revertir un libro que nunca se escribio generaria un
-        movimiento fantasma; solo se revierte lo que SI quedo registrado:
-        el efectivo, via CashMovement."""
+        Desde el Sprint 19 tambien revierte CREDIT_LEDGER (perdona la deuda)
+        y BALANCE (devuelve el saldo a favor consumido) via
+        CreditLedgerService -antes quedaba deferido porque esos libros ni
+        se escribian todavia al vender."""
         if sale.status != "COMPLETED":
             raise SaleNotCompletedError()
         if sale.returns.exists():
@@ -693,6 +704,22 @@ class SaleService:
                 amount=cash_amount,
                 user=user,
                 reason=f"Anulacion de venta {sale.invoice_number}",
+            )
+
+        credit_amount = sale.payments.filter(method="CREDIT_LEDGER").aggregate(
+            total=Sum("amount")
+        )["total"] or Decimal("0")
+        if credit_amount > 0:
+            CreditLedgerService.reverse_credit_sale(
+                customer=sale.customer, sale=sale, amount=credit_amount
+            )
+
+        balance_amount = sale.payments.filter(method="BALANCE").aggregate(
+            total=Sum("amount")
+        )["total"] or Decimal("0")
+        if balance_amount > 0:
+            CreditLedgerService.reverse_balance_use(
+                customer=sale.customer, sale=sale, amount=balance_amount
             )
 
         sale.status = "VOIDED"
@@ -921,3 +948,142 @@ class ReturnService:
         )
 
         return sale_return
+
+
+class CreditLimitExceededError(APIException):
+    status_code = 409
+    default_code = "CREDIT_LIMIT_EXCEEDED"
+
+    def __init__(
+        self, *, current_debt: Decimal, credit_limit: Decimal, requested: Decimal
+    ):
+        super().__init__(
+            {
+                "error": {
+                    "code": "CREDIT_LIMIT_EXCEEDED",
+                    "message": (
+                        f"El cliente supera su limite de credito: deuda actual "
+                        f"{current_debt}, limite {credit_limit}, solicitado {requested}."
+                    ),
+                }
+            }
+        )
+
+
+class InsufficientBalanceError(APIException):
+    status_code = 409
+    default_code = "INSUFFICIENT_BALANCE"
+
+    def __init__(self, *, available: Decimal, requested: Decimal):
+        super().__init__(
+            {
+                "error": {
+                    "code": "INSUFFICIENT_BALANCE",
+                    "message": (
+                        f"El cliente no tiene suficiente saldo a favor: "
+                        f"disponible {available}, solicitado {requested}."
+                    ),
+                }
+            }
+        )
+
+
+class CreditLedgerService:
+    """Unico punto de entrada a CustomerDebtLedger/CustomerBalanceLedger
+    (Sprint 19, Plan de Implementacion): el saldo nunca se calcula ni se
+    escribe fuera de aca -ni SaleService.create_sale() ni SaleService.
+    void_sale() tocan esos modelos directamente, todos pasan por estos
+    metodos. Es lo que faltaba desde el Sprint 18 (ver docstring de
+    void_sale): ahora que este servicio existe, la anulacion de una venta a
+    credito o pagada con saldo a favor si revierte esos libros."""
+
+    @staticmethod
+    def get_debt(customer) -> Decimal:
+        totals = CustomerDebtLedger.objects.filter(customer=customer).aggregate(
+            debit=Sum("amount", filter=Q(type="DEBIT")),
+            credit=Sum("amount", filter=Q(type="CREDIT")),
+        )
+        return (totals["debit"] or Decimal("0")) - (totals["credit"] or Decimal("0"))
+
+    @staticmethod
+    def get_balance(customer) -> Decimal:
+        totals = CustomerBalanceLedger.objects.filter(customer=customer).aggregate(
+            credit=Sum("amount", filter=Q(type="CREDIT")),
+            debit=Sum("amount", filter=Q(type="DEBIT")),
+        )
+        return (totals["credit"] or Decimal("0")) - (totals["debit"] or Decimal("0"))
+
+    @staticmethod
+    def register_credit_sale(
+        *, customer, sale: Sale, amount: Decimal
+    ) -> CustomerDebtLedger:
+        current_debt = CreditLedgerService.get_debt(customer)
+        if (
+            customer.credit_limit is not None
+            and current_debt + amount > customer.credit_limit
+        ):
+            raise CreditLimitExceededError(
+                current_debt=current_debt,
+                credit_limit=customer.credit_limit,
+                requested=amount,
+            )
+        return CustomerDebtLedger.objects.create(
+            customer=customer,
+            sale=sale,
+            type="DEBIT",
+            amount=amount,
+            description=f"Venta a credito {sale.invoice_number}",
+        )
+
+    @staticmethod
+    def register_balance_use(
+        *, customer, sale: Sale, amount: Decimal
+    ) -> CustomerBalanceLedger:
+        current_balance = CreditLedgerService.get_balance(customer)
+        if amount > current_balance:
+            raise InsufficientBalanceError(available=current_balance, requested=amount)
+        return CustomerBalanceLedger.objects.create(
+            customer=customer,
+            sale=sale,
+            type="DEBIT",
+            amount=amount,
+            description=f"Pago con saldo a favor, venta {sale.invoice_number}",
+        )
+
+    @staticmethod
+    def reverse_credit_sale(
+        *, customer, sale: Sale, amount: Decimal
+    ) -> CustomerDebtLedger:
+        """Anulacion de una venta a credito (SaleService.void_sale): el saldo
+        adeudado por esa venta se perdona, nunca se borra el DEBIT original
+        -mismo principio de "nunca editar/borrar" que el resto del proyecto."""
+        return CustomerDebtLedger.objects.create(
+            customer=customer,
+            sale=sale,
+            type="CREDIT",
+            amount=amount,
+            description=f"Anulacion de venta {sale.invoice_number}",
+        )
+
+    @staticmethod
+    def reverse_balance_use(
+        *, customer, sale: Sale, amount: Decimal
+    ) -> CustomerBalanceLedger:
+        return CustomerBalanceLedger.objects.create(
+            customer=customer,
+            sale=sale,
+            type="CREDIT",
+            amount=amount,
+            description=f"Anulacion de venta {sale.invoice_number}",
+        )
+
+    @staticmethod
+    def register_payment(
+        *, customer, amount: Decimal, description: str = ""
+    ) -> CustomerDebtLedger:
+        return CustomerDebtLedger.objects.create(
+            customer=customer,
+            type="CREDIT",
+            amount=amount,
+            description=description or "Abono de fiado",
+        )
