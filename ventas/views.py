@@ -1,4 +1,5 @@
 from django.db import models
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
@@ -33,7 +34,7 @@ from ventas.serializers import (
     SaleCreateSerializer,
     SaleSerializer,
 )
-from ventas.services import POSCatalogService
+from ventas.services import POSCatalogService, ReceiptService, SaleNotFoundError
 
 # Lectura: cualquier tenant.users autenticado con el modulo de caja activo
 # (Especificacion de API §2.3: sin permiso de escritura listado = "-" =
@@ -269,7 +270,7 @@ class SaleViewSet(
         return SaleSerializer
 
     def get_permissions(self):
-        if self.action in ("list", "retrieve"):
+        if self.action in ("list", "retrieve", "receipt"):
             return [permission() for permission in _SALES_READ_PERMISSIONS]
         return [permission() for permission in _SALES_WRITE_PERMISSIONS]
 
@@ -298,6 +299,20 @@ class SaleViewSet(
         serializer.is_valid(raise_exception=True)
         sale = serializer.save()
         return Response(SaleSerializer(sale).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["get"], url_path="receipt")
+    def receipt(self, request, pk=None):
+        try:
+            sale = (
+                self.get_queryset().prefetch_related("details", "payments").get(pk=pk)
+            )
+        except Sale.DoesNotExist as exc:
+            raise SaleNotFoundError() from exc
+
+        width_mm = request.query_params.get("width_mm")
+        width_mm = int(width_mm) if width_mm in ("58", "80") else 58
+        html = ReceiptService.render_html(sale, request.tenant, width_mm=width_mm)
+        return HttpResponse(html, content_type="text/html")
 
 
 class POSCatalogView(APIView):
