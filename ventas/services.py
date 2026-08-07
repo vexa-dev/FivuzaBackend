@@ -3,7 +3,7 @@ from decimal import Decimal
 
 import boto3
 from django.conf import settings
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Q, Sum
 from django.template.loader import render_to_string
 from django.utils import timezone
@@ -510,6 +510,7 @@ class SaleService:
         lines: list[dict],
         payments: list[dict],
         client_side_uuid: str | None = None,
+        allow_oversell: bool = False,
         at=None,
     ) -> Sale:
         if cash_session.status != "OPEN":
@@ -521,6 +522,7 @@ class SaleService:
         subtotal = Decimal("0")
         discount_total = Decimal("0")
         prepared_lines = []
+        oversold_variant_ids: list[int] = []
         for line in lines:
             try:
                 variant = ProductVariant.objects.select_related("product").get(
@@ -543,10 +545,18 @@ class SaleService:
                 .first()
             )
             current_quantity = stock.quantity if stock else Decimal("0")
-            if current_quantity < quantity:
-                raise InsufficientStockError(
-                    sku=variant.sku, available=current_quantity, requested=quantity
-                )
+            oversold = current_quantity < quantity
+            if oversold:
+                # Sprint 20: una venta sincronizada desde el POS offline no
+                # se rechaza por falta de stock -el producto ya salio
+                # fisicamente de la tienda cuando el cajero la cobro sin
+                # conexion. Se registra igual y el movimiento queda marcado
+                # (oversell_flag) para que el dueño la revise despues.
+                if not allow_oversell:
+                    raise InsufficientStockError(
+                        sku=variant.sku, available=current_quantity, requested=quantity
+                    )
+                oversold_variant_ids.append(variant.id)
 
             unit_price = variant.price
             line_subtotal = unit_price * quantity
@@ -567,6 +577,7 @@ class SaleService:
                     "discount_amount": discount_amount,
                     "subtotal": line_subtotal - discount_amount,
                     "current_quantity": current_quantity,
+                    "oversold": oversold,
                 }
             )
             subtotal += line_subtotal
@@ -610,6 +621,7 @@ class SaleService:
                 counted_quantity=prepared["current_quantity"] - prepared["quantity"],
                 concept="SALE",
                 user=user,
+                oversell_flag=prepared["oversold"],
             )
 
         for payment in payments:
@@ -643,6 +655,12 @@ class SaleService:
                 "lines": len(prepared_lines),
             },
         )
+
+        # Atributo transitorio (no persiste en el modelo): SaleSyncService lo
+        # lee para armar el array "conflicts" de la respuesta de /sales/sync/
+        # sin cambiar la firma de retorno que ya usan el endpoint normal de
+        # creacion y todos sus tests existentes.
+        sale.oversold_variant_ids = oversold_variant_ids
 
         return sale
 
@@ -1087,3 +1105,83 @@ class CreditLedgerService:
             amount=amount,
             description=description or "Abono de fiado",
         )
+
+
+class SaleSyncService:
+    """POST /ventas/sales/sync/ (Sprint 20, API Spec §4.2): procesa el lote
+    de ventas que el POS acumulo sin conexion. Idempotente por
+    client_side_uuid -reenviar el mismo lote completo (ej. la app reintenta
+    porque el request anterior se corto a mitad de la respuesta) nunca
+    duplica una venta ni descuenta stock una segunda vez. Cada venta del
+    lote es su propia unidad: create_sale() ya es @transaction.atomic por
+    venta, asi que una falla en una no revierte ni bloquea las demas."""
+
+    @staticmethod
+    def sync_batch(*, sales: list[dict], user) -> dict:
+        synced = []
+        conflicts = []
+
+        for sale_data in sales:
+            client_side_uuid = sale_data["client_side_uuid"]
+            existing = Sale.objects.filter(client_side_uuid=client_side_uuid).first()
+            if existing is not None:
+                synced.append(
+                    {
+                        "client_side_uuid": client_side_uuid,
+                        "status": "DUPLICATE_IGNORED",
+                        "sale_id": existing.id,
+                    }
+                )
+                continue
+
+            try:
+                sale = SaleService.create_sale(
+                    customer=sale_data["customer"],
+                    cash_session=sale_data["cash_session"],
+                    user=user,
+                    lines=sale_data["lines"],
+                    payments=sale_data["payments"],
+                    client_side_uuid=client_side_uuid,
+                    allow_oversell=True,
+                )
+            except IntegrityError:
+                # Dos sincronizaciones casi simultaneas del mismo
+                # client_side_uuid (ej. reintento de red del mismo device) -
+                # el chequeo de arriba no alcanzo a verla, pero el
+                # constraint unico de la tabla si.
+                existing = Sale.objects.get(client_side_uuid=client_side_uuid)
+                synced.append(
+                    {
+                        "client_side_uuid": client_side_uuid,
+                        "status": "DUPLICATE_IGNORED",
+                        "sale_id": existing.id,
+                    }
+                )
+                continue
+            except APIException as exc:
+                synced.append(
+                    {
+                        "client_side_uuid": client_side_uuid,
+                        "status": "FAILED",
+                        "error": exc.detail,
+                    }
+                )
+                continue
+
+            synced.append(
+                {
+                    "client_side_uuid": client_side_uuid,
+                    "status": "CREATED",
+                    "sale_id": sale.id,
+                }
+            )
+            for variant_id in sale.oversold_variant_ids:
+                conflicts.append(
+                    {
+                        "client_side_uuid": client_side_uuid,
+                        "variant_id": variant_id,
+                        "oversell_flag": True,
+                    }
+                )
+
+        return {"synced": synced, "conflicts": conflicts}

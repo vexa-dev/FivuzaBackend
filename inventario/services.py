@@ -130,6 +130,7 @@ class StockService:
         counted_quantity: Decimal,
         concept: str,
         user,
+        oversell_flag: bool = False,
     ) -> InventoryMovement:
         # get_or_create resuelve la carrera de "primer ajuste sobre esta
         # variante+almacen" (reintenta el get si otro request gano la
@@ -155,6 +156,11 @@ class StockService:
             quantity=abs(delta),
             concept=concept,
             resulting_balance=counted_quantity,
+            # Sprint 20: una venta sincronizada offline con stock ya
+            # insuficiente igual se registra (el producto ya salio
+            # fisicamente de la tienda) -oversell_flag marca el movimiento
+            # para revision del dueño en vez de bloquear la venta.
+            oversell_flag=oversell_flag,
         )
         stock.quantity = counted_quantity
         stock.save(update_fields=["quantity"])

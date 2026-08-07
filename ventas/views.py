@@ -41,6 +41,7 @@ from ventas.serializers import (
     SaleReturnCreateSerializer,
     SaleReturnSerializer,
     SaleSerializer,
+    SaleSyncSerializer,
     SaleVoidSerializer,
 )
 from ventas.services import (
@@ -340,6 +341,22 @@ class PromotionProductViewSet(viewsets.ModelViewSet):
         if promotion_id:
             queryset = queryset.filter(promotion_id=promotion_id)
         return queryset
+
+
+class SaleSyncView(APIView):
+    """POST -> sincroniza un lote de ventas offline (Especificacion de API
+    §4.2, Sprint 20). Deliberadamente NO es una @action de SaleViewSet -es
+    una URL de coleccion propia (ventas/sales/sync/), registrada antes que
+    el router, mismo motivo que ventas/cash-sessions/open/ (ver comentario
+    al pie de este archivo de urls.py)."""
+
+    permission_classes = _SALES_WRITE_PERMISSIONS
+
+    def post(self, request):
+        serializer = SaleSyncSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        result = serializer.save()
+        return Response(result)
 
 
 class SaleViewSet(
