@@ -1761,3 +1761,67 @@ class SaleSyncTests(TenantTestCase):
             "/api/v1/ventas/sales/sync/", {"sales": []}, format="json"
         )
         self.assertEqual(response.status_code, 400)
+
+    def test_sync_two_devices_same_variant_offline_flags_the_second(self):
+        # Dos tablets vendiendo la misma variante sin conexion, cada una sin
+        # saber lo que la otra vendio -al sincronizar juntas en el mismo
+        # lote, sync_batch() las procesa en orden y solo la que ya no
+        # alcanza queda marcada con oversell_flag (Sprint 21, TRD §7.2).
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session()
+
+        response = client.post(
+            "/api/v1/ventas/sales/sync/",
+            {
+                "sales": [
+                    self._sale_payload("uuid-device-a", session_id, quantity="3"),
+                    self._sale_payload("uuid-device-b", session_id, quantity="3"),
+                ]
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        statuses = {
+            row["client_side_uuid"]: row["status"] for row in response.data["synced"]
+        }
+        self.assertEqual(
+            statuses, {"uuid-device-a": "CREATED", "uuid-device-b": "CREATED"}
+        )
+        conflict_uuids = {row["client_side_uuid"] for row in response.data["conflicts"]}
+        self.assertEqual(conflict_uuids, {"uuid-device-b"})
+        # 5 - 3 - 3 = -1: ambas ventas se registraron, ninguna se perdio.
+        self.assertEqual(self._stock_quantity(), Decimal("-1"))
+
+    def test_sync_large_batch_of_over_hundred_sales_deduplicates_correctly(self):
+        # Cola con volumen alto (100+ ventas acumuladas durante un corte
+        # largo, Sprint 21 TRD §7.2). Se reenvia el mismo lote dos veces
+        # -como haria el cliente si la respuesta de la primera sincronizacion
+        # se perdio a mitad de camino- y no debe duplicar ninguna.
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session()
+        StockService.adjust_stock(
+            variant=self.variant,
+            warehouse=self.warehouse,
+            counted_quantity=1000,
+            concept="ADJUSTMENT",
+            user=self.admin_user,
+        )
+        payload = {
+            "sales": [
+                self._sale_payload(f"uuid-bulk-{i}", session_id) for i in range(120)
+            ]
+        }
+
+        first = client.post("/api/v1/ventas/sales/sync/", payload, format="json")
+        self.assertEqual(first.status_code, 200)
+        first_statuses = [row["status"] for row in first.data["synced"]]
+        self.assertEqual(first_statuses, ["CREATED"] * 120)
+
+        second = client.post("/api/v1/ventas/sales/sync/", payload, format="json")
+        self.assertEqual(second.status_code, 200)
+        second_statuses = [row["status"] for row in second.data["synced"]]
+        self.assertEqual(second_statuses, ["DUPLICATE_IGNORED"] * 120)
+
+        self.assertEqual(
+            Sale.objects.filter(client_side_uuid__startswith="uuid-bulk-").count(), 120
+        )

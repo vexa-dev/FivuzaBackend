@@ -256,7 +256,13 @@ class StockViewSet(viewsets.ReadOnlyModelViewSet):
 
 class InventoryMovementViewSet(viewsets.ReadOnlyModelViewSet):
     """Kardex -solo lectura, filtrable por variante/almacen/rango de fechas
-    (API Spec §4.6). Se escribe unicamente via StockService."""
+    (API Spec §4.6). Se escribe unicamente via StockService.
+
+    Sprint 21: `oversell_only=true` filtra a los movimientos que una venta
+    offline registro pese a no haber stock suficiente (oversell_flag=True,
+    Sprint 20) -es el "reporte" que el dueño usa para revisar y ajustar
+    inventario tras un episodio sin conexion. No se creo un endpoint nuevo:
+    es el mismo Kardex, con un filtro mas, igual que variant/warehouse."""
 
     queryset = InventoryMovement.objects.select_related("variant", "warehouse", "user")
     serializer_class = InventoryMovementSerializer
@@ -276,6 +282,8 @@ class InventoryMovementViewSet(viewsets.ReadOnlyModelViewSet):
         date_to = self.request.query_params.get("date_to")
         if date_to:
             queryset = queryset.filter(created_at__date__lte=date_to)
+        if self.request.query_params.get("oversell_only") == "true":
+            queryset = queryset.filter(oversell_flag=True)
         return queryset
 
 
