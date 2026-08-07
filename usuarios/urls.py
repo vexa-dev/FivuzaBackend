@@ -20,6 +20,17 @@ router.register(
     "usuarios/user-permissions", views.UserPermissionViewSet, basename="user-permission"
 )
 router.register("usuarios/audit-logs", views.AuditLogViewSet, basename="audit-log")
+router.register("usuarios/employees", views.EmployeeViewSet, basename="employee")
+router.register(
+    "usuarios/employee-schedules",
+    views.EmployeeScheduleViewSet,
+    basename="employee-schedule",
+)
+router.register(
+    "usuarios/employee-attendance",
+    views.EmployeeAttendanceViewSet,
+    basename="employee-attendance",
+)
 
 urlpatterns = [
     # Especificacion de API, seccion 3.1: /api/v1/auth/... (flujo de

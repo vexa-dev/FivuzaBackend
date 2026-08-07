@@ -1,14 +1,21 @@
 # Pruebas de modelos: validaciones de campo, constraints, métodos del modelo.
-from datetime import timedelta
+from datetime import datetime, timedelta
+from datetime import timezone as dt_timezone
+from decimal import Decimal
+from unittest.mock import patch
 
 from django.core import mail
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 from django_tenants.test.cases import TenantTestCase
+from rest_framework.exceptions import APIException
 
 from core.models import TenantSettings
+from inventario.models import Warehouse
 from usuarios.models import (
     AuditLog,
+    Employee,
+    EmployeeSchedule,
     PasswordResetToken,
     Permission,
     Role,
@@ -17,6 +24,7 @@ from usuarios.models import (
     UserPermission,
 )
 from usuarios.services import (
+    AttendanceService,
     AuditLogService,
     PasswordResetService,
     PermissionService,
@@ -300,3 +308,129 @@ class PasswordResetServiceTests(TenantTestCase):
             PasswordResetService.confirm_reset(
                 token="token-inexistente", new_password="ClaveNueva456"
             )
+
+
+class AttendanceServiceTests(TenantTestCase):
+    """clock_in/clock_out y calculo de horas trabajadas (Sprint 22, Esquema
+    Backend §4.2). Se fija timezone.now() con mock.patch para poder probar
+    ON_TIME/LATE de forma determinista contra un horario conocido -sin esto,
+    el resultado dependeria de la hora real en la que corre la suite."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_attendance_service"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-attendance-service.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        role = Role.objects.create(name="admin", is_system_default=True)
+        cls.user = User.objects.create(email="admin@negocio.com", role=role)
+        cls.warehouse = Warehouse.objects.create(name="Principal")
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    def setUp(self):
+        self.employee = Employee.objects.create(
+            full_name="Juan Perez",
+            document_number="45678912",
+            position="Almacenero",
+            warehouse=self.warehouse,
+            salary_type="MONTHLY",
+            salary_amount="1500.00",
+            hire_date=timezone.now().date(),
+        )
+
+    def _monday(self, hour, minute):
+        # 2026-08-03 es lunes -fecha arbitraria, solo importa el dia de la semana.
+        return datetime(2026, 8, 3, hour, minute, tzinfo=dt_timezone.utc)
+
+    def test_clock_in_on_time_within_schedule(self):
+        EmployeeSchedule.objects.create(
+            employee=self.employee,
+            day_of_week="MONDAY",
+            start_time="09:00",
+            end_time="17:00",
+        )
+        with patch("usuarios.services.timezone.now", return_value=self._monday(8, 55)):
+            attendance = AttendanceService.clock_in(
+                employee=self.employee, warehouse=self.warehouse, user=self.user
+            )
+        self.assertEqual(attendance.status, "ON_TIME")
+
+    def test_clock_in_late_after_schedule_start(self):
+        EmployeeSchedule.objects.create(
+            employee=self.employee,
+            day_of_week="MONDAY",
+            start_time="09:00",
+            end_time="17:00",
+        )
+        with patch("usuarios.services.timezone.now", return_value=self._monday(9, 5)):
+            attendance = AttendanceService.clock_in(
+                employee=self.employee, warehouse=self.warehouse, user=self.user
+            )
+        self.assertEqual(attendance.status, "LATE")
+
+    def test_clock_in_without_active_schedule_defaults_to_on_time(self):
+        # Sin EmployeeSchedule activo para ese dia, no hay contra que
+        # comparar -no se penaliza al trabajador por la ausencia de horario.
+        with patch("usuarios.services.timezone.now", return_value=self._monday(23, 0)):
+            attendance = AttendanceService.clock_in(
+                employee=self.employee, warehouse=self.warehouse, user=self.user
+            )
+        self.assertEqual(attendance.status, "ON_TIME")
+
+    def test_clock_in_twice_without_clock_out_raises(self):
+        AttendanceService.clock_in(
+            employee=self.employee, warehouse=self.warehouse, user=self.user
+        )
+        with self.assertRaises(APIException) as ctx:
+            AttendanceService.clock_in(
+                employee=self.employee, warehouse=self.warehouse, user=self.user
+            )
+        self.assertEqual(ctx.exception.status_code, 409)
+
+    def test_clock_out_closes_open_attendance(self):
+        attendance = AttendanceService.clock_in(
+            employee=self.employee, warehouse=self.warehouse, user=self.user
+        )
+        closed = AttendanceService.clock_out(attendance=attendance, user=self.user)
+        self.assertIsNotNone(closed.check_out)
+
+    def test_clock_out_already_closed_raises(self):
+        attendance = AttendanceService.clock_in(
+            employee=self.employee, warehouse=self.warehouse, user=self.user
+        )
+        AttendanceService.clock_out(attendance=attendance, user=self.user)
+        with self.assertRaises(APIException) as ctx:
+            AttendanceService.clock_out(attendance=attendance, user=self.user)
+        self.assertEqual(ctx.exception.status_code, 409)
+
+    def test_worked_hours_across_midnight_night_shift(self):
+        # Entra 22:00 lunes, sale 06:00 martes -turno nocturno que cruza
+        # medianoche (Sprint 22, Definicion de Hecho).
+        check_in_at = self._monday(22, 0)
+        check_out_at = datetime(2026, 8, 4, 6, 0, tzinfo=dt_timezone.utc)
+        with patch("usuarios.services.timezone.now", return_value=check_in_at):
+            attendance = AttendanceService.clock_in(
+                employee=self.employee, warehouse=self.warehouse, user=self.user
+            )
+        with patch("usuarios.services.timezone.now", return_value=check_out_at):
+            attendance = AttendanceService.clock_out(
+                attendance=attendance, user=self.user
+            )
+        self.assertEqual(
+            AttendanceService.calculate_worked_hours(attendance), Decimal("8.00")
+        )
+
+    def test_worked_hours_is_none_while_still_open(self):
+        attendance = AttendanceService.clock_in(
+            employee=self.employee, warehouse=self.warehouse, user=self.user
+        )
+        self.assertIsNone(AttendanceService.calculate_worked_hours(attendance))

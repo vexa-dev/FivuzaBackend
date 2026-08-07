@@ -3,6 +3,7 @@ from django_tenants.test.cases import TenantTestCase
 from rest_framework.test import APIClient
 
 from core.models import TenantSettings
+from inventario.models import Warehouse
 from usuarios.models import Permission, Role, User
 
 
@@ -362,3 +363,147 @@ class PasswordResetEndpointsTests(TenantTestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 400)
+
+
+class EmployeeEndpointsTests(TenantTestCase):
+    """CRUD de empleados/horarios + clock-in/clock-out (Sprint 22): gateado
+    por RequiresFeature('HAS_HR_MODULE') y HR_MANAGE, igual que compras se
+    gatea por HAS_PURCHASES_MODULE + PURCHASES_MANAGE."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_usuarios_employees_views"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-usuarios-employees-views.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.password = "ClaveSegura123"
+        cls.admin_role = Role.objects.get(name="admin")
+        cls.seller_role = Role.objects.get(name="seller")
+
+        cls.admin_user = User.objects.create(
+            email="admin@negocio.com", role=cls.admin_role
+        )
+        cls.admin_user.set_password(cls.password)
+        cls.admin_user.save()
+
+        cls.seller_user = User.objects.create(
+            email="vendedor@negocio.com", role=cls.seller_role
+        )
+        cls.seller_user.set_password(cls.password)
+        cls.seller_user.save()
+
+        cls.warehouse = Warehouse.objects.create(name="Principal")
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    def setUp(self):
+        from django.core.cache import cache
+
+        cache.clear()
+        settings = TenantSettings.objects.get(tenant=self.tenant)
+        settings.hr_module_enabled = True
+        settings.save(update_fields=["hr_module_enabled"])
+
+    def _client_as(self, user):
+        client = APIClient(HTTP_HOST=self.domain.domain)
+        login = client.post(
+            "/api/v1/auth/login/",
+            {"email": user.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def _create_employee(self, client, document_number="12345678"):
+        response = client.post(
+            "/api/v1/usuarios/employees/",
+            {
+                "full_name": "Maria Lopez",
+                "document_number": document_number,
+                "position": "Vendedora",
+                "warehouse": self.warehouse.id,
+                "salary_type": "MONTHLY",
+                "salary_amount": "1800.00",
+                "hire_date": "2026-01-15",
+            },
+            format="json",
+        )
+        return response
+
+    def test_hr_module_blocked_by_default(self):
+        # hr_module_enabled=False es el default del modelo -se apaga aqui
+        # para probar el otro lado del flag (setUp lo prende para el resto
+        # de los tests de esta clase).
+        settings = TenantSettings.objects.get(tenant=self.tenant)
+        settings.hr_module_enabled = False
+        settings.save(update_fields=["hr_module_enabled"])
+
+        response = self._client_as(self.admin_user).get("/api/v1/usuarios/employees/")
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data["code"], "MODULE_DISABLED")
+
+    def test_seller_cannot_access_employees(self):
+        response = self._client_as(self.seller_user).get("/api/v1/usuarios/employees/")
+        self.assertEqual(response.status_code, 403)
+
+    def test_admin_creates_employee(self):
+        response = self._create_employee(self._client_as(self.admin_user))
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["full_name"], "Maria Lopez")
+
+    def test_admin_creates_schedule_for_employee(self):
+        client = self._client_as(self.admin_user)
+        employee_id = self._create_employee(client).data["id"]
+
+        response = client.post(
+            "/api/v1/usuarios/employee-schedules/",
+            {
+                "employee": employee_id,
+                "day_of_week": "MONDAY",
+                "start_time": "09:00",
+                "end_time": "17:00",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+
+    def test_clock_in_and_clock_out_flow(self):
+        client = self._client_as(self.admin_user)
+        employee_id = self._create_employee(client).data["id"]
+
+        clock_in = client.post(
+            "/api/v1/usuarios/employee-attendance/clock-in/",
+            {"employee_id": employee_id, "warehouse_id": self.warehouse.id},
+            format="json",
+        )
+        self.assertEqual(clock_in.status_code, 201)
+        self.assertIn(clock_in.data["status"], ["ON_TIME", "LATE"])
+
+        attendance_id = clock_in.data["id"]
+        clock_out = client.post(
+            f"/api/v1/usuarios/employee-attendance/{attendance_id}/clock-out/"
+        )
+        self.assertEqual(clock_out.status_code, 200)
+        self.assertIsNotNone(clock_out.data["check_out"])
+
+    def test_clock_in_twice_without_clock_out_returns_409(self):
+        client = self._client_as(self.admin_user)
+        employee_id = self._create_employee(client).data["id"]
+        payload = {"employee_id": employee_id, "warehouse_id": self.warehouse.id}
+
+        client.post(
+            "/api/v1/usuarios/employee-attendance/clock-in/", payload, format="json"
+        )
+        second = client.post(
+            "/api/v1/usuarios/employee-attendance/clock-in/", payload, format="json"
+        )
+        self.assertEqual(second.status_code, 409)
+        self.assertEqual(second.data["error"]["code"], "OPEN_ATTENDANCE_EXISTS")

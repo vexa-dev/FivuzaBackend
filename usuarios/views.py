@@ -1,7 +1,8 @@
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
-from rest_framework import status, viewsets
+from rest_framework import mixins, status, viewsets
+from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -9,8 +10,12 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from core.permissions import RequiresFeature, TenantNotCanceled, TenantNotSuspended
 from usuarios.models import (
     AuditLog,
+    Employee,
+    EmployeeAttendance,
+    EmployeeSchedule,
     Permission,
     Role,
     RolePermission,
@@ -21,6 +26,10 @@ from usuarios.models import (
 from usuarios.permissions import HasModulePermission
 from usuarios.serializers import (
     AuditLogSerializer,
+    ClockInSerializer,
+    EmployeeAttendanceSerializer,
+    EmployeeScheduleSerializer,
+    EmployeeSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
     PermissionSerializer,
@@ -32,11 +41,20 @@ from usuarios.serializers import (
     UserSerializer,
 )
 from usuarios.services import (
+    AttendanceService,
     AuditLogService,
     PasswordResetService,
     PermissionService,
     RoleService,
 )
+
+_HR_PERMISSIONS = [
+    IsAuthenticated,
+    TenantNotSuspended,
+    TenantNotCanceled,
+    RequiresFeature("HAS_HR_MODULE"),
+    HasModulePermission("HR_MANAGE"),
+]
 
 
 class TenantUserLoginView(APIView):
@@ -219,3 +237,94 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = AuditLog.objects.all().order_by("-created_at")
     serializer_class = AuditLogSerializer
     permission_classes = [IsAuthenticated, HasModulePermission("USERS_VIEW_AUDIT")]
+
+
+class EmployeeViewSet(viewsets.ModelViewSet):
+    """Ficha de trabajador (Sprint 22). Gateado por HAS_HR_MODULE ademas de
+    HR_MANAGE -a diferencia de compras (activo por defecto), RRHH arranca
+    apagado (tenant_settings.hr_module_enabled=False), asi que el modulo
+    completo esta oculto hasta que el negocio lo activa."""
+
+    queryset = Employee.objects.select_related("user", "warehouse")
+    serializer_class = EmployeeSerializer
+    permission_classes = _HR_PERMISSIONS
+
+    def get_queryset(self):
+        queryset = super().get_queryset().order_by("full_name")
+        warehouse_id = self.request.query_params.get("warehouse")
+        if warehouse_id:
+            queryset = queryset.filter(warehouse_id=warehouse_id)
+        search = self.request.query_params.get("search")
+        if search:
+            queryset = queryset.filter(full_name__icontains=search)
+        return queryset
+
+    def perform_destroy(self, instance):
+        instance.deleted_at = timezone.now()
+        instance.deleted_by = self.request.user
+        instance.is_active = False
+        instance.save(update_fields=["deleted_at", "deleted_by", "is_active"])
+
+
+class EmployeeScheduleViewSet(viewsets.ModelViewSet):
+    """Horario programado por trabajador -vista semanal en el frontend
+    (Sprint 22, Convenciones §5.1)."""
+
+    queryset = EmployeeSchedule.objects.select_related("employee")
+    serializer_class = EmployeeScheduleSerializer
+    permission_classes = _HR_PERMISSIONS
+
+    def get_queryset(self):
+        queryset = super().get_queryset().order_by("employee_id", "day_of_week")
+        employee_id = self.request.query_params.get("employee")
+        if employee_id:
+            queryset = queryset.filter(employee_id=employee_id)
+        return queryset
+
+
+class EmployeeAttendanceViewSet(
+    mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet
+):
+    """Solo lectura -entrada/salida son acciones propias (clock-in/clock-out),
+    no un create/update generico (API Spec §4.8), mismo criterio que
+    CashSessionViewSet (Sprint 12)."""
+
+    queryset = EmployeeAttendance.objects.select_related("employee", "warehouse")
+    serializer_class = EmployeeAttendanceSerializer
+    permission_classes = _HR_PERMISSIONS
+
+    def get_queryset(self):
+        queryset = super().get_queryset().order_by("-check_in")
+        employee_id = self.request.query_params.get("employee")
+        if employee_id:
+            queryset = queryset.filter(employee_id=employee_id)
+        return queryset
+
+    @action(detail=False, methods=["post"], url_path="clock-in")
+    def clock_in(self, request):
+        serializer = ClockInSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        attendance = AttendanceService.clock_in(
+            employee=serializer.validated_data["employee"],
+            warehouse=serializer.validated_data["warehouse"],
+            user=request.user,
+        )
+        return Response(
+            {
+                "id": attendance.id,
+                "check_in": attendance.check_in,
+                "status": attendance.status,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(detail=True, methods=["post"], url_path="clock-out")
+    def clock_out(self, request, pk=None):
+        attendance = self.get_object()
+        attendance = AttendanceService.clock_out(
+            attendance=attendance, user=request.user
+        )
+        return Response(
+            {"id": attendance.id, "check_out": attendance.check_out},
+            status=status.HTTP_200_OK,
+        )
