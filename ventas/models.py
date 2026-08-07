@@ -66,6 +66,10 @@ class CashMovement(models.Model):
             ("PAGO_PROVEEDOR_EFECTIVO", "PAGO_PROVEEDOR_EFECTIVO"),
             ("DEPOSITO_BANCO", "DEPOSITO_BANCO"),
             ("AJUSTE", "AJUSTE"),
+            # Sprint 18: egreso automatico al anular una venta o procesar una
+            # devolucion en efectivo -distinto de RETIRO (ese es una decision
+            # manual del negocio, este lo genera SaleService/ReturnService).
+            ("DEVOLUCION", "DEVOLUCION"),
         ],
     )
     amount = models.DecimalField(max_digits=12, decimal_places=4)

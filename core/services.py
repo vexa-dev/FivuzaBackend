@@ -154,6 +154,13 @@ class TenantProvisioningService:
         ("PURCHASES_MANAGE", "PURCHASES"),
         ("CASH_MANAGE", "CASH"),
         ("SALES_MANAGE", "SALES"),
+        # Sprint 18: separados de SALES_MANAGE a proposito (Plan de
+        # Implementacion, Sprint 18: "un cajero puede vender sin poder anular
+        # lo ya cobrado"). SALES_RETURN si va a seller -procesar una
+        # devolucion es una operacion de mostrador rutinaria, muy distinta de
+        # anular una venta completa.
+        ("SALES_VOID", "SALES"),
+        ("SALES_RETURN", "SALES"),
     ]
     _ROLE_PERMISSIONS = {
         "admin": [
@@ -166,6 +173,8 @@ class TenantProvisioningService:
             "PURCHASES_MANAGE",
             "CASH_MANAGE",
             "SALES_MANAGE",
+            "SALES_VOID",
+            "SALES_RETURN",
         ],
         "manager": [
             "USERS_MANAGE",
@@ -176,6 +185,8 @@ class TenantProvisioningService:
             "PURCHASES_MANAGE",
             "CASH_MANAGE",
             "SALES_MANAGE",
+            "SALES_VOID",
+            "SALES_RETURN",
         ],
         # "seller" no recibe CASH_MANAGE todavia a proposito (ver nota
         # historica de Sprint 12), pero SI recibe SALES_MANAGE desde este
@@ -186,7 +197,10 @@ class TenantProvisioningService:
         # tambien quedan editables por un seller; si el negocio quiere
         # restringir eso a admin/manager solamente, se puede separar en un
         # codigo propio (ej. PROMOTIONS_MANAGE) en un sprint futuro.
-        "seller": ["INVENTORY_VIEW", "SALES_MANAGE"],
+        # SALES_VOID queda fuera a proposito (Sprint 18): un cajero no anula
+        # lo que el mismo cobro. SALES_RETURN si entra: procesar una
+        # devolucion en el mostrador es parte normal de su turno.
+        "seller": ["INVENTORY_VIEW", "SALES_MANAGE", "SALES_RETURN"],
     }
 
     @staticmethod

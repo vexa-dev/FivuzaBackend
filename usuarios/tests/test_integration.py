@@ -52,4 +52,6 @@ class PermissionServiceCacheScopingTests(TestCase):
             # llegaria el resultado ya cacheado de user_a (admin) en vez del
             # de este usuario (seller, mucho mas acotado).
             self.assertNotIn("INVENTORY_MANAGE", codes_b)
-            self.assertEqual(codes_b, {"INVENTORY_VIEW", "SALES_MANAGE"})
+            self.assertEqual(
+                codes_b, {"INVENTORY_VIEW", "SALES_MANAGE", "SALES_RETURN"}
+            )

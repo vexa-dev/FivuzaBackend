@@ -15,10 +15,13 @@ from ventas.models import (
     CashMovement,
     CashRegister,
     CashSession,
+    CustomerBalanceLedger,
     Promotion,
     Sale,
     SaleDetail,
     SalePayment,
+    SaleReturn,
+    SaleReturnDetail,
 )
 
 # Comprobantes de movimientos de caja: mismo patron de URL prefirmada de S3
@@ -413,6 +416,57 @@ class NoCashSessionError(APIException):
     }
 
 
+class SaleNotCompletedError(APIException):
+    status_code = 409
+    default_code = "SALE_NOT_COMPLETED"
+    default_detail = {
+        "error": {
+            "code": "SALE_NOT_COMPLETED",
+            "message": "Esta venta ya esta anulada.",
+        }
+    }
+
+
+class SaleHasReturnsError(APIException):
+    status_code = 409
+    default_code = "SALE_HAS_RETURNS"
+    default_detail = {
+        "error": {
+            "code": "SALE_HAS_RETURNS",
+            "message": "No se puede anular una venta que ya tiene devoluciones registradas.",
+        }
+    }
+
+
+class CashSessionClosedError(APIException):
+    status_code = 409
+    default_code = "CASH_SESSION_CLOSED"
+    default_detail = {
+        "error": {
+            "code": "CASH_SESSION_CLOSED",
+            "message": "No se puede anular una venta de una sesion de caja ya cerrada.",
+        }
+    }
+
+
+class ReturnExceedsSoldError(APIException):
+    status_code = 409
+    default_code = "RETURN_EXCEEDS_SOLD"
+
+    def __init__(self, *, sku: str, available: Decimal, requested: Decimal):
+        super().__init__(
+            {
+                "error": {
+                    "code": "RETURN_EXCEEDS_SOLD",
+                    "message": (
+                        f"No se puede devolver mas de lo vendido para {sku}: "
+                        f"disponible para devolver {available}, solicitado {requested}."
+                    ),
+                }
+            }
+        )
+
+
 class SaleService:
     """SaleService.create_sale(): el endpoint mas complejo del proyecto
     (Esquema Backend §6.2; API Spec §4.1). Todo ocurre en una sola
@@ -579,6 +633,84 @@ class SaleService:
         return sale
 
     @staticmethod
+    @transaction.atomic
+    def void_sale(sale: Sale, *, reason: str, user) -> Sale:
+        """Anulacion (Sprint 18, Plan de Implementacion): la venta nunca
+        debio existir -a diferencia de una devolucion (ReturnService), que
+        asume que la venta fue correcta y el cliente simplemente trajo la
+        mercaderia de vuelta. Por eso exige que la sesion de caja siga
+        abierta (es "deshacer algo que acaba de pasar", no un flujo que
+        pueda ocurrir dias despues) y reingresa el 100% del stock.
+
+        La reversa de CREDIT_LEDGER/BALANCE queda deferida a proposito: hoy
+        create_sale() persiste esos SalePayment sin escribir todavia en
+        CustomerDebtLedger/CustomerBalanceLedger (ver su propio docstring,
+        "sin tocar esos libros todavia" -CreditLedgerService llega recien en
+        el Sprint 19). Revertir un libro que nunca se escribio generaria un
+        movimiento fantasma; solo se revierte lo que SI quedo registrado:
+        el efectivo, via CashMovement."""
+        if sale.status != "COMPLETED":
+            raise SaleNotCompletedError()
+        if sale.returns.exists():
+            raise SaleHasReturnsError()
+        if sale.cash_session is not None and sale.cash_session.status != "OPEN":
+            raise CashSessionClosedError()
+
+        for detail in sale.details.all():
+            try:
+                variant = ProductVariant.objects.select_related("product").get(
+                    id=detail.variant_id
+                )
+            except ProductVariant.DoesNotExist:
+                # La variante pudo haberse borrado (baja logica no aplica a
+                # ProductVariant hoy) despues de la venta -sale_details ya
+                # tiene su snapshot, asi que la anulacion no se bloquea por
+                # esto, simplemente no hay a donde reingresar el stock.
+                continue
+
+            stock = (
+                Stock.objects.select_for_update()
+                .filter(variant=variant, warehouse=sale.warehouse)
+                .first()
+            )
+            current_quantity = stock.quantity if stock else Decimal("0")
+            StockService.adjust_stock(
+                variant=variant,
+                warehouse=sale.warehouse,
+                counted_quantity=current_quantity + detail.quantity,
+                concept="RETURN",
+                user=user,
+            )
+
+        cash_amount = sale.payments.filter(method="CASH").aggregate(
+            total=Sum("amount")
+        )["total"] or Decimal("0")
+        if cash_amount > 0 and sale.cash_session is not None:
+            CashSessionService.add_movement(
+                session=sale.cash_session,
+                type="OUT",
+                concept="DEVOLUCION",
+                amount=cash_amount,
+                user=user,
+                reason=f"Anulacion de venta {sale.invoice_number}",
+            )
+
+        sale.status = "VOIDED"
+        sale.save(update_fields=["status"])
+
+        from usuarios.services import AuditLogService
+
+        AuditLogService.log_action(
+            user=user,
+            action="SALE_VOIDED",
+            entity="Sale",
+            entity_id=sale.id,
+            details={"invoice_number": sale.invoice_number, "reason": reason},
+        )
+
+        return sale
+
+    @staticmethod
     def _resolve_promotion_discount(
         *, variant, quantity: Decimal, unit_price: Decimal, at
     ) -> Decimal:
@@ -651,3 +783,141 @@ class ReceiptService:
         right = f"{detail.subtotal.quantize(Decimal('0.01'))}"
         padding = max(columns - len(left) - len(right), 1)
         return {"label": f"{left} {'.' * padding} {right}"}
+
+
+class ReturnService:
+    """Devolucion (Sprint 18, Plan de Implementacion): a diferencia de
+    void_sale(), asume que la venta fue correcta -el cliente trajo
+    mercaderia de vuelta, dias o semanas despues. Por eso NO exige que la
+    sesion de caja de la VENTA ORIGINAL siga abierta (ya pudo cerrar hace
+    tiempo); un reembolso en efectivo sale de la caja ABIERTA AHORA que
+    recibe al cliente, no de la que cobro la venta."""
+
+    @staticmethod
+    @transaction.atomic
+    def create_return(
+        *,
+        sale: Sale,
+        items: list[dict],
+        reason: str,
+        refund_type: str,
+        user,
+        cash_session: CashSession | None = None,
+    ) -> SaleReturn:
+        if sale.status != "COMPLETED":
+            raise SaleNotCompletedError()
+        if refund_type == "CASH" and (
+            cash_session is None or cash_session.status != "OPEN"
+        ):
+            raise NoCashSessionError()
+
+        total_refund_amount = Decimal("0")
+        prepared_items = []
+        for item in items:
+            try:
+                sale_detail = SaleDetail.objects.get(
+                    id=item["sale_detail_id"], sale=sale
+                )
+            except SaleDetail.DoesNotExist as exc:
+                raise ValidationError(
+                    f"La linea {item['sale_detail_id']} no pertenece a esta venta."
+                ) from exc
+            already_returned = SaleReturnDetail.objects.filter(
+                sale_detail=sale_detail
+            ).aggregate(total=Sum("quantity_returned"))["total"] or Decimal("0")
+            available = sale_detail.quantity - already_returned
+            quantity_returned = Decimal(str(item["quantity_returned"]))
+            if quantity_returned > available:
+                raise ReturnExceedsSoldError(
+                    sku=sale_detail.sku_snapshot,
+                    available=available,
+                    requested=quantity_returned,
+                )
+
+            # Proporcional al precio ya neto de descuento de la linea
+            # original -no al unit_price bruto, para que devolver media
+            # linea con descuento reembolse la mitad de lo que el cliente
+            # realmente pago, no de lista.
+            unit_refund = sale_detail.subtotal / sale_detail.quantity
+            subtotal = unit_refund * quantity_returned
+            prepared_items.append(
+                {
+                    "sale_detail": sale_detail,
+                    "quantity_returned": quantity_returned,
+                    "restock": item.get("restock", True),
+                    "subtotal": subtotal,
+                }
+            )
+            total_refund_amount += subtotal
+
+        sale_return = SaleReturn.objects.create(
+            sale=sale,
+            user=user,
+            reason=reason,
+            total_refund_amount=total_refund_amount,
+            refund_type=refund_type,
+        )
+
+        for prepared in prepared_items:
+            sale_detail = prepared["sale_detail"]
+            SaleReturnDetail.objects.create(
+                sale_return=sale_return,
+                sale_detail=sale_detail,
+                quantity_returned=prepared["quantity_returned"],
+                restock=prepared["restock"],
+                subtotal=prepared["subtotal"],
+            )
+            if prepared["restock"]:
+                try:
+                    variant = ProductVariant.objects.get(id=sale_detail.variant_id)
+                except ProductVariant.DoesNotExist:
+                    continue
+                stock = (
+                    Stock.objects.select_for_update()
+                    .filter(variant=variant, warehouse=sale.warehouse)
+                    .first()
+                )
+                current_quantity = stock.quantity if stock else Decimal("0")
+                StockService.adjust_stock(
+                    variant=variant,
+                    warehouse=sale.warehouse,
+                    counted_quantity=current_quantity + prepared["quantity_returned"],
+                    concept="RETURN",
+                    user=user,
+                )
+
+        if refund_type == "CASH":
+            CashSessionService.add_movement(
+                session=cash_session,
+                type="OUT",
+                concept="DEVOLUCION",
+                amount=total_refund_amount,
+                user=user,
+                reason=f"Devolucion de venta {sale.invoice_number}",
+            )
+        else:
+            CustomerBalanceLedger.objects.create(
+                customer=sale.customer,
+                sale_return=sale_return,
+                sale=sale,
+                type="CREDIT",
+                amount=total_refund_amount,
+                description=f"Devolucion de venta {sale.invoice_number}",
+            )
+
+        from usuarios.services import AuditLogService
+
+        AuditLogService.log_action(
+            user=user,
+            action="SALE_RETURNED",
+            entity="SaleReturn",
+            entity_id=sale_return.id,
+            details={
+                "sale_id": sale.id,
+                "invoice_number": sale.invoice_number,
+                "total_refund_amount": str(total_refund_amount),
+                "refund_type": refund_type,
+            },
+        )
+
+        return sale_return

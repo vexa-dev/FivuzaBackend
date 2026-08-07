@@ -1,5 +1,6 @@
 # Pruebas de ViewSets/vistas: permisos, apertura/cierre de caja, arqueo.
 import os
+from decimal import Decimal
 from unittest import mock
 
 from django.core import mail
@@ -899,3 +900,346 @@ class SaleEndpointsTests(TenantTestCase):
         # esquema que customers/promotions): solo escritura requiere
         # SALES_MANAGE, lectura esta abierta a cualquier tenant.users.
         self.assertEqual(response.status_code, 200)
+
+
+class SaleVoidAndReturnTests(TenantTestCase):
+    """POST /ventas/sales/{id}/void/ y /ventas/sale-returns/ (Sprint 18,
+    Plan de Implementacion: los dos reversos de una venta)."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_ventas_void_return"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-ventas-void-return.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.password = "ClaveSegura123"
+        cls.admin_role = Role.objects.get(name="admin")
+        cls.seller_role = Role.objects.get(name="seller")
+        cls.auditor_role = Role.objects.create(name="auditor")
+
+        cls.admin_user = User.objects.create(
+            email="admin@negocio.com", role=cls.admin_role
+        )
+        cls.admin_user.set_password(cls.password)
+        cls.admin_user.save()
+
+        cls.seller_user = User.objects.create(
+            email="vendedor@negocio.com", role=cls.seller_role
+        )
+        cls.seller_user.set_password(cls.password)
+        cls.seller_user.save()
+
+        cls.auditor_user = User.objects.create(
+            email="auditor@negocio.com", role=cls.auditor_role
+        )
+        cls.auditor_user.set_password(cls.password)
+        cls.auditor_user.save()
+
+        cls.warehouse = Warehouse.objects.create(name="Principal")
+        category = Category.objects.create(name="Ropa")
+        product = ProductVariantService.create_product(
+            product_data={
+                "type": "PRODUCT",
+                "name": "Camiseta",
+                "category": category,
+                "unit_of_measure": "UND",
+            },
+            variants_data=[{"sku": "VOID-RETURN-SKU", "price": "20.00"}],
+        )
+        cls.variant = product.variants.first()
+        cls.customer = Customer.objects.create(
+            document_type="DNI", document_number="77777777", name="Cliente Reversos"
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    _register_counter = 0
+
+    def setUp(self):
+        cache.clear()
+        StockService.adjust_stock(
+            variant=self.variant,
+            warehouse=self.warehouse,
+            counted_quantity=10,
+            concept="ADJUSTMENT",
+            user=self.admin_user,
+        )
+
+    def _client_as(self, user):
+        client = APIClient(HTTP_HOST=self.domain.domain)
+        login = client.post(
+            "/api/v1/auth/login/",
+            {"email": user.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def _open_session(self):
+        SaleVoidAndReturnTests._register_counter += 1
+        register = CashRegister.objects.create(
+            warehouse=self.warehouse,
+            name=f"Caja {SaleVoidAndReturnTests._register_counter}",
+        )
+        response = self._client_as(self.admin_user).post(
+            "/api/v1/ventas/cash-sessions/open/",
+            {"cash_register_id": register.id, "opening_amount": "0"},
+            format="json",
+        )
+        return response.data["id"]
+
+    def _create_sale(self, client, session_id, quantity="2", method="CASH"):
+        response = client.post(
+            "/api/v1/ventas/sales/",
+            {
+                "customer_id": self.customer.id,
+                "cash_session_id": session_id,
+                "lines": [{"variant_id": self.variant.id, "quantity": quantity}],
+                "payments": [
+                    {
+                        "method": method,
+                        "amount": str(Decimal(quantity) * Decimal("20.00")),
+                    }
+                ],
+            },
+            format="json",
+        )
+        return response.data
+
+    def _stock_quantity(self):
+        from inventario.models import Stock
+
+        return Stock.objects.get(
+            variant=self.variant, warehouse=self.warehouse
+        ).quantity
+
+    def test_admin_can_void_sale_and_restocks(self):
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session()
+        sale = self._create_sale(client, session_id)
+        self.assertEqual(self._stock_quantity(), Decimal("8"))
+
+        response = client.post(
+            f"/api/v1/ventas/sales/{sale['id']}/void/",
+            {"reason": "Venta duplicada por error"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["status"], "VOIDED")
+        self.assertEqual(self._stock_quantity(), Decimal("10"))
+
+    def test_void_reverses_cash_in_session(self):
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session()
+        sale = self._create_sale(client, session_id)
+
+        client.post(
+            f"/api/v1/ventas/sales/{sale['id']}/void/",
+            {"reason": "Error de cobro"},
+            format="json",
+        )
+
+        movements = client.get(
+            f"/api/v1/ventas/cash-movements/?cash_session={session_id}"
+        )
+        devolucion = next(m for m in movements.data if m["concept"] == "DEVOLUCION")
+        self.assertEqual(devolucion["type"], "OUT")
+        self.assertEqual(devolucion["amount"], "40.0000")
+
+    def test_seller_cannot_void_sale(self):
+        admin_client = self._client_as(self.admin_user)
+        session_id = self._open_session()
+        sale = self._create_sale(admin_client, session_id)
+
+        response = self._client_as(self.seller_user).post(
+            f"/api/v1/ventas/sales/{sale['id']}/void/",
+            {"reason": "Intento no autorizado"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_cannot_void_sale_with_returns(self):
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session()
+        sale = self._create_sale(client, session_id)
+        detail_id = sale["details"][0]["id"]
+
+        client.post(
+            "/api/v1/ventas/sale-returns/",
+            {
+                "sale_id": sale["id"],
+                "reason": "Producto defectuoso",
+                "refund_type": "BALANCE",
+                "items": [{"sale_detail_id": detail_id, "quantity_returned": "1"}],
+            },
+            format="json",
+        )
+
+        response = client.post(
+            f"/api/v1/ventas/sales/{sale['id']}/void/",
+            {"reason": "Ya no aplica"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["error"]["code"], "SALE_HAS_RETURNS")
+
+    def test_cannot_void_sale_after_cash_session_closed(self):
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session()
+        sale = self._create_sale(client, session_id)
+
+        client.post(
+            f"/api/v1/ventas/cash-sessions/{session_id}/close/",
+            {"counted_closing_amount": "40.00"},
+            format="json",
+        )
+
+        response = client.post(
+            f"/api/v1/ventas/sales/{sale['id']}/void/",
+            {"reason": "Demasiado tarde"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["error"]["code"], "CASH_SESSION_CLOSED")
+
+    def test_partial_return_restocks_and_generates_balance(self):
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session()
+        sale = self._create_sale(client, session_id, quantity="4")
+        detail_id = sale["details"][0]["id"]
+        self.assertEqual(self._stock_quantity(), Decimal("6"))
+
+        response = client.post(
+            "/api/v1/ventas/sale-returns/",
+            {
+                "sale_id": sale["id"],
+                "reason": "Le sobraron 2",
+                "refund_type": "BALANCE",
+                "items": [{"sale_detail_id": detail_id, "quantity_returned": "2"}],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["total_refund_amount"], "40.0000")
+        self.assertEqual(self._stock_quantity(), Decimal("8"))
+
+        from ventas.models import CustomerBalanceLedger
+
+        ledger_entry = CustomerBalanceLedger.objects.get(
+            sale_return_id=response.data["id"]
+        )
+        self.assertEqual(ledger_entry.type, "CREDIT")
+        self.assertEqual(ledger_entry.amount, Decimal("40.0000"))
+
+    def test_return_with_cash_refund_generates_cash_movement(self):
+        client = self._client_as(self.seller_user)
+        session_id = self._open_session()
+        sale = self._create_sale(client, session_id)
+        detail_id = sale["details"][0]["id"]
+
+        response = client.post(
+            "/api/v1/ventas/sale-returns/",
+            {
+                "sale_id": sale["id"],
+                "reason": "No le gusto",
+                "refund_type": "CASH",
+                "cash_session_id": session_id,
+                "items": [{"sale_detail_id": detail_id, "quantity_returned": "1"}],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+
+        movements = client.get(
+            f"/api/v1/ventas/cash-movements/?cash_session={session_id}"
+        )
+        devolucion = next(m for m in movements.data if m["concept"] == "DEVOLUCION")
+        self.assertEqual(devolucion["amount"], "20.0000")
+
+    def test_cannot_return_more_than_sold(self):
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session()
+        sale = self._create_sale(client, session_id, quantity="2")
+        detail_id = sale["details"][0]["id"]
+
+        response = client.post(
+            "/api/v1/ventas/sale-returns/",
+            {
+                "sale_id": sale["id"],
+                "reason": "Excede lo vendido",
+                "refund_type": "BALANCE",
+                "items": [{"sale_detail_id": detail_id, "quantity_returned": "3"}],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["error"]["code"], "RETURN_EXCEEDS_SOLD")
+
+    def test_two_returns_on_same_sale_track_already_returned(self):
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session()
+        sale = self._create_sale(client, session_id, quantity="4")
+        detail_id = sale["details"][0]["id"]
+
+        first = client.post(
+            "/api/v1/ventas/sale-returns/",
+            {
+                "sale_id": sale["id"],
+                "reason": "Primera tanda",
+                "refund_type": "BALANCE",
+                "items": [{"sale_detail_id": detail_id, "quantity_returned": "3"}],
+            },
+            format="json",
+        )
+        self.assertEqual(first.status_code, 201)
+
+        second_ok = client.post(
+            "/api/v1/ventas/sale-returns/",
+            {
+                "sale_id": sale["id"],
+                "reason": "Segunda tanda, lo que queda",
+                "refund_type": "BALANCE",
+                "items": [{"sale_detail_id": detail_id, "quantity_returned": "1"}],
+            },
+            format="json",
+        )
+        self.assertEqual(second_ok.status_code, 201)
+
+        third_fails = client.post(
+            "/api/v1/ventas/sale-returns/",
+            {
+                "sale_id": sale["id"],
+                "reason": "Ya no queda nada que devolver",
+                "refund_type": "BALANCE",
+                "items": [{"sale_detail_id": detail_id, "quantity_returned": "1"}],
+            },
+            format="json",
+        )
+        self.assertEqual(third_fails.status_code, 409)
+        self.assertEqual(third_fails.data["error"]["code"], "RETURN_EXCEEDS_SOLD")
+
+    def test_auditor_cannot_create_return(self):
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session()
+        sale = self._create_sale(client, session_id)
+        detail_id = sale["details"][0]["id"]
+
+        response = self._client_as(self.auditor_user).post(
+            "/api/v1/ventas/sale-returns/",
+            {
+                "sale_id": sale["id"],
+                "reason": "Sin permiso",
+                "refund_type": "BALANCE",
+                "items": [{"sale_detail_id": detail_id, "quantity_returned": "1"}],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)
