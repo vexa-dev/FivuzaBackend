@@ -1,5 +1,6 @@
 import json
 from datetime import timedelta
+from decimal import Decimal
 
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
@@ -9,6 +10,9 @@ from rest_framework.exceptions import APIException
 
 from usuarios.models import (
     AuditLog,
+    Employee,
+    EmployeeAttendance,
+    EmployeeSchedule,
     PasswordResetToken,
     Permission,
     Role,
@@ -198,6 +202,118 @@ class AuditLogService:
             entity=entity,
             entity_id=entity_id,
             details=details or "",
+        )
+
+
+class OpenAttendanceExistsError(APIException):
+    """Sprint 22: un trabajador no puede marcar entrada dos veces sin haber
+    marcado salida de la primera -evita que dos dispositivos (o el mismo,
+    con doble clic) le abran dos jornadas simultaneas."""
+
+    status_code = 409
+    default_code = "OPEN_ATTENDANCE_EXISTS"
+    default_detail = {
+        "error": {
+            "code": "OPEN_ATTENDANCE_EXISTS",
+            "message": "Este trabajador ya tiene una entrada marcada sin salida registrada.",
+        }
+    }
+
+
+class AttendanceAlreadyClosedError(APIException):
+    status_code = 409
+    default_code = "ATTENDANCE_ALREADY_CLOSED"
+    default_detail = {
+        "error": {
+            "code": "ATTENDANCE_ALREADY_CLOSED",
+            "message": "Esta marcacion ya tiene una salida registrada.",
+        }
+    }
+
+
+_DAY_OF_WEEK_BY_PYTHON_WEEKDAY = [
+    "MONDAY",
+    "TUESDAY",
+    "WEDNESDAY",
+    "THURSDAY",
+    "FRIDAY",
+    "SATURDAY",
+    "SUNDAY",
+]
+
+
+class AttendanceService:
+    """Marcado real de entrada/salida (Esquema Backend §4.2). El horario
+    programado (EmployeeSchedule) es la referencia contra la que se evalua
+    si una entrada llego a tiempo -no existe un umbral de tolerancia
+    documentado en ningun otro sitio, asi que se asume 0 minutos de gracia:
+    cualquier check_in posterior a start_time cuenta como LATE. Si el
+    trabajador no tiene un horario activo para ese dia de la semana, no hay
+    contra que comparar -se registra ON_TIME por defecto en vez de
+    penalizar una ausencia de horario."""
+
+    @staticmethod
+    def clock_in(*, employee: Employee, warehouse, user) -> EmployeeAttendance:
+        if EmployeeAttendance.objects.filter(
+            employee=employee, check_out__isnull=True
+        ).exists():
+            raise OpenAttendanceExistsError()
+
+        check_in_at = timezone.now()
+        status = AttendanceService._determine_status(employee, check_in_at)
+
+        attendance = EmployeeAttendance.objects.create(
+            employee=employee,
+            warehouse=warehouse,
+            check_in=check_in_at,
+            status=status,
+        )
+        AuditLogService.log_action(
+            user=user,
+            action="EMPLOYEE_CLOCKED_IN",
+            entity="EmployeeAttendance",
+            entity_id=attendance.id,
+            details={"employee_id": employee.id, "status": status},
+        )
+        return attendance
+
+    @staticmethod
+    def clock_out(*, attendance: EmployeeAttendance, user) -> EmployeeAttendance:
+        if attendance.check_out is not None:
+            raise AttendanceAlreadyClosedError()
+
+        attendance.check_out = timezone.now()
+        attendance.save(update_fields=["check_out"])
+        AuditLogService.log_action(
+            user=user,
+            action="EMPLOYEE_CLOCKED_OUT",
+            entity="EmployeeAttendance",
+            entity_id=attendance.id,
+            details={"employee_id": attendance.employee_id},
+        )
+        return attendance
+
+    @staticmethod
+    def _determine_status(employee: Employee, check_in_at) -> str:
+        day_of_week = _DAY_OF_WEEK_BY_PYTHON_WEEKDAY[check_in_at.weekday()]
+        schedule = EmployeeSchedule.objects.filter(
+            employee=employee, day_of_week=day_of_week, is_active=True
+        ).first()
+        if schedule is None:
+            return "ON_TIME"
+        return "LATE" if check_in_at.time() > schedule.start_time else "ON_TIME"
+
+    @staticmethod
+    def calculate_worked_hours(attendance: EmployeeAttendance) -> Decimal | None:
+        # check_in/check_out son datetime absolutos, no solo horas -restarlos
+        # da el resultado correcto incluso si el turno cruza medianoche
+        # (ej. entra 22:00, sale 06:00 del dia siguiente = 8 horas), sin
+        # necesitar ningun caso especial para el cruce.
+        if attendance.check_out is None:
+            return None
+        delta = attendance.check_out - attendance.check_in
+        return (Decimal(delta.total_seconds()) / Decimal(3600)).quantize(
+            Decimal("0.01")
         )
 
 

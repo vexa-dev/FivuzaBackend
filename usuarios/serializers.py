@@ -1,5 +1,7 @@
 from django.utils import timezone
 from rest_framework import serializers
+
+from inventario.models import Warehouse
 from rest_framework_simplejwt.settings import api_settings
 from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -7,6 +9,9 @@ from rest_framework_simplejwt.utils import datetime_from_epoch
 
 from usuarios.models import (
     AuditLog,
+    Employee,
+    EmployeeAttendance,
+    EmployeeSchedule,
     Permission,
     Role,
     RolePermission,
@@ -184,6 +189,78 @@ class AuditLogSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = fields
+
+
+class EmployeeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Employee
+        fields = [
+            "id",
+            "user",
+            "full_name",
+            "document_number",
+            "phone",
+            "position",
+            "warehouse",
+            "salary_type",
+            "salary_amount",
+            "currency",
+            "hire_date",
+            "termination_date",
+            "is_active",
+            "created_at",
+        ]
+        read_only_fields = ["created_at"]
+
+
+class EmployeeScheduleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EmployeeSchedule
+        fields = [
+            "id",
+            "employee",
+            "day_of_week",
+            "start_time",
+            "end_time",
+            "is_active",
+        ]
+
+
+class EmployeeAttendanceSerializer(serializers.ModelSerializer):
+    """Solo lectura -check_in/status se fijan via AttendanceService.clock_in(),
+    check_out via clock_out(), nunca por POST/PUT directo (API Spec §4.8)."""
+
+    worked_hours = serializers.SerializerMethodField()
+
+    class Meta:
+        model = EmployeeAttendance
+        fields = [
+            "id",
+            "employee",
+            "warehouse",
+            "check_in",
+            "check_out",
+            "status",
+            "notes",
+            "worked_hours",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+    def get_worked_hours(self, obj):
+        from usuarios.services import AttendanceService
+
+        hours = AttendanceService.calculate_worked_hours(obj)
+        return str(hours) if hours is not None else None
+
+
+class ClockInSerializer(serializers.Serializer):
+    employee_id = serializers.PrimaryKeyRelatedField(
+        source="employee", queryset=Employee.objects.all()
+    )
+    warehouse_id = serializers.PrimaryKeyRelatedField(
+        source="warehouse", queryset=Warehouse.objects.all()
+    )
 
 
 class PasswordResetRequestSerializer(serializers.Serializer):
