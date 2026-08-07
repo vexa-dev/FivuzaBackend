@@ -97,6 +97,13 @@ class Customer(models.Model):
     name = models.CharField(max_length=200)
     phone = models.CharField(max_length=30, blank=True)
     address = models.CharField(max_length=255, blank=True)
+    # Sprint 19: no documentado en la BDD v5 (tabla customers no lo incluye),
+    # pero la Ficha de Producto §5.1 lo pide explicito: "limite configurable
+    # por cliente". None = sin limite (todo cliente existente sigue vendiendo
+    # a credito sin restriccion hasta que el negocio le fije un tope).
+    credit_limit = models.DecimalField(
+        max_digits=12, decimal_places=4, null=True, blank=True
+    )
     is_active = models.BooleanField(default=True)
     search_vector = SearchVectorField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)

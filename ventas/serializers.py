@@ -7,6 +7,8 @@ from ventas.models import (
     CashRegister,
     CashSession,
     Customer,
+    CustomerBalanceLedger,
+    CustomerDebtLedger,
     Promotion,
     PromotionProduct,
     Sale,
@@ -18,6 +20,7 @@ from ventas.models import (
 from ventas.services import (
     CashMovementReceiptService,
     CashSessionService,
+    CreditLedgerService,
     ReturnService,
     SaleService,
 )
@@ -116,6 +119,15 @@ class CashMovementReceiptUploadURLSerializer(serializers.Serializer):
 
 
 class CustomerSerializer(serializers.ModelSerializer):
+    """current_debt/current_balance/oldest_unpaid_debt_at (Sprint 19) se
+    calculan en cada serializacion -sin annotate/optimizar, mismo criterio
+    que el resto del proyecto para catalogos de tamaño de negocio pequeño
+    (Convenciones: no optimizar para una escala que todavia no existe)."""
+
+    current_debt = serializers.SerializerMethodField()
+    current_balance = serializers.SerializerMethodField()
+    oldest_unpaid_debt_at = serializers.SerializerMethodField()
+
     class Meta:
         model = Customer
         fields = [
@@ -126,10 +138,80 @@ class CustomerSerializer(serializers.ModelSerializer):
             "phone",
             "address",
             "is_active",
+            "credit_limit",
+            "current_debt",
+            "current_balance",
+            "oldest_unpaid_debt_at",
             "updated_at",
             "created_at",
         ]
         read_only_fields = ["updated_at", "created_at"]
+
+    def get_current_debt(self, obj):
+        return str(CreditLedgerService.get_debt(obj))
+
+    def get_current_balance(self, obj):
+        return str(CreditLedgerService.get_balance(obj))
+
+    def get_oldest_unpaid_debt_at(self, obj):
+        if CreditLedgerService.get_debt(obj) <= 0:
+            return None
+        entry = obj.debt_ledger.filter(type="DEBIT").order_by("created_at").first()
+        return entry.created_at if entry else None
+
+
+class CustomerDebtLedgerSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CustomerDebtLedger
+        fields = [
+            "id",
+            "customer",
+            "sale",
+            "type",
+            "amount",
+            "currency",
+            "description",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class CustomerBalanceLedgerSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CustomerBalanceLedger
+        fields = [
+            "id",
+            "customer",
+            "sale",
+            "sale_return",
+            "type",
+            "amount",
+            "currency",
+            "description",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class RegisterDebtPaymentSerializer(serializers.Serializer):
+    """No es un ModelSerializer -delega en CreditLedgerService.
+    register_payment(), mismo patron que el resto de acciones de negocio
+    (SaleCreateSerializer, CashSessionOpenSerializer)."""
+
+    customer_id = serializers.PrimaryKeyRelatedField(
+        source="customer", queryset=Customer.objects.all()
+    )
+    amount = serializers.DecimalField(
+        max_digits=12, decimal_places=4, min_value=Decimal("0.01")
+    )
+    description = serializers.CharField(required=False, allow_blank=True)
+
+    def create(self, validated_data):
+        return CreditLedgerService.register_payment(
+            customer=validated_data["customer"],
+            amount=validated_data["amount"],
+            description=validated_data.get("description", ""),
+        )
 
 
 class PromotionProductSerializer(serializers.ModelSerializer):
