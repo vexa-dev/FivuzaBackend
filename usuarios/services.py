@@ -5,6 +5,7 @@ from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
 from django.utils import timezone
+from rest_framework.exceptions import APIException
 
 from usuarios.models import (
     AuditLog,
@@ -86,10 +87,49 @@ class PermissionService:
             PermissionService.invalidate_user_cache(user_id)
 
 
+class CannotDeleteSystemRoleError(APIException):
+    status_code = 409
+    default_code = "CANNOT_DELETE_SYSTEM_ROLE"
+    default_detail = {
+        "error": {
+            "code": "CANNOT_DELETE_SYSTEM_ROLE",
+            "message": "admin, manager y seller son roles del sistema y no se pueden eliminar.",
+        }
+    }
+
+
+class RoleInUseError(APIException):
+    status_code = 409
+    default_code = "ROLE_IN_USE"
+    default_detail = {
+        "error": {
+            "code": "ROLE_IN_USE",
+            "message": "Todavía hay usuarios con este rol. Reasígnalos a otro rol antes de eliminarlo.",
+        }
+    }
+
+
 class RoleService:
     """Gestiona la asignacion de permisos a un rol, dejando siempre un
     registro en RolePermissionsHistory -nunca se edita role_permissions
     directamente sin pasar por aqui (Esquema Backend §4.2)."""
+
+    @staticmethod
+    def delete_role(role: Role, deleted_by) -> None:
+        """Baja logica, nunca DELETE fisico -ver docstring de Role
+        (SoftDeleteModel) sobre por que un hard delete rompe apenas el rol
+        tiene algun permiso concedido/revocado alguna vez."""
+        if role.is_system_default:
+            raise CannotDeleteSystemRoleError()
+        # role.users usa el manager por defecto de User (ActiveManager),
+        # que ya excluye usuarios dados de baja -no hace falta filtrar
+        # deleted_at a mano aqui.
+        if role.users.exists():
+            raise RoleInUseError()
+
+        role.deleted_at = timezone.now()
+        role.deleted_by = deleted_by
+        role.save(update_fields=["deleted_at", "deleted_by"])
 
     @staticmethod
     def grant_permission(
