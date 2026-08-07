@@ -110,9 +110,17 @@ class PasswordResetConfirmView(APIView):
 
 
 class RoleViewSet(viewsets.ModelViewSet):
+    """Roles a medida (ej. "Cajero", "Limpieza"): el negocio los crea y les
+    concede permisos vía RolePermissionViewSet (API Spec §2.1). destroy()
+    delega en RoleService.delete_role() -nunca es un DELETE fisico, ver
+    docstring de Role."""
+
     queryset = Role.objects.all()
     serializer_class = RoleSerializer
     permission_classes = [IsAuthenticated, HasModulePermission("USERS_MANAGE_ROLES")]
+
+    def perform_destroy(self, instance):
+        RoleService.delete_role(instance, deleted_by=self.request.user)
 
 
 class PermissionViewSet(viewsets.ReadOnlyModelViewSet):

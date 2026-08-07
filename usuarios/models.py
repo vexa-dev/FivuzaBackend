@@ -6,10 +6,21 @@ from django.db import models
 from core.models import SoftDeleteModel
 
 
-class Role(models.Model):
+class Role(SoftDeleteModel):
+    """Hereda SoftDeleteModel a proposito: un rol personalizado (Sprint
+    "roles a medida", ej. "Cajero"/"Limpieza") queda referenciado para
+    siempre desde RolePermissionsHistory (on_delete=PROTECT, bitacora
+    inmutable) apenas se le concede o revoca un permiso -que es el primer
+    paso obligado al crearlo. Un hard delete fallaria con un 500 casi
+    de inmediato; la baja logica es la unica opcion consistente con el
+    resto del esquema (BDD v5 §"bitacora")."""
+
     name = models.CharField(max_length=50)
     is_system_default = models.BooleanField(default=False)
     description = models.CharField(max_length=255, blank=True)
+    deleted_by = models.ForeignKey(
+        "User", on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
 
     class Meta:
         db_table = "roles"

@@ -230,6 +230,68 @@ class RoleRBACEndpointsTests(TenantTestCase):
             ).exists()
         )
 
+    def test_admin_can_create_custom_role(self):
+        response = self._client_as(self.admin_user).post(
+            "/api/v1/usuarios/roles/",
+            {"name": "Cajero", "description": "Atiende el mostrador"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertFalse(response.data["is_system_default"])
+
+    def test_deleting_custom_role_soft_deletes(self):
+        client = self._client_as(self.admin_user)
+        created = client.post(
+            "/api/v1/usuarios/roles/", {"name": "Limpieza"}, format="json"
+        )
+        role_id = created.data["id"]
+
+        response = client.delete(f"/api/v1/usuarios/roles/{role_id}/")
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Role.objects.filter(id=role_id).exists())
+        self.assertTrue(Role.all_objects.filter(id=role_id).exists())
+
+    def test_deleting_role_with_granted_permission_still_soft_deletes(self):
+        # Este es el caso que rompia con un hard delete: RolePermissionsHistory
+        # protege al rol apenas se le concede/revoca un permiso, que es el
+        # primer paso natural despues de crear un rol a medida.
+        client = self._client_as(self.admin_user)
+        created = client.post(
+            "/api/v1/usuarios/roles/", {"name": "Reponedor"}, format="json"
+        )
+        role_id = created.data["id"]
+        grant = client.post(
+            "/api/v1/usuarios/role-permissions/",
+            {"role": role_id, "permission": self.manage_users_perm.id},
+            format="json",
+        )
+        self.assertEqual(grant.status_code, 201)
+
+        response = client.delete(f"/api/v1/usuarios/roles/{role_id}/")
+        self.assertEqual(response.status_code, 204)
+        self.assertTrue(Role.all_objects.filter(id=role_id).exists())
+
+    def test_cannot_delete_system_role(self):
+        response = self._client_as(self.admin_user).delete(
+            f"/api/v1/usuarios/roles/{self.seller_role.id}/"
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["error"]["code"], "CANNOT_DELETE_SYSTEM_ROLE")
+        self.assertTrue(Role.objects.filter(id=self.seller_role.id).exists())
+
+    def test_cannot_delete_role_with_active_users(self):
+        client = self._client_as(self.admin_user)
+        created = client.post(
+            "/api/v1/usuarios/roles/", {"name": "Cajero"}, format="json"
+        )
+        role_id = created.data["id"]
+        User.objects.create(email="cajero@negocio.com", role_id=role_id)
+
+        response = client.delete(f"/api/v1/usuarios/roles/{role_id}/")
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["error"]["code"], "ROLE_IN_USE")
+        self.assertTrue(Role.objects.filter(id=role_id).exists())
+
 
 class PasswordResetEndpointsTests(TenantTestCase):
     """POST /auth/password-reset/ y /auth/password-reset/confirm/ (Sprint 5)."""
