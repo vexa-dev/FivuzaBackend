@@ -5,6 +5,7 @@ from rest_framework.test import APIClient
 
 from core.models import TenantSettings
 from inventario.models import Category, Supplier, Warehouse
+from inventario.services import ProductVariantService, StockService
 from usuarios.models import Role, User
 
 
@@ -464,3 +465,93 @@ class CatalogImportEndpointsTests(TenantTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["created"], 1)
         self.assertEqual(response.data["errors"], 0)
+
+
+class InventoryMovementOversellFilterTests(TenantTestCase):
+    """GET /inventario/inventory-movements/?oversell_only=true (Sprint 21):
+    el "reporte" que el dueño usa para revisar los movimientos que una venta
+    offline registro pese a no haber stock suficiente (oversell_flag,
+    Sprint 20)."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_inventory_oversell_filter"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-inventory-oversell-filter.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.password = "ClaveSegura123"
+        cls.admin_user = User.objects.create(
+            email="admin@negocio.com", role=Role.objects.get(name="admin")
+        )
+        cls.admin_user.set_password(cls.password)
+        cls.admin_user.save()
+
+        cls.warehouse = Warehouse.objects.create(name="Principal")
+        category = Category.objects.create(name="Ropa")
+        product = ProductVariantService.create_product(
+            product_data={
+                "type": "PRODUCT",
+                "name": "Camiseta",
+                "category": category,
+                "unit_of_measure": "UND",
+            },
+            variants_data=[{"sku": "OVERSELL-SKU"}],
+        )
+        cls.variant = product.variants.first()
+
+        # Movimiento normal, sin sobreventa.
+        StockService.adjust_stock(
+            variant=cls.variant,
+            warehouse=cls.warehouse,
+            counted_quantity=10,
+            concept="ADJUSTMENT",
+            user=cls.admin_user,
+        )
+        # Movimiento marcado con oversell_flag, como lo dejaria una venta
+        # sincronizada offline con stock insuficiente (Sprint 20).
+        StockService.adjust_stock(
+            variant=cls.variant,
+            warehouse=cls.warehouse,
+            counted_quantity=-3,
+            concept="SALE",
+            user=cls.admin_user,
+            oversell_flag=True,
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    def setUp(self):
+        cache.clear()
+
+    def _client_as(self, user):
+        client = APIClient(HTTP_HOST=self.domain.domain)
+        login = client.post(
+            "/api/v1/auth/login/",
+            {"email": user.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def test_oversell_only_filters_out_normal_movements(self):
+        response = self._client_as(self.admin_user).get(
+            "/api/v1/inventario/inventory-movements/?oversell_only=true"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 1)
+        self.assertTrue(response.data[0]["oversell_flag"])
+
+    def test_without_filter_returns_all_movements(self):
+        response = self._client_as(self.admin_user).get(
+            "/api/v1/inventario/inventory-movements/"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 2)
