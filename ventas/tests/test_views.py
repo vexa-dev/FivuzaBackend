@@ -14,7 +14,14 @@ from core.models import TenantSettings
 from inventario.models import Category, Warehouse
 from inventario.services import ProductVariantService, StockService
 from usuarios.models import Role, User
-from ventas.models import CashMovement, CashRegister, CashSession, Customer, Promotion
+from ventas.models import (
+    CashMovement,
+    CashRegister,
+    CashSession,
+    Customer,
+    Promotion,
+    Sale,
+)
 
 
 class CashSessionEndpointsTests(TenantTestCase):
@@ -1523,3 +1530,234 @@ class CreditLedgerTests(TenantTestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 403)
+
+
+class SaleSyncTests(TenantTestCase):
+    """POST /ventas/sales/sync/ (Sprint 20, API Spec §4.2): sincronizacion
+    en lote de ventas offline, idempotente por client_side_uuid."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_ventas_sale_sync"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-ventas-sale-sync.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.password = "ClaveSegura123"
+        cls.admin_role = Role.objects.get(name="admin")
+        cls.auditor_role = Role.objects.create(name="auditor")
+
+        cls.admin_user = User.objects.create(
+            email="admin@negocio.com", role=cls.admin_role
+        )
+        cls.admin_user.set_password(cls.password)
+        cls.admin_user.save()
+
+        cls.auditor_user = User.objects.create(
+            email="auditor@negocio.com", role=cls.auditor_role
+        )
+        cls.auditor_user.set_password(cls.password)
+        cls.auditor_user.save()
+
+        cls.warehouse = Warehouse.objects.create(name="Principal")
+        category = Category.objects.create(name="Ropa")
+        product = ProductVariantService.create_product(
+            product_data={
+                "type": "PRODUCT",
+                "name": "Camiseta",
+                "category": category,
+                "unit_of_measure": "UND",
+            },
+            variants_data=[{"sku": "SYNC-SKU", "price": "20.00"}],
+        )
+        cls.variant = product.variants.first()
+        cls.customer = Customer.objects.create(
+            document_type="DNI", document_number="66666666", name="Cliente Sync"
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    _register_counter = 0
+
+    def setUp(self):
+        cache.clear()
+        StockService.adjust_stock(
+            variant=self.variant,
+            warehouse=self.warehouse,
+            counted_quantity=5,
+            concept="ADJUSTMENT",
+            user=self.admin_user,
+        )
+
+    def _client_as(self, user):
+        client = APIClient(HTTP_HOST=self.domain.domain)
+        login = client.post(
+            "/api/v1/auth/login/",
+            {"email": user.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def _open_session(self):
+        SaleSyncTests._register_counter += 1
+        register = CashRegister.objects.create(
+            warehouse=self.warehouse,
+            name=f"Caja Sync {SaleSyncTests._register_counter}",
+        )
+        response = self._client_as(self.admin_user).post(
+            "/api/v1/ventas/cash-sessions/open/",
+            {"cash_register_id": register.id, "opening_amount": "0"},
+            format="json",
+        )
+        return response.data["id"]
+
+    def _sale_payload(self, uuid_value, session_id, quantity="1"):
+        return {
+            "client_side_uuid": uuid_value,
+            "customer_id": self.customer.id,
+            "cash_session_id": session_id,
+            "lines": [{"variant_id": self.variant.id, "quantity": quantity}],
+            "payments": [
+                {"method": "CASH", "amount": str(Decimal(quantity) * Decimal("20.00"))}
+            ],
+        }
+
+    def _stock_quantity(self):
+        from inventario.models import Stock
+
+        return Stock.objects.get(
+            variant=self.variant, warehouse=self.warehouse
+        ).quantity
+
+    def test_sync_creates_new_sales(self):
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session()
+
+        response = client.post(
+            "/api/v1/ventas/sales/sync/",
+            {
+                "sales": [
+                    self._sale_payload("uuid-sync-1", session_id),
+                    self._sale_payload("uuid-sync-2", session_id),
+                ]
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        statuses = {
+            row["client_side_uuid"]: row["status"] for row in response.data["synced"]
+        }
+        self.assertEqual(statuses, {"uuid-sync-1": "CREATED", "uuid-sync-2": "CREATED"})
+        self.assertEqual(response.data["conflicts"], [])
+        self.assertEqual(
+            Sale.objects.filter(client_side_uuid__startswith="uuid-sync-").count(), 2
+        )
+
+    def test_sync_is_idempotent_when_same_batch_sent_three_times(self):
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session()
+        payload = {"sales": [self._sale_payload("uuid-repeat", session_id)]}
+
+        for _ in range(3):
+            response = client.post("/api/v1/ventas/sales/sync/", payload, format="json")
+            self.assertEqual(response.status_code, 200)
+
+        self.assertEqual(Sale.objects.filter(client_side_uuid="uuid-repeat").count(), 1)
+        # El stock solo se descuenta una vez -si el reenvio hubiera vuelto a
+        # procesar la venta, quedaria en 3 en vez de 4.
+        self.assertEqual(self._stock_quantity(), Decimal("4"))
+
+    def test_sync_mixed_batch_new_and_duplicate(self):
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session()
+
+        client.post(
+            "/api/v1/ventas/sales/sync/",
+            {"sales": [self._sale_payload("uuid-first", session_id)]},
+            format="json",
+        )
+
+        response = client.post(
+            "/api/v1/ventas/sales/sync/",
+            {
+                "sales": [
+                    self._sale_payload("uuid-first", session_id),
+                    self._sale_payload("uuid-second", session_id),
+                ]
+            },
+            format="json",
+        )
+        statuses = {
+            row["client_side_uuid"]: row["status"] for row in response.data["synced"]
+        }
+        self.assertEqual(
+            statuses, {"uuid-first": "DUPLICATE_IGNORED", "uuid-second": "CREATED"}
+        )
+
+    def test_sync_allows_oversell_and_flags_movement(self):
+        from inventario.models import InventoryMovement
+
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session()
+
+        # Solo hay 5 en stock; la venta offline pide 8 -el producto ya salio
+        # fisicamente cuando el cajero la cobro sin conexion.
+        response = client.post(
+            "/api/v1/ventas/sales/sync/",
+            {"sales": [self._sale_payload("uuid-oversell", session_id, quantity="8")]},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["synced"][0]["status"], "CREATED")
+        self.assertEqual(len(response.data["conflicts"]), 1)
+        self.assertEqual(response.data["conflicts"][0]["variant_id"], self.variant.id)
+        self.assertTrue(response.data["conflicts"][0]["oversell_flag"])
+
+        sale = Sale.objects.get(client_side_uuid="uuid-oversell")
+        movement = InventoryMovement.objects.filter(
+            variant=self.variant, concept="SALE"
+        ).latest("created_at")
+        self.assertTrue(movement.oversell_flag)
+        self.assertEqual(self._stock_quantity(), Decimal("-3"))
+        self.assertEqual(sale.status, "COMPLETED")
+
+    def test_sync_does_not_reject_via_normal_endpoint_semantics(self):
+        # Confirma que el endpoint normal (no offline) SIGUE rechazando la
+        # sobreventa -allow_oversell solo se activa desde el sync.
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session()
+
+        response = client.post(
+            "/api/v1/ventas/sales/",
+            {
+                "customer_id": self.customer.id,
+                "cash_session_id": session_id,
+                "lines": [{"variant_id": self.variant.id, "quantity": "8"}],
+                "payments": [{"method": "CASH", "amount": "160.00"}],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["error"]["code"], "INSUFFICIENT_STOCK")
+
+    def test_auditor_cannot_sync(self):
+        response = self._client_as(self.auditor_user).post(
+            "/api/v1/ventas/sales/sync/",
+            {"sales": [self._sale_payload("uuid-forbidden", "1")]},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_sync_rejects_empty_batch(self):
+        response = self._client_as(self.admin_user).post(
+            "/api/v1/ventas/sales/sync/", {"sales": []}, format="json"
+        )
+        self.assertEqual(response.status_code, 400)

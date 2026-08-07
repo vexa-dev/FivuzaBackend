@@ -54,9 +54,15 @@ urlpatterns = [
         views.POSSearchView.as_view(),
         name="pos-search",
     ),
+    path(
+        "ventas/sales/sync/",
+        views.SaleSyncView.as_view(),
+        name="sale-sync",
+    ),
 ]
 
 # El router va al final: open/ debe resolverse antes de que el patron de
 # detalle del router (ventas/cash-sessions/<pk>/) intente tomar "open" como
-# si fuera un pk.
+# si fuera un pk. Mismo motivo para sales/sync/: sin esto, el router
+# intentaria resolver "sync" como si fuera el <pk> de ventas/sales/<pk>/.
 urlpatterns += router.urls

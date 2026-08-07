@@ -23,6 +23,7 @@ from ventas.services import (
     CreditLedgerService,
     ReturnService,
     SaleService,
+    SaleSyncService,
 )
 
 
@@ -347,6 +348,53 @@ class SaleCreateSerializer(serializers.Serializer):
             lines=validated_data["lines"],
             payments=validated_data["payments"],
             client_side_uuid=validated_data.get("client_side_uuid") or None,
+        )
+
+
+class SaleSyncItemSerializer(serializers.Serializer):
+    """Una venta dentro del lote de /ventas/sales/sync/ (Sprint 20). A
+    diferencia de SaleCreateSerializer, client_side_uuid es obligatorio -es
+    la clave de deduplicacion, sin el no hay forma de saber si esta venta
+    ya se sincronizo en un intento anterior."""
+
+    client_side_uuid = serializers.CharField()
+    customer_id = serializers.PrimaryKeyRelatedField(
+        source="customer", queryset=Customer.objects.all()
+    )
+    cash_session_id = serializers.PrimaryKeyRelatedField(
+        source="cash_session", queryset=CashSession.objects.all()
+    )
+    lines = SaleLineInputSerializer(many=True)
+    payments = SalePaymentInputSerializer(many=True)
+
+    def validate_lines(self, value):
+        if not value:
+            raise serializers.ValidationError("Agrega al menos una linea.")
+        return value
+
+    def validate_payments(self, value):
+        if not value:
+            raise serializers.ValidationError("Agrega al menos un pago.")
+        return value
+
+
+class SaleSyncSerializer(serializers.Serializer):
+    """No es un ModelSerializer -delega toda la validacion de negocio en
+    SaleSyncService.sync_batch(). La validacion de forma (client_side_uuid
+    presente, customer/cash_session existen, lines/payments no vacios) si
+    la hace DRF antes de llegar al servicio, mismo criterio que
+    SaleCreateSerializer."""
+
+    sales = SaleSyncItemSerializer(many=True)
+
+    def validate_sales(self, value):
+        if not value:
+            raise serializers.ValidationError("El lote no puede venir vacio.")
+        return value
+
+    def create(self, validated_data):
+        return SaleSyncService.sync_batch(
+            sales=validated_data["sales"], user=self.context["request"].user
         )
 
 
