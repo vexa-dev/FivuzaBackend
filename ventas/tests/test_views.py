@@ -822,6 +822,74 @@ class SaleEndpointsTests(TenantTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data, [])
 
+    def _create_sale(self, client):
+        session_id = self._open_session(client)
+        response = client.post(
+            "/api/v1/ventas/sales/",
+            {
+                "customer_id": self.customer.id,
+                "cash_session_id": session_id,
+                "lines": [{"variant_id": self.variant.id, "quantity": "2"}],
+                "payments": [{"method": "CASH", "amount": "40.00"}],
+            },
+            format="json",
+        )
+        return response.data["id"]
+
+    def test_receipt_returns_fixed_width_html(self):
+        self.tenant.company_name = "Bodega Lucho"
+        self.tenant.ruc = "20123456789"
+        self.tenant.save()
+
+        client = self._client_as(self.seller_user)
+        sale_id = self._create_sale(client)
+
+        response = client.get(f"/api/v1/ventas/sales/{sale_id}/receipt/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/html", response["Content-Type"])
+        body = response.content.decode()
+        self.assertIn("Bodega Lucho", body)
+        self.assertIn("RUC: 20123456789", body)
+        self.assertIn("2 x Camiseta", body)
+        self.assertIn("TOTAL: S/. 40.00", body)
+        self.assertIn("CASH: 40.00", body)
+        self.assertIn("width:58mm", body)
+
+    def test_receipt_accepts_80mm_width(self):
+        client = self._client_as(self.seller_user)
+        sale_id = self._create_sale(client)
+
+        response = client.get(f"/api/v1/ventas/sales/{sale_id}/receipt/?width_mm=80")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("width:80mm", response.content.decode())
+
+    def test_receipt_not_found_returns_404_with_envelope(self):
+        client = self._client_as(self.seller_user)
+        response = client.get("/api/v1/ventas/sales/999999/receipt/")
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.data["error"]["code"], "NOT_FOUND")
+
+    def test_receipt_shows_blank_instead_of_none_when_tenant_has_no_ruc(self):
+        self.tenant.ruc = None
+        self.tenant.save()
+
+        client = self._client_as(self.seller_user)
+        sale_id = self._create_sale(client)
+
+        response = client.get(f"/api/v1/ventas/sales/{sale_id}/receipt/")
+        body = response.content.decode()
+        self.assertIn("RUC: ", body)
+        self.assertNotIn("None", body)
+
+    def test_auditor_can_view_receipt(self):
+        client = self._client_as(self.admin_user)
+        sale_id = self._create_sale(client)
+
+        response = self._client_as(self.auditor_user).get(
+            f"/api/v1/ventas/sales/{sale_id}/receipt/"
+        )
+        self.assertEqual(response.status_code, 200)
+
     def test_pos_catalog_requires_sales_module_access(self):
         client = self._client_as(self.auditor_user)
         response = client.get(

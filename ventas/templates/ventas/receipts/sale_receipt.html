@@ -1,0 +1,12 @@
+<div class="receipt" style="width:{{ width_mm }}mm;font-family:monospace;">
+  <p>{{ company_name }}</p>
+  <p>RUC: {{ ruc }}</p>
+  <hr/>
+  <p>{{ sale.invoice_number }} - {{ issued_at }}</p>
+  {% for line in lines %}<p>{{ line.label }}</p>
+  {% endfor %}<hr/>
+  <p>TOTAL: S/. {{ total }}</p>
+  <p>{{ payments_line }}</p>
+  <hr/>
+  <p>Gracias por su compra</p>
+</div>

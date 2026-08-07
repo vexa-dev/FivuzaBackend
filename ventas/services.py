@@ -5,6 +5,7 @@ import boto3
 from django.conf import settings
 from django.db import transaction
 from django.db.models import Q, Sum
+from django.template.loader import render_to_string
 from django.utils import timezone
 from rest_framework.exceptions import APIException, ValidationError
 
@@ -596,3 +597,57 @@ class SaleService:
     @staticmethod
     def _next_invoice_number() -> str:
         return f"V-{Sale.objects.count() + 1:06d}"
+
+
+class SaleNotFoundError(APIException):
+    status_code = 404
+    default_code = "NOT_FOUND"
+    default_detail = {"error": {"code": "NOT_FOUND", "message": "Venta no encontrada."}}
+
+
+class ReceiptService:
+    """Boleta/ticket no fiscal (API Spec §4.11): HTML de ancho fijo listo
+    para window.print() en el frontend. Sin campo ni tabla nueva en la BDD
+    v5 -se arma con datos ya existentes de Sale/SaleDetail/SalePayment y
+    Tenant (company_name, ruc), por diseño (ver nota de la spec)."""
+
+    _CHARS_PER_MM = {58: 32, 80: 48}
+
+    @staticmethod
+    def render_html(sale: Sale, tenant, width_mm: int = 58) -> str:
+        columns = ReceiptService._CHARS_PER_MM.get(width_mm, 32)
+        lines = [
+            ReceiptService._format_detail_line(detail, columns)
+            for detail in sale.details.all()
+        ]
+        payments_line = " / ".join(
+            f"{payment.method}: {payment.amount.quantize(Decimal('0.01'))}"
+            for payment in sale.payments.all()
+        )
+        return render_to_string(
+            "ventas/receipts/sale_receipt.html",
+            {
+                "company_name": tenant.company_name,
+                "ruc": tenant.ruc or "",
+                "sale": sale,
+                "issued_at": timezone.localtime(sale.created_at).strftime(
+                    "%d/%m/%Y %H:%M"
+                ),
+                "lines": lines,
+                "total": sale.total.quantize(Decimal("0.01")),
+                "payments_line": payments_line,
+                "width_mm": width_mm,
+            },
+        )
+
+    @staticmethod
+    def _format_detail_line(detail: SaleDetail, columns: int) -> dict:
+        quantity = detail.quantity
+        if quantity == quantity.to_integral_value():
+            qty_label = f"{int(quantity)} x"
+        else:
+            qty_label = f"{quantity.normalize()}"
+        left = f"{qty_label} {detail.product_name_snapshot}"
+        right = f"{detail.subtotal.quantize(Decimal('0.01'))}"
+        padding = max(columns - len(left) - len(right), 1)
+        return {"label": f"{left} {'.' * padding} {right}"}
