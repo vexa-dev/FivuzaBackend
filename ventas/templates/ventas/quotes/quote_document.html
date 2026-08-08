@@ -1,0 +1,32 @@
+<div class="quote-document" style="font-family:sans-serif;max-width:480px;">
+  <h2>{{ company_name }}</h2>
+  <p>RUC: {{ ruc }}</p>
+  <hr/>
+  <p>Cotización #{{ quote.id }} — {{ issued_at }}</p>
+  <p>Cliente: {{ customer.name }} ({{ customer.document_number }})</p>
+  <p>Válida hasta: {{ valid_until }}</p>
+  <table style="width:100%;border-collapse:collapse;">
+    <thead>
+      <tr>
+        <th style="text-align:left;">Producto</th>
+        <th style="text-align:right;">Cant.</th>
+        <th style="text-align:right;">P. Unit.</th>
+        <th style="text-align:right;">Subtotal</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for detail in details %}
+      <tr>
+        <td>{{ detail.product_name_snapshot }} ({{ detail.sku_snapshot }})</td>
+        <td style="text-align:right;">{{ detail.quantity }}</td>
+        <td style="text-align:right;">S/ {{ detail.unit_price }}</td>
+        <td style="text-align:right;">S/ {{ detail.subtotal }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <hr/>
+  <p>Subtotal: S/ {{ subtotal }}</p>
+  <p>Descuento: S/ {{ discount_total }}</p>
+  <p><strong>Total: S/ {{ total }}</strong></p>
+</div>

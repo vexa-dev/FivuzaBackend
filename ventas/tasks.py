@@ -14,7 +14,7 @@ from django.conf import settings
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
 from django.utils.html import strip_tags
-from django_tenants.utils import schema_context
+from django_tenants.utils import get_tenant_model, schema_context
 
 logger = logging.getLogger(__name__)
 
@@ -58,3 +58,23 @@ def send_cash_difference_alert(schema_name: str, session_id: int) -> None:
             from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=recipients,
         )
+
+
+@shared_task
+def expire_overdue_reservations() -> None:
+    """Celery Beat periódica (Sprint 28, Ficha de Producto §5.2): una
+    reserva de stock vencida se libera automáticamente sin intervención
+    manual -mismo patron multi-tenant que inventario.tasks.
+    alert_low_stock_variants (iterar todos los tenants con schema_context)."""
+    from ventas.services import ReservationService
+
+    tenant_model = get_tenant_model()
+    for tenant in tenant_model.objects.exclude(schema_name="public"):
+        with schema_context(tenant.schema_name):
+            expired = ReservationService.expire_overdue_reservations()
+            if expired:
+                logger.info(
+                    "Reservas vencidas liberadas en %s: %s.",
+                    tenant.schema_name,
+                    expired,
+                )

@@ -304,6 +304,13 @@ CELERY_BEAT_SCHEDULE = {
         "task": "dashboard.tasks.refresh_materialized_views",
         "schedule": crontab(minute="*/5"),
     },
+    # Sprint 28: cada 15 min es suficiente -una reserva se aparta por
+    # horas/dias, no hace falta revisar mas seguido que el refresco del
+    # dashboard (que si necesita ser casi en vivo).
+    "ventas-expire-overdue-reservations": {
+        "task": "ventas.tasks.expire_overdue_reservations",
+        "schedule": crontab(minute="*/15"),
+    },
 }
 
 # Django Channels / WebSocket (Sprint 24, TRD §2.5): DashboardConsumer

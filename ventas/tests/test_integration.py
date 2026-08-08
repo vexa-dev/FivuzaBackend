@@ -14,8 +14,10 @@ from ventas.models import (
     CashRegister,
     CashSession,
     Customer,
+    ProductReservation,
     Promotion,
     PromotionProduct,
+    Quote,
     Sale,
 )
 from ventas.services import (
@@ -24,6 +26,12 @@ from ventas.services import (
     PaymentMismatchError,
     POSCatalogService,
     PromotionService,
+    QuoteAlreadyConvertedError,
+    QuoteExpiredError,
+    QuoteNotAcceptedError,
+    QuoteService,
+    ReservationNotActiveError,
+    ReservationService,
     SaleService,
 )
 
@@ -688,3 +696,425 @@ class POSCatalogServiceTests(TenantTestCase):
         catalog = POSCatalogService.catalog(warehouse=self.warehouse)
         row = next(row for row in catalog if row["id"] == variant.id)
         self.assertEqual(row["unit_of_measure"], "UND")
+
+
+class ReservationServiceTests(TenantTestCase):
+    """ReservationService (Sprint 28, Ficha de Producto §5.2): apartar
+    stock sin generar InventoryMovement, y convertir/cancelar/expirar."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_ventas_reservations"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-ventas-reservations.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        role = Role.objects.get(name="admin")
+        cls.user = User.objects.create(email="admin@negocio.com", role=role)
+        cls.warehouse = Warehouse.objects.create(name="Principal")
+        cls.category = Category.objects.create(name="Ropa")
+        cls.customer = Customer.objects.create(
+            document_type="DNI", document_number="33333333", name="Cliente Apartado"
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    _sku_counter = 0
+
+    def _create_variant(self, *, price="20.00", stock_quantity="10"):
+        ReservationServiceTests._sku_counter += 1
+        product = ProductVariantService.create_product(
+            product_data={
+                "type": "PRODUCT",
+                "name": "Camiseta",
+                "category": self.category,
+                "unit_of_measure": "UND",
+            },
+            variants_data=[
+                {
+                    "sku": f"SKU-RESERVA-{ReservationServiceTests._sku_counter}",
+                    "price": price,
+                }
+            ],
+        )
+        variant = product.variants.first()
+        StockService.adjust_stock(
+            variant=variant,
+            warehouse=self.warehouse,
+            counted_quantity=Decimal(stock_quantity),
+            concept="ADJUSTMENT",
+            user=self.user,
+        )
+        return variant
+
+    def _open_session(self):
+        ReservationServiceTests._sku_counter += 1
+        register = CashRegister.objects.create(
+            warehouse=self.warehouse,
+            name=f"Caja {ReservationServiceTests._sku_counter}",
+        )
+        return CashSession.objects.create(
+            cash_register=register,
+            user=self.user,
+            opening_amount="0",
+            opening_at=timezone.now(),
+            status="OPEN",
+        )
+
+    def test_create_reservation_does_not_move_physical_stock(self):
+        variant = self._create_variant(stock_quantity="10")
+        ReservationService.create_reservation(
+            customer=self.customer,
+            variant=variant,
+            warehouse=self.warehouse,
+            quantity=Decimal("4"),
+            expires_at=timezone.now() + timedelta(days=1),
+            user=self.user,
+        )
+        stock = Stock.objects.get(variant=variant, warehouse=self.warehouse)
+        self.assertEqual(stock.quantity, Decimal("10.000"))
+
+    def test_available_quantity_subtracts_active_reservations(self):
+        variant = self._create_variant(stock_quantity="10")
+        ReservationService.create_reservation(
+            customer=self.customer,
+            variant=variant,
+            warehouse=self.warehouse,
+            quantity=Decimal("4"),
+            expires_at=timezone.now() + timedelta(days=1),
+            user=self.user,
+        )
+        available = ReservationService.get_available_quantity(
+            variant=variant, warehouse=self.warehouse
+        )
+        self.assertEqual(available, Decimal("6.000"))
+
+    def test_create_reservation_exceeding_available_stock_raises(self):
+        variant = self._create_variant(stock_quantity="5")
+        ReservationService.create_reservation(
+            customer=self.customer,
+            variant=variant,
+            warehouse=self.warehouse,
+            quantity=Decimal("4"),
+            expires_at=timezone.now() + timedelta(days=1),
+            user=self.user,
+        )
+        with self.assertRaises(InsufficientStockError):
+            ReservationService.create_reservation(
+                customer=self.customer,
+                variant=variant,
+                warehouse=self.warehouse,
+                quantity=Decimal("2"),
+                expires_at=timezone.now() + timedelta(days=1),
+                user=self.user,
+            )
+
+    def test_cancel_reservation_releases_available_quantity(self):
+        variant = self._create_variant(stock_quantity="10")
+        reservation = ReservationService.create_reservation(
+            customer=self.customer,
+            variant=variant,
+            warehouse=self.warehouse,
+            quantity=Decimal("4"),
+            expires_at=timezone.now() + timedelta(days=1),
+            user=self.user,
+        )
+        ReservationService.cancel_reservation(reservation=reservation, user=self.user)
+
+        available = ReservationService.get_available_quantity(
+            variant=variant, warehouse=self.warehouse
+        )
+        self.assertEqual(available, Decimal("10.000"))
+        reservation.refresh_from_db()
+        self.assertEqual(reservation.status, "CANCELLED")
+
+    def test_cancel_already_cancelled_reservation_raises(self):
+        variant = self._create_variant(stock_quantity="10")
+        reservation = ReservationService.create_reservation(
+            customer=self.customer,
+            variant=variant,
+            warehouse=self.warehouse,
+            quantity=Decimal("4"),
+            expires_at=timezone.now() + timedelta(days=1),
+            user=self.user,
+        )
+        ReservationService.cancel_reservation(reservation=reservation, user=self.user)
+        with self.assertRaises(ReservationNotActiveError):
+            ReservationService.cancel_reservation(
+                reservation=reservation, user=self.user
+            )
+
+    def test_convert_reservation_creates_sale_and_discounts_physical_stock(self):
+        variant = self._create_variant(price="20.00", stock_quantity="10")
+        reservation = ReservationService.create_reservation(
+            customer=self.customer,
+            variant=variant,
+            warehouse=self.warehouse,
+            quantity=Decimal("4"),
+            expires_at=timezone.now() + timedelta(days=1),
+            user=self.user,
+        )
+        session = self._open_session()
+
+        sale = ReservationService.convert_to_sale(
+            reservation=reservation,
+            cash_session=session,
+            user=self.user,
+            payments=[{"method": "CASH", "amount": Decimal("80.00")}],
+        )
+
+        self.assertEqual(sale.total, Decimal("80.0000"))
+        stock = Stock.objects.get(variant=variant, warehouse=self.warehouse)
+        self.assertEqual(stock.quantity, Decimal("6.000"))
+        reservation.refresh_from_db()
+        self.assertEqual(reservation.status, "CONVERTED")
+        self.assertEqual(reservation.sale_id, sale.id)
+
+    def test_convert_non_active_reservation_raises(self):
+        variant = self._create_variant(stock_quantity="10")
+        reservation = ReservationService.create_reservation(
+            customer=self.customer,
+            variant=variant,
+            warehouse=self.warehouse,
+            quantity=Decimal("4"),
+            expires_at=timezone.now() + timedelta(days=1),
+            user=self.user,
+        )
+        ReservationService.cancel_reservation(reservation=reservation, user=self.user)
+        session = self._open_session()
+
+        with self.assertRaises(ReservationNotActiveError):
+            ReservationService.convert_to_sale(
+                reservation=reservation,
+                cash_session=session,
+                user=self.user,
+                payments=[{"method": "CASH", "amount": Decimal("80.00")}],
+            )
+
+    def test_expire_overdue_reservations_releases_stock(self):
+        variant = self._create_variant(stock_quantity="10")
+        reservation = ReservationService.create_reservation(
+            customer=self.customer,
+            variant=variant,
+            warehouse=self.warehouse,
+            quantity=Decimal("4"),
+            expires_at=timezone.now() - timedelta(minutes=1),
+            user=self.user,
+        )
+
+        expired_count = ReservationService.expire_overdue_reservations()
+
+        self.assertEqual(expired_count, 1)
+        reservation.refresh_from_db()
+        self.assertEqual(reservation.status, "EXPIRED")
+        available = ReservationService.get_available_quantity(
+            variant=variant, warehouse=self.warehouse
+        )
+        self.assertEqual(available, Decimal("10.000"))
+
+    def test_expire_overdue_reservations_ignores_reservations_not_yet_due(self):
+        variant = self._create_variant(stock_quantity="10")
+        ReservationService.create_reservation(
+            customer=self.customer,
+            variant=variant,
+            warehouse=self.warehouse,
+            quantity=Decimal("4"),
+            expires_at=timezone.now() + timedelta(days=1),
+            user=self.user,
+        )
+        expired_count = ReservationService.expire_overdue_reservations()
+        self.assertEqual(expired_count, 0)
+        self.assertEqual(ProductReservation.objects.filter(status="ACTIVE").count(), 1)
+
+
+class QuoteServiceTests(TenantTestCase):
+    """QuoteService (Sprint 28, Ficha de Producto §5.2): la cotizacion
+    congela el precio al momento de cotizar, y convert_to_sale() genera una
+    venta con exactamente esos precios, sin recalcular."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_ventas_quotes"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-ventas-quotes.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        role = Role.objects.get(name="admin")
+        cls.user = User.objects.create(email="admin@negocio.com", role=role)
+        cls.warehouse = Warehouse.objects.create(name="Principal")
+        cls.category = Category.objects.create(name="Ropa")
+        cls.customer = Customer.objects.create(
+            document_type="DNI", document_number="44444444", name="Cliente Cotizado"
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    _sku_counter = 0
+
+    def _create_variant(self, *, price="20.00", stock_quantity="10"):
+        QuoteServiceTests._sku_counter += 1
+        product = ProductVariantService.create_product(
+            product_data={
+                "type": "PRODUCT",
+                "name": "Camiseta",
+                "category": self.category,
+                "unit_of_measure": "UND",
+            },
+            variants_data=[
+                {
+                    "sku": f"SKU-COTIZA-{QuoteServiceTests._sku_counter}",
+                    "price": price,
+                }
+            ],
+        )
+        variant = product.variants.first()
+        StockService.adjust_stock(
+            variant=variant,
+            warehouse=self.warehouse,
+            counted_quantity=Decimal(stock_quantity),
+            concept="ADJUSTMENT",
+            user=self.user,
+        )
+        return variant
+
+    def _open_session(self):
+        QuoteServiceTests._sku_counter += 1
+        register = CashRegister.objects.create(
+            warehouse=self.warehouse, name=f"Caja {QuoteServiceTests._sku_counter}"
+        )
+        return CashSession.objects.create(
+            cash_register=register,
+            user=self.user,
+            opening_amount="0",
+            opening_at=timezone.now(),
+            status="OPEN",
+        )
+
+    def test_create_quote_freezes_price_and_computes_totals(self):
+        variant = self._create_variant(price="25.00")
+        quote = QuoteService.create_quote(
+            customer=self.customer,
+            user=self.user,
+            lines=[{"variant_id": variant.id, "quantity": "3"}],
+            valid_until=timezone.now() + timedelta(days=7),
+        )
+        self.assertEqual(quote.status, "DRAFT")
+        self.assertEqual(quote.total, Decimal("75.0000"))
+        detail = quote.details.first()
+        self.assertEqual(detail.unit_price, Decimal("25.00"))
+        self.assertEqual(detail.sku_snapshot, variant.sku)
+
+    def test_convert_accepted_quote_creates_sale_matching_quoted_total(self):
+        variant = self._create_variant(price="25.00")
+        quote = QuoteService.create_quote(
+            customer=self.customer,
+            user=self.user,
+            lines=[{"variant_id": variant.id, "quantity": "3"}],
+            valid_until=timezone.now() + timedelta(days=7),
+        )
+        QuoteService.mark_sent(quote=quote)
+        QuoteService.mark_accepted(quote=quote)
+
+        # El precio de catalogo cambia DESPUES de cotizar -la conversion
+        # debe seguir usando el precio congelado (25.00), no el nuevo (99.00).
+        variant.price = Decimal("99.00")
+        variant.save(update_fields=["price"])
+
+        session = self._open_session()
+        sale = QuoteService.convert_to_sale(
+            quote=quote,
+            cash_session=session,
+            user=self.user,
+            payments=[{"method": "CASH", "amount": Decimal("75.00")}],
+        )
+
+        self.assertEqual(sale.total, quote.total)
+        self.assertEqual(sale.details.first().unit_price, Decimal("25.00"))
+        quote.refresh_from_db()
+        self.assertEqual(quote.sale_id, sale.id)
+
+    def test_convert_quote_not_accepted_raises(self):
+        variant = self._create_variant()
+        quote = QuoteService.create_quote(
+            customer=self.customer,
+            user=self.user,
+            lines=[{"variant_id": variant.id, "quantity": "1"}],
+            valid_until=timezone.now() + timedelta(days=7),
+        )
+        session = self._open_session()
+        with self.assertRaises(QuoteNotAcceptedError):
+            QuoteService.convert_to_sale(
+                quote=quote,
+                cash_session=session,
+                user=self.user,
+                payments=[{"method": "CASH", "amount": quote.total}],
+            )
+
+    def test_convert_already_converted_quote_raises(self):
+        variant = self._create_variant(price="20.00")
+        quote = QuoteService.create_quote(
+            customer=self.customer,
+            user=self.user,
+            lines=[{"variant_id": variant.id, "quantity": "1"}],
+            valid_until=timezone.now() + timedelta(days=7),
+        )
+        QuoteService.mark_accepted(quote=quote)
+        session = self._open_session()
+        QuoteService.convert_to_sale(
+            quote=quote,
+            cash_session=session,
+            user=self.user,
+            payments=[{"method": "CASH", "amount": quote.total}],
+        )
+
+        with self.assertRaises(QuoteAlreadyConvertedError):
+            QuoteService.convert_to_sale(
+                quote=quote,
+                cash_session=session,
+                user=self.user,
+                payments=[{"method": "CASH", "amount": quote.total}],
+            )
+
+    def test_convert_expired_quote_raises(self):
+        variant = self._create_variant()
+        quote = QuoteService.create_quote(
+            customer=self.customer,
+            user=self.user,
+            lines=[{"variant_id": variant.id, "quantity": "1"}],
+            valid_until=timezone.now() - timedelta(days=1),
+        )
+        QuoteService.mark_accepted(quote=quote)
+        session = self._open_session()
+
+        with self.assertRaises(QuoteExpiredError):
+            QuoteService.convert_to_sale(
+                quote=quote,
+                cash_session=session,
+                user=self.user,
+                payments=[{"method": "CASH", "amount": quote.total}],
+            )
+
+    def test_mark_rejected_sets_status(self):
+        variant = self._create_variant()
+        quote = QuoteService.create_quote(
+            customer=self.customer,
+            user=self.user,
+            lines=[{"variant_id": variant.id, "quantity": "1"}],
+            valid_until=timezone.now() + timedelta(days=7),
+        )
+        QuoteService.mark_rejected(quote=quote)
+        self.assertEqual(Quote.objects.get(pk=quote.pk).status, "REJECTED")

@@ -17,7 +17,10 @@ from ventas.models import (
     CashSession,
     CustomerBalanceLedger,
     CustomerDebtLedger,
+    ProductReservation,
     Promotion,
+    Quote,
+    QuoteDetail,
     Sale,
     SaleDetail,
     SalePayment,
@@ -581,8 +584,16 @@ class SaleService:
                     )
                 oversold_variant_ids.append(variant.id)
 
-            unit_price = SaleService._resolve_unit_price(
-                variant=variant, quantity=quantity
+            # Sprint 28: una cotizacion aceptada convierte con sus precios
+            # ya congelados (QuoteService.convert_to_sale) -si la linea trae
+            # unit_price explicito, gana sobre la resolucion normal (precio
+            # de catalogo/tramo por volumen). Ningun caller existente manda
+            # esta clave, asi que el comportamiento por defecto no cambia.
+            unit_price = line.get("unit_price")
+            unit_price = (
+                Decimal(str(unit_price))
+                if unit_price is not None
+                else SaleService._resolve_unit_price(variant=variant, quantity=quantity)
             )
             line_subtotal = unit_price * quantity
 
@@ -1244,3 +1255,289 @@ class SaleSyncService:
                 )
 
         return {"synced": synced, "conflicts": conflicts}
+
+
+class ReservationNotActiveError(APIException):
+    status_code = 409
+    default_code = "RESERVATION_NOT_ACTIVE"
+    default_detail = {
+        "error": {
+            "code": "RESERVATION_NOT_ACTIVE",
+            "message": "Esta reserva ya no esta activa.",
+        }
+    }
+
+
+class ReservationService:
+    """Apartado de stock para un cliente sin registrar la venta todavia
+    (Sprint 28, Ficha de Producto §5.2). No genera InventoryMovement al
+    crear la reserva -el stock fisico se descuenta recien al convertir()
+    (via SaleService.create_sale(), el mismo camino de cualquier venta). La
+    disponibilidad "vendible" resta las reservas ACTIVE del Stock real, asi
+    que dos reservas y una venta nunca pueden sobre-comprometer el mismo
+    stock fisico."""
+
+    @staticmethod
+    def get_available_quantity(*, variant, warehouse) -> Decimal:
+        stock = Stock.objects.filter(variant=variant, warehouse=warehouse).first()
+        current = stock.quantity if stock else Decimal("0")
+        reserved = ProductReservation.objects.filter(
+            variant=variant, warehouse=warehouse, status="ACTIVE"
+        ).aggregate(total=Sum("quantity"))["total"] or Decimal("0")
+        return current - reserved
+
+    @staticmethod
+    @transaction.atomic
+    def create_reservation(
+        *, customer, variant, warehouse, quantity: Decimal, expires_at, user
+    ) -> ProductReservation:
+        # select_for_update sobre la fila de Stock serializa esto con
+        # cualquier venta/traslado/otra reserva concurrente de la misma
+        # variante+almacen -mismo patron que StockService.adjust_stock()
+        # (Esquema Backend §5.2). Si la fila no existe todavia, no hay nada
+        # que bloquear -pero entonces el stock disponible es 0 de por si, no
+        # hay carrera real posible con una fila que no existe.
+        Stock.objects.select_for_update().filter(
+            variant=variant, warehouse=warehouse
+        ).first()
+        available = ReservationService.get_available_quantity(
+            variant=variant, warehouse=warehouse
+        )
+        if available < quantity:
+            raise InsufficientStockError(
+                sku=variant.sku, available=available, requested=quantity
+            )
+        return ProductReservation.objects.create(
+            customer=customer,
+            variant=variant,
+            warehouse=warehouse,
+            quantity=quantity,
+            expires_at=expires_at,
+            user=user,
+        )
+
+    @staticmethod
+    @transaction.atomic
+    def cancel_reservation(
+        *, reservation: ProductReservation, user
+    ) -> ProductReservation:
+        if reservation.status != "ACTIVE":
+            raise ReservationNotActiveError()
+        reservation.status = "CANCELLED"
+        reservation.save(update_fields=["status"])
+        return reservation
+
+    @staticmethod
+    @transaction.atomic
+    def convert_to_sale(
+        *,
+        reservation: ProductReservation,
+        cash_session: CashSession,
+        user,
+        payments: list[dict],
+    ) -> Sale:
+        if reservation.status != "ACTIVE":
+            raise ReservationNotActiveError()
+
+        sale = SaleService.create_sale(
+            customer=reservation.customer,
+            cash_session=cash_session,
+            user=user,
+            lines=[
+                {
+                    "variant_id": reservation.variant_id,
+                    "quantity": reservation.quantity,
+                }
+            ],
+            payments=payments,
+        )
+        reservation.status = "CONVERTED"
+        reservation.sale = sale
+        reservation.save(update_fields=["status", "sale"])
+        return sale
+
+    @staticmethod
+    def expire_overdue_reservations(*, at=None) -> int:
+        """Usado por la tarea periodica de Celery (ventas.tasks) -una
+        reserva vencida libera el stock automaticamente sin intervencion
+        manual, porque get_available_quantity() solo resta las ACTIVE."""
+        at = at or timezone.now()
+        return ProductReservation.objects.filter(
+            status="ACTIVE", expires_at__lt=at
+        ).update(status="EXPIRED")
+
+
+class QuoteNotAcceptedError(APIException):
+    status_code = 409
+    default_code = "QUOTE_NOT_ACCEPTED"
+    default_detail = {
+        "error": {
+            "code": "QUOTE_NOT_ACCEPTED",
+            "message": "Solo se puede convertir una cotizacion aceptada.",
+        }
+    }
+
+
+class QuoteAlreadyConvertedError(APIException):
+    status_code = 409
+    default_code = "QUOTE_ALREADY_CONVERTED"
+    default_detail = {
+        "error": {
+            "code": "QUOTE_ALREADY_CONVERTED",
+            "message": "Esta cotizacion ya se convirtio en una venta.",
+        }
+    }
+
+
+class QuoteExpiredError(APIException):
+    status_code = 409
+    default_code = "QUOTE_EXPIRED"
+    default_detail = {
+        "error": {
+            "code": "QUOTE_EXPIRED",
+            "message": "Esta cotizacion ya vencio.",
+        }
+    }
+
+
+class QuoteService:
+    """Cotizacion/presupuesto (Sprint 28, Ficha de Producto §5.2): documento
+    no vinculante que congela los precios al momento de cotizar (misma
+    resolucion de precio por volumen/promocion que create_sale(), pero
+    fijada aqui en vez de recalculada despues). convert_to_sale() reutiliza
+    SaleService.create_sale() pasando esos precios ya congelados como
+    unit_price/discount_amount explicitos por linea -el total de la venta
+    resultante es exactamente el cotizado, sin importar si el precio de
+    catalogo o la promocion cambiaron entre medio."""
+
+    @staticmethod
+    @transaction.atomic
+    def create_quote(
+        *, customer, user, lines: list[dict], valid_until, at=None
+    ) -> Quote:
+        at = at or timezone.now()
+        subtotal = Decimal("0")
+        discount_total = Decimal("0")
+        prepared_lines = []
+        for line in lines:
+            variant = ProductVariant.objects.select_related("product").get(
+                id=line["variant_id"]
+            )
+            quantity = Decimal(str(line["quantity"]))
+            unit_price = SaleService._resolve_unit_price(
+                variant=variant, quantity=quantity
+            )
+            line_subtotal = unit_price * quantity
+            discount_amount = line.get("discount_amount")
+            discount_amount = (
+                Decimal(str(discount_amount))
+                if discount_amount is not None
+                else SaleService._resolve_promotion_discount(
+                    variant=variant, quantity=quantity, unit_price=unit_price, at=at
+                )
+            )
+            prepared_lines.append(
+                {
+                    "variant": variant,
+                    "quantity": quantity,
+                    "unit_price": unit_price,
+                    "discount_amount": discount_amount,
+                    "subtotal": line_subtotal - discount_amount,
+                }
+            )
+            subtotal += line_subtotal
+            discount_total += discount_amount
+
+        quote = Quote.objects.create(
+            customer=customer,
+            user=user,
+            valid_until=valid_until,
+            subtotal=subtotal,
+            discount_total=discount_total,
+            total=subtotal - discount_total,
+        )
+        for prepared in prepared_lines:
+            variant = prepared["variant"]
+            QuoteDetail.objects.create(
+                quote=quote,
+                variant_id=variant.id,
+                product_name_snapshot=variant.product.name,
+                sku_snapshot=variant.sku,
+                quantity=prepared["quantity"],
+                unit_price=prepared["unit_price"],
+                discount_amount=prepared["discount_amount"],
+                subtotal=prepared["subtotal"],
+            )
+        return quote
+
+    @staticmethod
+    def mark_sent(*, quote: Quote) -> Quote:
+        quote.status = "SENT"
+        quote.save(update_fields=["status"])
+        return quote
+
+    @staticmethod
+    def mark_accepted(*, quote: Quote) -> Quote:
+        quote.status = "ACCEPTED"
+        quote.save(update_fields=["status"])
+        return quote
+
+    @staticmethod
+    def mark_rejected(*, quote: Quote) -> Quote:
+        quote.status = "REJECTED"
+        quote.save(update_fields=["status"])
+        return quote
+
+    @staticmethod
+    @transaction.atomic
+    def convert_to_sale(
+        *, quote: Quote, cash_session: CashSession, user, payments: list[dict]
+    ) -> Sale:
+        if quote.sale_id is not None:
+            raise QuoteAlreadyConvertedError()
+        if quote.status != "ACCEPTED":
+            raise QuoteNotAcceptedError()
+        if quote.valid_until < timezone.now():
+            raise QuoteExpiredError()
+
+        lines = [
+            {
+                "variant_id": detail.variant_id,
+                "quantity": detail.quantity,
+                "unit_price": detail.unit_price,
+                "discount_amount": detail.discount_amount,
+            }
+            for detail in quote.details.all()
+        ]
+        sale = SaleService.create_sale(
+            customer=quote.customer,
+            cash_session=cash_session,
+            user=user,
+            lines=lines,
+            payments=payments,
+        )
+        quote.sale = sale
+        quote.save(update_fields=["sale"])
+        return sale
+
+    @staticmethod
+    def render_html(quote: Quote, tenant) -> str:
+        return render_to_string(
+            "ventas/quotes/quote_document.html",
+            {
+                "company_name": tenant.company_name,
+                "ruc": tenant.ruc or "",
+                "quote": quote,
+                "customer": quote.customer,
+                "issued_at": timezone.localtime(quote.created_at).strftime(
+                    "%d/%m/%Y %H:%M"
+                ),
+                "valid_until": timezone.localtime(quote.valid_until).strftime(
+                    "%d/%m/%Y"
+                ),
+                "details": quote.details.all(),
+                "subtotal": quote.subtotal.quantize(Decimal("0.01")),
+                "discount_total": quote.discount_total.quantize(Decimal("0.01")),
+                "total": quote.total.quantize(Decimal("0.01")),
+            },
+        )
