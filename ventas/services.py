@@ -341,6 +341,8 @@ class POSCatalogService:
 
     @staticmethod
     def _serialize(variants: list[ProductVariant], warehouse) -> list[dict]:
+        from inventario.models import VolumePricingTier
+
         variant_ids = [variant.id for variant in variants]
         stock_by_variant = dict(
             Stock.objects.filter(
@@ -348,6 +350,21 @@ class POSCatalogService:
             ).values_list("variant_id", "quantity")
         )
         by_variant, by_category = PromotionService.build_active_promotion_index()
+
+        # Sprint 26: el POS necesita los tramos para mostrar "precio
+        # mayorista aplicado" en vivo, sin round-trip al agregar unidades
+        # al carrito -mismo criterio que el resto del catalogo (payload
+        # completo, pensado para cachearse).
+        tiers_by_variant: dict[int, list[dict]] = {}
+        for tier in VolumePricingTier.objects.filter(
+            variant_id__in=variant_ids
+        ).order_by("variant_id", "min_quantity"):
+            tiers_by_variant.setdefault(tier.variant_id, []).append(
+                {
+                    "min_quantity": str(tier.min_quantity),
+                    "unit_price": str(tier.unit_price),
+                }
+            )
 
         results = []
         for variant in variants:
@@ -362,6 +379,7 @@ class POSCatalogService:
                     "product_name": variant.product.name,
                     "price": str(variant.price),
                     "stock": str(stock_by_variant.get(variant.id, Decimal("0"))),
+                    "pricing_tiers": tiers_by_variant.get(variant.id, []),
                     "promotion": (
                         {
                             "id": promotion.id,
@@ -558,7 +576,9 @@ class SaleService:
                     )
                 oversold_variant_ids.append(variant.id)
 
-            unit_price = variant.price
+            unit_price = SaleService._resolve_unit_price(
+                variant=variant, quantity=quantity
+            )
             line_subtotal = unit_price * quantity
 
             discount_amount = line.get("discount_amount")
@@ -769,6 +789,25 @@ class SaleService:
         )
 
         return sale
+
+    @staticmethod
+    def _resolve_unit_price(*, variant, quantity: Decimal) -> Decimal:
+        """Precio por volumen (Sprint 26, BDD v5 "volume_pricing_tiers"):
+        se resuelve el tramo de mayor min_quantity que la cantidad vendida
+        alcance a cubrir -no el mas barato ni el mas cercano, el mas
+        especifico. Si ninguno aplica, product_variants.price sin cambios.
+        Corre ANTES que las promociones -una promocion sigue pudiendo
+        aplicar un descuento adicional sobre el precio mayorista ya resuelto."""
+        from inventario.models import VolumePricingTier
+
+        tier = (
+            VolumePricingTier.objects.filter(
+                variant=variant, min_quantity__lte=quantity
+            )
+            .order_by("-min_quantity")
+            .first()
+        )
+        return tier.unit_price if tier else variant.price
 
     @staticmethod
     def _resolve_promotion_discount(

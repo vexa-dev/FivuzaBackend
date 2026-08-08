@@ -191,6 +191,30 @@ class ProductPriceHistory(models.Model):
         verbose_name_plural = "product price histories"
 
 
+class VolumePricingTier(models.Model):
+    """Tramos de precio por cantidad mínima comprada (Sprint 26, Ficha de
+    Producto §5.1) -ej. "por docena", "por caja". SaleService resuelve, por
+    línea, el tramo de mayor min_quantity que la cantidad vendida alcance a
+    cubrir; si ninguno aplica, se usa ProductVariant.price sin cambios."""
+
+    variant = models.ForeignKey(
+        ProductVariant, on_delete=models.CASCADE, related_name="pricing_tiers"
+    )
+    min_quantity = models.DecimalField(max_digits=12, decimal_places=3)
+    unit_price = models.DecimalField(max_digits=12, decimal_places=4)
+
+    class Meta:
+        db_table = "volume_pricing_tiers"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["variant", "min_quantity"], name="uq_volume_pricing_tier"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.variant.sku} x{self.min_quantity} -> {self.unit_price}"
+
+
 class Stock(models.Model):
     variant = models.ForeignKey(
         ProductVariant, on_delete=models.PROTECT, related_name="stock"
@@ -233,6 +257,11 @@ class InventoryMovement(models.Model):
             ("SALE", "SALE"),
             ("ADJUSTMENT", "ADJUSTMENT"),
             ("RETURN", "RETURN"),
+            # Sprint 26: traslado de stock entre almacenes del mismo tenant
+            # -TRANSFER_OUT en el almacen de origen, TRANSFER_IN en el
+            # destino, vinculados entre si via reference_id.
+            ("TRANSFER_OUT", "TRANSFER_OUT"),
+            ("TRANSFER_IN", "TRANSFER_IN"),
         ],
     )
     reference_id = models.IntegerField(null=True, blank=True)

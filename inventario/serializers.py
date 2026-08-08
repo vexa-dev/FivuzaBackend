@@ -17,6 +17,7 @@ from inventario.models import (
     Supplier,
     TaxRate,
     VariantAttributeValue,
+    VolumePricingTier,
     Warehouse,
 )
 from inventario.services import MediaService, ProductVariantService, StockService
@@ -222,6 +223,34 @@ class StockAdjustSerializer(serializers.Serializer):
             concept=validated_data["concept"],
             user=self.context["request"].user,
         )
+
+
+class StockTransferSerializer(serializers.Serializer):
+    """Payload de entrada de POST /inventario/stock/transfer/ (Sprint 26,
+    API Spec §2.2)."""
+
+    variant = serializers.PrimaryKeyRelatedField(queryset=ProductVariant.objects.all())
+    from_warehouse = serializers.PrimaryKeyRelatedField(
+        queryset=Warehouse.objects.all()
+    )
+    to_warehouse = serializers.PrimaryKeyRelatedField(queryset=Warehouse.objects.all())
+    quantity = serializers.DecimalField(max_digits=12, decimal_places=3)
+
+    def create(self, validated_data):
+        out_movement, in_movement = StockService.transfer_stock(
+            variant=validated_data["variant"],
+            from_warehouse=validated_data["from_warehouse"],
+            to_warehouse=validated_data["to_warehouse"],
+            quantity=validated_data["quantity"],
+            user=self.context["request"].user,
+        )
+        return {"out_movement": out_movement, "in_movement": in_movement}
+
+
+class VolumePricingTierSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = VolumePricingTier
+        fields = ["id", "variant", "min_quantity", "unit_price"]
 
 
 class TaxRateSerializer(serializers.ModelSerializer):
