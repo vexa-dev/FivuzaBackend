@@ -194,6 +194,7 @@ class TenantSettingsSerializer(serializers.ModelSerializer):
             "hr_module_enabled",
             "cash_module_enabled",
             "cash_difference_alert_threshold",
+            "dashboard_refresh_minutes",
             "updated_at",
         ]
         read_only_fields = ["updated_at"]

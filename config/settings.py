@@ -296,6 +296,28 @@ CELERY_BEAT_SCHEDULE = {
         "task": "core.tasks.check_subscription_expirations",
         "schedule": crontab(hour=7, minute=0),
     },
+    # Sprint 24: corre cada 5 minutos, pero cada tenant solo se refresca de
+    # verdad si ya paso su propio dashboard_refresh_minutes -ver
+    # DashboardRefreshService.is_due(). 5 min es un piso razonable: ningun
+    # tenant configura menos que eso (Esquema Backend §9.2, "cada 15-30 min").
+    "dashboard-refresh-materialized-views": {
+        "task": "dashboard.tasks.refresh_materialized_views",
+        "schedule": crontab(minute="*/5"),
+    },
+}
+
+# Django Channels / WebSocket (Sprint 24, TRD §2.5): DashboardConsumer
+# empuja metricas al frontend conforme ocurren ventas. Redis como channel
+# layer -mismo servicio que ya usa Celery/cache, sin sumar infraestructura
+# nueva al proyecto.
+ASGI_APPLICATION = "config.asgi.application"
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [os.getenv("REDIS_URL", "redis://redis:6379/0")],
+        },
+    }
 }
 
 

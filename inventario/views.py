@@ -314,12 +314,35 @@ class StockAdjustView(APIView):
 
 class LowStockVariantsView(APIView):
     """GET listado de variantes por debajo de su min_stock -usado por el
-    badge de alertas del layout (PRD, perfil 'Dueño')."""
+    badge de alertas del layout (PRD, perfil 'Dueño'). Con ?export=csv|xlsx
+    devuelve el archivo descargable en vez del JSON (Sprint 24, API Spec
+    §4.16) -mismo selector que el badge, para que el reporte exportado y la
+    alerta nunca puedan mostrar cifras distintas."""
 
     permission_classes = _BASE_PERMISSIONS
 
     def get(self, request):
         variants = selectors.get_low_stock_variants()
+
+        export_format = request.query_params.get("export")
+        if export_format:
+            from usuarios.services import ReportExportService
+
+            rows = [
+                {
+                    "sku": variant.sku,
+                    "product": variant.product.name,
+                    "total_stock": str(variant.total_stock),
+                    "min_stock": str(variant.min_stock),
+                }
+                for variant in variants
+            ]
+            return ReportExportService.export_queryset(
+                rows=rows,
+                columns=["sku", "product", "total_stock", "min_stock"],
+                format=export_format,
+                filename="stock_bajo_minimo",
+            )
         return Response(LowStockVariantSerializer(variants, many=True).data)
 
 
@@ -434,3 +457,52 @@ class CatalogImportView(APIView):
             raise ValidationError(exc.message) from exc
 
         return Response(report, status=status.HTTP_200_OK)
+
+
+class StockValuationReportView(APIView):
+    """GET /inventario/reports/stock-valuation/?warehouse=&export=
+    (Sprint 24, API Spec §4.16). Valorización de stock: cantidad actual x
+    costo actual de cada variante, por almacén."""
+
+    permission_classes = _BASE_PERMISSIONS
+
+    def get(self, request):
+        from decimal import Decimal
+
+        from usuarios.services import ReportExportService
+
+        queryset = Stock.objects.select_related("variant__product", "warehouse").filter(
+            quantity__gt=0
+        )
+        warehouse_id = request.query_params.get("warehouse")
+        if warehouse_id:
+            queryset = queryset.filter(warehouse_id=warehouse_id)
+
+        rows = []
+        total_value = Decimal("0")
+        for stock in queryset.order_by("warehouse__name", "variant__sku"):
+            # quantity (3 decimales) x cost (4 decimales) da 7 -se redondea a
+            # la misma precision monetaria que el resto del sistema.
+            value = (stock.quantity * stock.variant.cost).quantize(Decimal("0.0001"))
+            total_value += value
+            rows.append(
+                {
+                    "warehouse": stock.warehouse.name,
+                    "sku": stock.variant.sku,
+                    "product": stock.variant.product.name,
+                    "quantity": str(stock.quantity),
+                    "unit_cost": str(stock.variant.cost),
+                    "value": str(value),
+                }
+            )
+
+        export_format = request.query_params.get("export")
+        if export_format:
+            columns = ["warehouse", "sku", "product", "quantity", "unit_cost", "value"]
+            return ReportExportService.export_queryset(
+                rows=rows,
+                columns=columns,
+                format=export_format,
+                filename="valorizacion_stock",
+            )
+        return Response({"total_value": str(total_value), "rows": rows})

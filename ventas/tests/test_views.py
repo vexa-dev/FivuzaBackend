@@ -7,6 +7,7 @@ from django.core import mail
 from django.core.cache import cache
 from django.db.models import Q, Sum
 from django.test import override_settings
+from django.utils import timezone
 from django_tenants.test.cases import TenantTestCase
 from rest_framework.test import APIClient
 
@@ -1825,3 +1826,106 @@ class SaleSyncTests(TenantTestCase):
         self.assertEqual(
             Sale.objects.filter(client_side_uuid__startswith="uuid-bulk-").count(), 120
         )
+
+
+class SalesReportTests(TenantTestCase):
+    """GET /ventas/reports/sales/ (Sprint 24, API Spec §4.16): misma
+    consulta para pantalla y exportacion, via ReportExportService."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_ventas_sales_report"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-ventas-sales-report.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.password = "ClaveSegura123"
+        cls.admin_role = Role.objects.get(name="admin")
+        cls.admin_user = User.objects.create(
+            email="admin@negocio.com", role=cls.admin_role
+        )
+        cls.admin_user.set_password(cls.password)
+        cls.admin_user.save()
+
+        cls.warehouse = Warehouse.objects.create(name="Principal")
+        category = Category.objects.create(name="Ropa")
+        product = ProductVariantService.create_product(
+            product_data={
+                "type": "PRODUCT",
+                "name": "Camiseta",
+                "category": category,
+                "unit_of_measure": "UND",
+            },
+            variants_data=[{"sku": "REPORT-SKU", "price": "20.00"}],
+        )
+        cls.variant = product.variants.first()
+        StockService.adjust_stock(
+            variant=cls.variant,
+            warehouse=cls.warehouse,
+            counted_quantity=10,
+            concept="ADJUSTMENT",
+            user=cls.admin_user,
+        )
+        cls.customer = Customer.objects.create(
+            document_type="DNI", document_number="66666666", name="Cliente Reporte"
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    def setUp(self):
+        cache.clear()
+
+    def _client(self):
+        client = APIClient(HTTP_HOST=self.domain.domain)
+        login = client.post(
+            "/api/v1/auth/login/",
+            {"email": self.admin_user.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def test_sales_report_includes_created_sale(self):
+        client = self._client()
+        register = CashRegister.objects.create(
+            warehouse=self.warehouse, name="Caja reporte"
+        )
+        session = client.post(
+            "/api/v1/ventas/cash-sessions/open/",
+            {"cash_register_id": register.id, "opening_amount": "0"},
+            format="json",
+        )
+        client.post(
+            "/api/v1/ventas/sales/",
+            {
+                "customer_id": self.customer.id,
+                "cash_session_id": session.data["id"],
+                "lines": [{"variant_id": self.variant.id, "quantity": "1"}],
+                "payments": [{"method": "CASH", "amount": "20.00"}],
+            },
+            format="json",
+        )
+
+        today = timezone.localdate().isoformat()
+        response = client.get(
+            f"/api/v1/ventas/reports/sales/?date_from={today}&date_to={today}"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["customer"], "Cliente Reporte")
+
+    def test_sales_report_csv_export(self):
+        client = self._client()
+        today = timezone.localdate().isoformat()
+        response = client.get(
+            f"/api/v1/ventas/reports/sales/?date_from={today}&date_to={today}&export=csv"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/csv")

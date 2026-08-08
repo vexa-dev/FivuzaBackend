@@ -56,6 +56,11 @@ urlpatterns = [
         views.CatalogImportView.as_view(),
         name="catalog-import",
     ),
+    path(
+        "inventario/reports/stock-valuation/",
+        views.StockValuationReportView.as_view(),
+        name="stock-valuation-report",
+    ),
 ]
 
 urlpatterns += router.urls

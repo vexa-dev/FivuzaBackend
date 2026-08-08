@@ -662,6 +662,21 @@ class SaleService:
         # creacion y todos sus tests existentes.
         sale.oversold_variant_ids = oversold_variant_ids
 
+        from django.db import connection
+
+        from dashboard.services import DashboardBroadcastService
+
+        # Sprint 24 (TRD §2.5): empuja la venta al dashboard conectado por
+        # WebSocket. connection.schema_name es el tenant actual -ya resuelto
+        # por TenantMainMiddleware antes de llegar aqui. Si no hay listeners
+        # conectados (channel_layer sin grupo activo) esto no falla ni hace
+        # nada visible, es un group_send normal.
+        DashboardBroadcastService.broadcast_sale_completed(
+            schema_name=connection.schema_name,
+            warehouse_id=sale.warehouse_id,
+            total=sale.total,
+        )
+
         return sale
 
     @staticmethod
