@@ -64,6 +64,16 @@ urlpatterns = [
         views.SalesReportView.as_view(),
         name="sales-report",
     ),
+    path(
+        "ventas/reports/cash-sessions/",
+        views.CashSessionReportView.as_view(),
+        name="cash-session-report",
+    ),
+    path(
+        "ventas/reports/cash-movements/",
+        views.CashMovementReportView.as_view(),
+        name="cash-movement-report",
+    ),
 ]
 
 # El router va al final: open/ debe resolverse antes de que el patron de

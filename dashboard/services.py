@@ -66,11 +66,77 @@ class DashboardRefreshService:
 
 
 class DashboardMetricsService:
-    """Métricas del dashboard (Sprint 24, API Spec §2.4). Ventas de hoy se
-    calculan en vivo (la vista materializada puede tener hasta
-    dashboard_refresh_minutes de atraso, inaceptable para "hoy"); semana/mes
-    y comparativos usan la vista materializada -aceptan ese mismo atraso a
-    cambio de no escanear meses de ventas en cada carga del dashboard."""
+    """Métricas del dashboard (Sprint 24, API Spec §2.4; cache Sprint 25,
+    TRD §4.4). Ventas de hoy se calculan en vivo (la vista materializada
+    puede tener hasta dashboard_refresh_minutes de atraso, inaceptable para
+    "hoy"); semana/mes y comparativos usan la vista materializada -aceptan
+    ese mismo atraso a cambio de no escanear meses de ventas en cada carga
+    del dashboard."""
+
+    _CACHE_TTL = 60
+    _CACHE_PREFIX = "dashboard:metrics"
+
+    @staticmethod
+    def _cache_key(warehouse_id: int | None) -> str:
+        # Mismo patron que PermissionService._cache_key: el schema_name va
+        # en la key porque connection.schema_name cambia por tenant, y la
+        # cache de Redis es compartida entre todos los schemas.
+        return f"{DashboardMetricsService._CACHE_PREFIX}:{connection.schema_name}:{warehouse_id or 'all'}"
+
+    @staticmethod
+    def get_all_metrics(*, warehouse_id: int | None = None) -> dict:
+        from django.core.cache import cache
+
+        key = DashboardMetricsService._cache_key(warehouse_id)
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+
+        metrics = DashboardMetricsService._compute_all_metrics(
+            warehouse_id=warehouse_id
+        )
+        cache.set(key, metrics, DashboardMetricsService._CACHE_TTL)
+        return metrics
+
+    @staticmethod
+    def _compute_all_metrics(*, warehouse_id: int | None = None) -> dict:
+        today = timezone.localdate()
+        week_start = today - timedelta(days=6)
+        month_start = today - timedelta(days=29)
+
+        return {
+            "today": DashboardMetricsService.sales_today(warehouse_id=warehouse_id),
+            "week": DashboardMetricsService.sales_range(
+                date_from=week_start, date_to=today, warehouse_id=warehouse_id
+            ),
+            "month": DashboardMetricsService.sales_range(
+                date_from=month_start, date_to=today, warehouse_id=warehouse_id
+            ),
+            "comparison_vs_previous_month": DashboardMetricsService.comparison_vs_previous_period(
+                date_from=month_start, date_to=today, warehouse_id=warehouse_id
+            ),
+            "top_products": DashboardMetricsService.top_products(
+                date_from=month_start, date_to=today
+            ),
+            "gross_margin": DashboardMetricsService.gross_margin(
+                date_from=month_start, date_to=today
+            ),
+            "critical_stock_count": DashboardMetricsService.critical_stock_count(),
+            "payment_method_distribution": DashboardMetricsService.payment_method_distribution(
+                date_from=month_start, date_to=today
+            ),
+        }
+
+    @staticmethod
+    def invalidate_cache(*, warehouse_id: int | None = None) -> None:
+        from django.core.cache import cache
+
+        cache.delete(DashboardMetricsService._cache_key(warehouse_id))
+        # Una venta de un almacen especifico tambien cambia el agregado sin
+        # filtro -se invalidan ambas variantes de cache, no solo la del
+        # almacen que vendio.
+        if warehouse_id is not None:
+            cache.delete(DashboardMetricsService._cache_key(None))
 
     @staticmethod
     def sales_today(*, warehouse_id: int | None = None) -> dict:
@@ -243,6 +309,11 @@ class DashboardBroadcastService:
     def broadcast_sale_completed(
         *, schema_name: str, warehouse_id: int, total: Decimal
     ) -> None:
+        # Invalida el cache de metricas ANTES de emitir el evento -si un
+        # cliente refetchea apenas recibe el mensaje, no debe encontrar la
+        # respuesta cacheada de antes de esta venta.
+        DashboardMetricsService.invalidate_cache(warehouse_id=warehouse_id)
+
         channel_layer = get_channel_layer()
         if channel_layer is None:
             return
