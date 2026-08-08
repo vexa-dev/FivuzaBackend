@@ -570,3 +570,128 @@ class SalesReportView(APIView):
                 filename=f"ventas_{date_from}_a_{date_to}",
             )
         return Response(rows)
+
+
+class CashSessionReportView(APIView):
+    """GET /ventas/reports/cash-sessions/?date_from=&date_to=&export=
+    (Sprint 25, API Spec §4.16). Sesiones de caja con su cuadre -mismo
+    criterio que los demas reportes de este sprint: la misma consulta
+    arma la pantalla y la exportacion."""
+
+    permission_classes = _CASH_READ_PERMISSIONS
+
+    def get(self, request):
+        from rest_framework.exceptions import ValidationError
+
+        from usuarios.services import ReportExportService
+
+        date_from = request.query_params.get("date_from")
+        date_to = request.query_params.get("date_to")
+        if not date_from or not date_to:
+            raise ValidationError("date_from y date_to son requeridos.")
+
+        queryset = (
+            CashSession.objects.select_related("cash_register", "user")
+            .filter(opening_at__date__gte=date_from, opening_at__date__lte=date_to)
+            .order_by("opening_at")
+        )
+
+        rows = [
+            {
+                "cash_register": session.cash_register.name,
+                "user": session.user.email,
+                "opening_at": session.opening_at.isoformat(),
+                "closing_at": session.closing_at.isoformat()
+                if session.closing_at
+                else "",
+                "opening_amount": str(session.opening_amount),
+                "expected_closing_amount": str(session.expected_closing_amount)
+                if session.expected_closing_amount is not None
+                else "",
+                "counted_closing_amount": str(session.counted_closing_amount)
+                if session.counted_closing_amount is not None
+                else "",
+                "difference": str(session.difference)
+                if session.difference is not None
+                else "",
+                "status": session.status,
+            }
+            for session in queryset
+        ]
+
+        export_format = request.query_params.get("export")
+        if export_format:
+            columns = [
+                "cash_register",
+                "user",
+                "opening_at",
+                "closing_at",
+                "opening_amount",
+                "expected_closing_amount",
+                "counted_closing_amount",
+                "difference",
+                "status",
+            ]
+            return ReportExportService.export_queryset(
+                rows=rows,
+                columns=columns,
+                format=export_format,
+                filename=f"sesiones_caja_{date_from}_a_{date_to}",
+            )
+        return Response(rows)
+
+
+class CashMovementReportView(APIView):
+    """GET /ventas/reports/cash-movements/?date_from=&date_to=&export=
+    (Sprint 25, API Spec §4.16). Movimientos manuales y automaticos de
+    caja en un rango de fechas."""
+
+    permission_classes = _CASH_READ_PERMISSIONS
+
+    def get(self, request):
+        from rest_framework.exceptions import ValidationError
+
+        from usuarios.services import ReportExportService
+
+        date_from = request.query_params.get("date_from")
+        date_to = request.query_params.get("date_to")
+        if not date_from or not date_to:
+            raise ValidationError("date_from y date_to son requeridos.")
+
+        queryset = (
+            CashMovement.objects.select_related("cash_session__cash_register", "user")
+            .filter(created_at__date__gte=date_from, created_at__date__lte=date_to)
+            .order_by("created_at")
+        )
+
+        rows = [
+            {
+                "cash_register": movement.cash_session.cash_register.name,
+                "date": movement.created_at.isoformat(),
+                "type": movement.type,
+                "concept": movement.concept,
+                "amount": str(movement.amount),
+                "reason": movement.reason,
+                "user": movement.user.email,
+            }
+            for movement in queryset
+        ]
+
+        export_format = request.query_params.get("export")
+        if export_format:
+            columns = [
+                "cash_register",
+                "date",
+                "type",
+                "concept",
+                "amount",
+                "reason",
+                "user",
+            ]
+            return ReportExportService.export_queryset(
+                rows=rows,
+                columns=columns,
+                format=export_format,
+                filename=f"movimientos_caja_{date_from}_a_{date_to}",
+            )
+        return Response(rows)

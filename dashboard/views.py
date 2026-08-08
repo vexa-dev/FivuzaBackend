@@ -1,6 +1,3 @@
-from datetime import timedelta
-
-from django.utils import timezone
 from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -42,31 +39,6 @@ class DashboardMetricsView(APIView):
         warehouse_id = request.query_params.get("warehouse")
         warehouse_id = int(warehouse_id) if warehouse_id else None
 
-        today = timezone.localdate()
-        week_start = today - timedelta(days=6)
-        month_start = today - timedelta(days=29)
-
         return Response(
-            {
-                "today": DashboardMetricsService.sales_today(warehouse_id=warehouse_id),
-                "week": DashboardMetricsService.sales_range(
-                    date_from=week_start, date_to=today, warehouse_id=warehouse_id
-                ),
-                "month": DashboardMetricsService.sales_range(
-                    date_from=month_start, date_to=today, warehouse_id=warehouse_id
-                ),
-                "comparison_vs_previous_month": DashboardMetricsService.comparison_vs_previous_period(
-                    date_from=month_start, date_to=today, warehouse_id=warehouse_id
-                ),
-                "top_products": DashboardMetricsService.top_products(
-                    date_from=month_start, date_to=today
-                ),
-                "gross_margin": DashboardMetricsService.gross_margin(
-                    date_from=month_start, date_to=today
-                ),
-                "critical_stock_count": DashboardMetricsService.critical_stock_count(),
-                "payment_method_distribution": DashboardMetricsService.payment_method_distribution(
-                    date_from=month_start, date_to=today
-                ),
-            }
+            DashboardMetricsService.get_all_metrics(warehouse_id=warehouse_id)
         )

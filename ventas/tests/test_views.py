@@ -1929,3 +1929,119 @@ class SalesReportTests(TenantTestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response["Content-Type"], "text/csv")
+
+
+class CashReportTests(TenantTestCase):
+    """GET /ventas/reports/cash-sessions/ y /ventas/reports/cash-movements/
+    (Sprint 25, API Spec §4.16)."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_ventas_cash_reports"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-ventas-cash-reports.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.password = "ClaveSegura123"
+        cls.admin_role = Role.objects.get(name="admin")
+        cls.admin_user = User.objects.create(
+            email="admin@negocio.com", role=cls.admin_role
+        )
+        cls.admin_user.set_password(cls.password)
+        cls.admin_user.save()
+
+        cls.warehouse = Warehouse.objects.create(name="Principal")
+        cls.cash_register = CashRegister.objects.create(
+            warehouse=cls.warehouse, name="Caja reportes"
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    def setUp(self):
+        cache.clear()
+
+    def _client(self):
+        client = APIClient(HTTP_HOST=self.domain.domain)
+        login = client.post(
+            "/api/v1/auth/login/",
+            {"email": self.admin_user.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def _open_and_close_session(self, client):
+        opened = client.post(
+            "/api/v1/ventas/cash-sessions/open/",
+            {"cash_register_id": self.cash_register.id, "opening_amount": "50.00"},
+            format="json",
+        )
+        session_id = opened.data["id"]
+        movement = client.post(
+            "/api/v1/ventas/cash-movements/",
+            {
+                "cash_session": session_id,
+                "type": "OUT",
+                "concept": "RETIRO",
+                "amount": "10.00",
+                "reason": "Prueba",
+            },
+            format="json",
+        )
+        assert movement.status_code == 201, movement.data
+        client.post(
+            f"/api/v1/ventas/cash-sessions/{session_id}/close/",
+            {"counted_closing_amount": "40.00"},
+            format="json",
+        )
+        return session_id
+
+    def test_cash_session_report_includes_closed_session(self):
+        client = self._client()
+        self._open_and_close_session(client)
+
+        today = timezone.localdate().isoformat()
+        response = client.get(
+            f"/api/v1/ventas/reports/cash-sessions/?date_from={today}&date_to={today}"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["status"], "CLOSED")
+
+    def test_cash_session_report_xlsx_export(self):
+        today = timezone.localdate().isoformat()
+        response = self._client().get(
+            f"/api/v1/ventas/reports/cash-sessions/?date_from={today}&date_to={today}&export=xlsx"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response["Content-Type"],
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+    def test_cash_movement_report_includes_manual_movement(self):
+        client = self._client()
+        self._open_and_close_session(client)
+
+        today = timezone.localdate().isoformat()
+        response = client.get(
+            f"/api/v1/ventas/reports/cash-movements/?date_from={today}&date_to={today}"
+        )
+        self.assertEqual(response.status_code, 200)
+        concepts = [row["concept"] for row in response.data]
+        self.assertIn("RETIRO", concepts)
+
+    def test_cash_movement_report_csv_export(self):
+        today = timezone.localdate().isoformat()
+        response = self._client().get(
+            f"/api/v1/ventas/reports/cash-movements/?date_from={today}&date_to={today}&export=csv"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/csv")
