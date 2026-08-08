@@ -4,10 +4,13 @@ import uuid
 from decimal import Decimal, InvalidOperation
 
 import boto3
+from barcode import Code128
+from barcode.writer import ImageWriter, SVGWriter
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Sum
+from django.template.loader import render_to_string
 from django.utils import timezone
 
 from inventario.models import (
@@ -499,3 +502,74 @@ class CatalogImportService:
                 concept="ADJUSTMENT",
                 user=user,
             )
+
+
+class LabelService:
+    """Etiquetas de código de barras (Sprint 27, Ficha de Producto §5.1):
+    imagen cruda del código (PNG/SVG) para uso genérico, y HTML imprimible
+    de una hoja de etiquetas en tamaños estándar -mismo patrón que
+    ReceiptService (backend arma el HTML, el frontend lo imprime con
+    window.print())."""
+
+    SIZE_MM = {
+        "40x25": (40, 25),
+        "50x30": (50, 30),
+    }
+
+    # Ajustado para que el codigo + su texto quepan dentro de una etiqueta
+    # de 40mm de ancho sin desbordar (module_width en mm por barra).
+    _WRITER_OPTIONS = {
+        "module_width": 0.28,
+        "module_height": 10.0,
+        "quiet_zone": 1.5,
+        "font_size": 7,
+        "text_distance": 2.5,
+        "write_text": True,
+    }
+
+    @staticmethod
+    def _require_barcode(variant: ProductVariant) -> str:
+        if not variant.barcode:
+            raise ValidationError("La variante no tiene código de barras asignado.")
+        return variant.barcode
+
+    @staticmethod
+    def generate_barcode_svg(variant: ProductVariant) -> str:
+        data = LabelService._require_barcode(variant)
+        code = Code128(data, writer=SVGWriter())
+        buffer = io.BytesIO()
+        code.write(buffer, options=LabelService._WRITER_OPTIONS)
+        return buffer.getvalue().decode("utf-8")
+
+    @staticmethod
+    def generate_barcode_png(variant: ProductVariant) -> bytes:
+        data = LabelService._require_barcode(variant)
+        code = Code128(data, writer=ImageWriter())
+        buffer = io.BytesIO()
+        code.write(buffer, options=LabelService._WRITER_OPTIONS)
+        return buffer.getvalue()
+
+    @staticmethod
+    def render_labels_html(items: list[dict], size: str = "40x25") -> str:
+        if size not in LabelService.SIZE_MM:
+            raise ValidationError("Tamaño de etiqueta no soportado.")
+        width_mm, height_mm = LabelService.SIZE_MM[size]
+
+        labels = []
+        for item in items:
+            variant = item["variant"]
+            svg = LabelService.generate_barcode_svg(variant)
+            for _ in range(item["quantity"]):
+                labels.append(
+                    {
+                        "product_name": variant.product.name,
+                        "sku": variant.sku,
+                        "price": variant.price.quantize(Decimal("0.01")),
+                        "barcode_svg": svg,
+                    }
+                )
+
+        return render_to_string(
+            "inventario/labels/label_sheet.html",
+            {"labels": labels, "width_mm": width_mm, "height_mm": height_mm},
+        )

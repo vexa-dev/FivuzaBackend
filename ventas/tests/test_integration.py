@@ -680,3 +680,11 @@ class POSCatalogServiceTests(TenantTestCase):
 
         catalog = POSCatalogService.catalog(warehouse=self.warehouse)
         self.assertNotIn(variant.id, [row["id"] for row in catalog])
+
+    def test_catalog_includes_unit_of_measure_for_scale_integration(self):
+        # Sprint 27: el POS usa esto para saber si debe activar la lectura
+        # de balanza al agregar la variante al carrito.
+        variant = self._create_variant()
+        catalog = POSCatalogService.catalog(warehouse=self.warehouse)
+        row = next(row for row in catalog if row["id"] == variant.id)
+        self.assertEqual(row["unit_of_measure"], "UND")
