@@ -31,6 +31,11 @@ router.register(
     views.EmployeeAttendanceViewSet,
     basename="employee-attendance",
 )
+router.register(
+    "usuarios/employee-payroll",
+    views.EmployeePayrollViewSet,
+    basename="employee-payroll",
+)
 
 urlpatterns = [
     # Especificacion de API, seccion 3.1: /api/v1/auth/... (flujo de
@@ -49,6 +54,18 @@ urlpatterns = [
         "auth/password-reset/confirm/",
         views.PasswordResetConfirmView.as_view(),
         name="password_reset_confirm",
+    ),
+    # Reportes de RRHH (Sprint 23, API Spec §2.1) -APIView, no ViewSet: no
+    # representan un recurso CRUD, son agregados de solo lectura.
+    path(
+        "usuarios/reports/attendance/",
+        views.AttendanceReportView.as_view(),
+        name="attendance_report",
+    ),
+    path(
+        "usuarios/reports/payroll-cost/",
+        views.PayrollCostReportView.as_view(),
+        name="payroll_cost_report",
     ),
 ]
 

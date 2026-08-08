@@ -1,3 +1,5 @@
+import csv
+import io
 import json
 from datetime import timedelta
 from decimal import Decimal
@@ -5,6 +7,7 @@ from decimal import Decimal
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
+from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework.exceptions import APIException
 
@@ -12,6 +15,7 @@ from usuarios.models import (
     AuditLog,
     Employee,
     EmployeeAttendance,
+    EmployeePayroll,
     EmployeeSchedule,
     PasswordResetToken,
     Permission,
@@ -315,6 +319,201 @@ class AttendanceService:
         return (Decimal(delta.total_seconds()) / Decimal(3600)).quantize(
             Decimal("0.01")
         )
+
+
+class PayrollAlreadyExistsError(APIException):
+    """Sprint 23: los montos de una planilla se **congelan** al generarla
+    -no existe un endpoint de recalculo. Si ya existe una planilla para ese
+    trabajador+periodo, generar de nuevo no la reemplaza (perderia el
+    congelamiento); el administrador debe corregir los bonos/descuentos de
+    la existente si todavia esta PENDING, o vivir con lo ya pagado si esta
+    PAID -mismo criterio que "un pago confirmado no se edita" del resto del
+    sistema (ej. CashSession cerrada)."""
+
+    status_code = 409
+    default_code = "PAYROLL_ALREADY_EXISTS"
+    default_detail = {
+        "error": {
+            "code": "PAYROLL_ALREADY_EXISTS",
+            "message": "Ya existe una planilla generada para este trabajador en este periodo.",
+        }
+    }
+
+
+class PayrollAlreadyPaidError(APIException):
+    status_code = 409
+    default_code = "PAYROLL_ALREADY_PAID"
+    default_detail = {
+        "error": {
+            "code": "PAYROLL_ALREADY_PAID",
+            "message": "Esta planilla ya esta marcada como pagada.",
+        }
+    }
+
+
+class PayrollService:
+    """Generacion de planilla por periodo (Sprint 23, Esquema Backend
+    §4.2). El sueldo base se calcula segun salary_type -MONTHLY no depende
+    de la asistencia real (el trabajador cobra su sueldo fijo salvo que el
+    administrador lo ajuste a mano vía descuentos), DAILY/HOURLY si, contra
+    EmployeeAttendance del periodo. bonuses/deductions son siempre
+    ingresados a mano por el administrador -no hay ninguna regla automatica
+    documentada para generarlos."""
+
+    @staticmethod
+    def generate_payroll(
+        *,
+        employee: Employee,
+        period_start,
+        period_end,
+        bonuses: Decimal = Decimal("0"),
+        deductions: Decimal = Decimal("0"),
+        user,
+    ) -> EmployeePayroll:
+        if EmployeePayroll.objects.filter(
+            employee=employee, period_start=period_start, period_end=period_end
+        ).exists():
+            raise PayrollAlreadyExistsError()
+
+        base_salary = PayrollService._calculate_base_salary(
+            employee, period_start, period_end
+        )
+        net_amount = base_salary + bonuses - deductions
+
+        payroll = EmployeePayroll.objects.create(
+            employee=employee,
+            period_start=period_start,
+            period_end=period_end,
+            base_salary=base_salary,
+            bonuses=bonuses,
+            deductions=deductions,
+            net_amount=net_amount,
+            status="PENDING",
+        )
+        AuditLogService.log_action(
+            user=user,
+            action="PAYROLL_GENERATED",
+            entity="EmployeePayroll",
+            entity_id=payroll.id,
+            details={
+                "employee_id": employee.id,
+                "period_start": str(period_start),
+                "period_end": str(period_end),
+                "net_amount": str(net_amount),
+            },
+        )
+        return payroll
+
+    @staticmethod
+    def _calculate_base_salary(employee: Employee, period_start, period_end) -> Decimal:
+        if employee.salary_type == "MONTHLY":
+            return employee.salary_amount
+
+        attendance = EmployeeAttendance.objects.filter(
+            employee=employee,
+            check_in__date__gte=period_start,
+            check_in__date__lte=period_end,
+            check_out__isnull=False,
+        )
+
+        # Los montos de dinero en todo el sistema usan 4 decimales
+        # (DecimalField(max_digits=12, decimal_places=4), igual que
+        # Sale.total) -no 2, para no perder precision al multiplicar por
+        # horas fraccionarias.
+        if employee.salary_type == "DAILY":
+            days_worked = len({entry.check_in.date() for entry in attendance})
+            return (employee.salary_amount * days_worked).quantize(Decimal("0.0001"))
+
+        # HOURLY
+        total_hours = sum(
+            (AttendanceService.calculate_worked_hours(entry) for entry in attendance),
+            Decimal("0"),
+        )
+        return (employee.salary_amount * total_hours).quantize(Decimal("0.0001"))
+
+    @staticmethod
+    def mark_paid(*, payroll: EmployeePayroll, payment_date, user) -> EmployeePayroll:
+        if payroll.status == "PAID":
+            raise PayrollAlreadyPaidError()
+
+        payroll.status = "PAID"
+        payroll.payment_date = payment_date
+        payroll.save(update_fields=["status", "payment_date"])
+        AuditLogService.log_action(
+            user=user,
+            action="PAYROLL_PAID",
+            entity="EmployeePayroll",
+            entity_id=payroll.id,
+            details={
+                "employee_id": payroll.employee_id,
+                "net_amount": str(payroll.net_amount),
+            },
+        )
+        return payroll
+
+
+class ReportExportService:
+    """Motor generico de exportacion de reportes a CSV/XLSX (Sprint 23,
+    Esquema Backend §4.2; API Spec §4.16). Recibe las mismas filas que el
+    reporte en pantalla ya construyo -exportar y ver en pantalla nunca
+    pueden divergir, porque ambos parten de la misma consulta. Vive en
+    usuarios por ser transversal (lo consumen los reportes de todas las
+    apps de negocio), no porque sea especifico de RRHH.
+
+    [ALCANCE] Esta version cubre solo el camino sincronico. El encolado en
+    Celery + S3 para reportes de mas de 5000 filas que documenta la API
+    Spec §4.16 NO esta implementado -no hay infraestructura de S3 real
+    contra la que probarlo en este entorno de desarrollo; queda como hueco
+    documentado, igual que la prueba de impresora termica del Sprint 17."""
+
+    XLSX_ROW_LIMIT = 1_048_576
+
+    @staticmethod
+    def export_queryset(
+        *, rows: list[dict], columns: list[str], format: str, filename: str
+    ) -> HttpResponse:
+        if format not in ("csv", "xlsx"):
+            raise ValueError(f"Formato de exportacion no soportado: {format}")
+
+        # Una hoja XLSX no admite mas de XLSX_ROW_LIMIT filas -forzar CSV en
+        # vez de intentar escribirla produce un archivo descargable en vez
+        # de uno corrupto (API Spec §4.16: "superar el limite produce un
+        # archivo corrupto, no un error claro").
+        if format == "xlsx" and len(rows) > ReportExportService.XLSX_ROW_LIMIT:
+            format = "csv"
+
+        if format == "csv":
+            return ReportExportService._to_csv(rows, columns, filename)
+        return ReportExportService._to_xlsx(rows, columns, filename)
+
+    @staticmethod
+    def _to_csv(rows: list[dict], columns: list[str], filename: str) -> HttpResponse:
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=columns)
+        writer.writeheader()
+        writer.writerows(rows)
+        response = HttpResponse(buffer.getvalue(), content_type="text/csv")
+        response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
+        return response
+
+    @staticmethod
+    def _to_xlsx(rows: list[dict], columns: list[str], filename: str) -> HttpResponse:
+        from openpyxl import Workbook
+
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(columns)
+        for row in rows:
+            sheet.append([row.get(column, "") for column in columns])
+
+        buffer = io.BytesIO()
+        workbook.save(buffer)
+        response = HttpResponse(
+            buffer.getvalue(),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        response["Content-Disposition"] = f'attachment; filename="{filename}.xlsx"'
+        return response
 
 
 class PasswordResetService:

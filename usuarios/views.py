@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
@@ -15,6 +17,7 @@ from usuarios.models import (
     AuditLog,
     Employee,
     EmployeeAttendance,
+    EmployeePayroll,
     EmployeeSchedule,
     Permission,
     Role,
@@ -28,10 +31,13 @@ from usuarios.serializers import (
     AuditLogSerializer,
     ClockInSerializer,
     EmployeeAttendanceSerializer,
+    EmployeePayrollSerializer,
     EmployeeScheduleSerializer,
     EmployeeSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
+    PayrollGenerateSerializer,
+    PayrollMarkPaidSerializer,
     PermissionSerializer,
     RolePermissionSerializer,
     RolePermissionsHistorySerializer,
@@ -44,7 +50,9 @@ from usuarios.services import (
     AttendanceService,
     AuditLogService,
     PasswordResetService,
+    PayrollService,
     PermissionService,
+    ReportExportService,
     RoleService,
 )
 
@@ -327,4 +335,187 @@ class EmployeeAttendanceViewSet(
         return Response(
             {"id": attendance.id, "check_out": attendance.check_out},
             status=status.HTTP_200_OK,
+        )
+
+
+class EmployeePayrollViewSet(
+    mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet
+):
+    """Solo lectura -generar y marcar pagado son acciones propias, no un
+    create/update generico (Sprint 23, mismo criterio que
+    EmployeeAttendanceViewSet). Los montos se congelan al generarse: no
+    existe accion de recalculo, editar una planilla ya creada."""
+
+    queryset = EmployeePayroll.objects.select_related("employee")
+    serializer_class = EmployeePayrollSerializer
+    permission_classes = _HR_PERMISSIONS
+
+    def get_queryset(self):
+        queryset = super().get_queryset().order_by("-period_start")
+        employee_id = self.request.query_params.get("employee")
+        if employee_id:
+            queryset = queryset.filter(employee_id=employee_id)
+        return queryset
+
+    @action(detail=False, methods=["post"])
+    def generate(self, request):
+        serializer = PayrollGenerateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        payroll = PayrollService.generate_payroll(
+            employee=serializer.validated_data["employee"],
+            period_start=serializer.validated_data["period_start"],
+            period_end=serializer.validated_data["period_end"],
+            bonuses=serializer.validated_data["bonuses"],
+            deductions=serializer.validated_data["deductions"],
+            user=request.user,
+        )
+        return Response(
+            EmployeePayrollSerializer(payroll).data, status=status.HTTP_201_CREATED
+        )
+
+    @action(detail=True, methods=["post"], url_path="mark-paid")
+    def mark_paid(self, request, pk=None):
+        payroll = self.get_object()
+        serializer = PayrollMarkPaidSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        payroll = PayrollService.mark_paid(
+            payroll=payroll,
+            payment_date=serializer.validated_data["payment_date"],
+            user=request.user,
+        )
+        return Response(EmployeePayrollSerializer(payroll).data)
+
+
+class AttendanceReportView(APIView):
+    """GET /usuarios/reports/attendance/?date_from=&date_to=&employee=&export=
+    (Sprint 23, API Spec §2.1). Resumen de asistencia por trabajador en un
+    rango de fechas. Con ?export=csv|xlsx devuelve el archivo en vez del
+    JSON -misma consulta en ambos casos (ReportExportService, §4.16).
+    Deliberadamente NO se llama "format" -ese nombre esta reservado por
+    DRF (URL_FORMAT_OVERRIDE) para su propia negociacion de contenido; un
+    ?format=csv sin un renderer CSV registrado devuelve 404 en vez de
+    llegar a esta vista (bug real encontrado al verificar este endpoint)."""
+
+    permission_classes = _HR_PERMISSIONS
+
+    def get(self, request):
+        date_from = request.query_params.get("date_from")
+        date_to = request.query_params.get("date_to")
+        if not date_from or not date_to:
+            raise ValidationError("date_from y date_to son requeridos.")
+
+        queryset = EmployeeAttendance.objects.select_related("employee").filter(
+            check_in__date__gte=date_from, check_in__date__lte=date_to
+        )
+        employee_id = request.query_params.get("employee")
+        if employee_id:
+            queryset = queryset.filter(employee_id=employee_id)
+
+        summary: dict[int, dict] = {}
+        for entry in queryset:
+            bucket = summary.setdefault(
+                entry.employee_id,
+                {
+                    "employee_id": entry.employee_id,
+                    "full_name": entry.employee.full_name,
+                    "on_time_count": 0,
+                    "late_count": 0,
+                    "absence_justified_count": 0,
+                    "absence_unjustified_count": 0,
+                    "total_worked_hours": Decimal("0"),
+                },
+            )
+            key = {
+                "ON_TIME": "on_time_count",
+                "LATE": "late_count",
+                "ABSENCE_JUSTIFIED": "absence_justified_count",
+                "ABSENCE_UNJUSTIFIED": "absence_unjustified_count",
+            }.get(entry.status)
+            if key:
+                bucket[key] += 1
+            worked = AttendanceService.calculate_worked_hours(entry)
+            if worked is not None:
+                bucket["total_worked_hours"] += worked
+
+        rows = sorted(summary.values(), key=lambda row: row["full_name"])
+        for row in rows:
+            row["total_worked_hours"] = str(row["total_worked_hours"])
+
+        export_format = request.query_params.get("export")
+        if export_format:
+            columns = [
+                "full_name",
+                "on_time_count",
+                "late_count",
+                "absence_justified_count",
+                "absence_unjustified_count",
+                "total_worked_hours",
+            ]
+            return ReportExportService.export_queryset(
+                rows=rows,
+                columns=columns,
+                format=export_format,
+                filename=f"asistencia_{date_from}_a_{date_to}",
+            )
+        return Response(rows)
+
+
+class PayrollCostReportView(APIView):
+    """GET /usuarios/reports/payroll-cost/?period_start=&period_end=&export=
+    (Sprint 23). Costo total de planilla en un rango de periodos."""
+
+    permission_classes = _HR_PERMISSIONS
+
+    def get(self, request):
+        period_start = request.query_params.get("period_start")
+        period_end = request.query_params.get("period_end")
+        if not period_start or not period_end:
+            raise ValidationError("period_start y period_end son requeridos.")
+
+        queryset = (
+            EmployeePayroll.objects.select_related("employee")
+            .filter(period_start__gte=period_start, period_end__lte=period_end)
+            .order_by("employee__full_name")
+        )
+
+        rows = [
+            {
+                "employee_id": payroll.employee_id,
+                "full_name": payroll.employee.full_name,
+                "period_start": str(payroll.period_start),
+                "period_end": str(payroll.period_end),
+                "base_salary": str(payroll.base_salary),
+                "bonuses": str(payroll.bonuses),
+                "deductions": str(payroll.deductions),
+                "net_amount": str(payroll.net_amount),
+                "status": payroll.status,
+            }
+            for payroll in queryset
+        ]
+
+        export_format = request.query_params.get("export")
+        if export_format:
+            columns = [
+                "full_name",
+                "period_start",
+                "period_end",
+                "base_salary",
+                "bonuses",
+                "deductions",
+                "net_amount",
+                "status",
+            ]
+            return ReportExportService.export_queryset(
+                rows=rows,
+                columns=columns,
+                format=export_format,
+                filename=f"costo_planilla_{period_start}_a_{period_end}",
+            )
+        return Response(
+            {
+                "total_net_amount": str(
+                    sum((payroll.net_amount for payroll in queryset), Decimal("0"))
+                ),
+                "rows": rows,
+            }
         )

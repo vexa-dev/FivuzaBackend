@@ -1,5 +1,5 @@
 # Pruebas de modelos: validaciones de campo, constraints, métodos del modelo.
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from datetime import timezone as dt_timezone
 from decimal import Decimal
 from unittest.mock import patch
@@ -15,6 +15,7 @@ from inventario.models import Warehouse
 from usuarios.models import (
     AuditLog,
     Employee,
+    EmployeeAttendance,
     EmployeeSchedule,
     PasswordResetToken,
     Permission,
@@ -27,6 +28,9 @@ from usuarios.services import (
     AttendanceService,
     AuditLogService,
     PasswordResetService,
+    PayrollAlreadyExistsError,
+    PayrollAlreadyPaidError,
+    PayrollService,
     PermissionService,
     RoleService,
 )
@@ -434,3 +438,163 @@ class AttendanceServiceTests(TenantTestCase):
             employee=self.employee, warehouse=self.warehouse, user=self.user
         )
         self.assertIsNone(AttendanceService.calculate_worked_hours(attendance))
+
+
+class PayrollServiceTests(TenantTestCase):
+    """generate_payroll()/mark_paid() (Sprint 23, Esquema Backend §4.2): el
+    calculo del sueldo base depende de salary_type, y los montos se
+    congelan al generarse -no hay ningun endpoint de recalculo."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_payroll_service"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-payroll-service.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        role = Role.objects.create(name="admin", is_system_default=True)
+        cls.user = User.objects.create(email="admin@negocio.com", role=role)
+        cls.warehouse = Warehouse.objects.create(name="Principal")
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    def _make_employee(self, salary_type, salary_amount, document_number):
+        return Employee.objects.create(
+            full_name="Juan Perez",
+            document_number=document_number,
+            position="Almacenero",
+            warehouse=self.warehouse,
+            salary_type=salary_type,
+            # Decimal, no str -Employee.objects.create() no lo convierte
+            # solo al asignarlo (encontrado al escribir este test: sumar un
+            # str "1500.00" con un Decimal explota, silenciosamente NO se
+            # castea al guardar el objeto en memoria como si fuera un campo
+            # normal de formulario).
+            salary_amount=Decimal(salary_amount),
+            hire_date=timezone.now().date(),
+        )
+
+    def _make_closed_attendance(self, employee, check_in, check_out):
+        return EmployeeAttendance.objects.create(
+            employee=employee,
+            warehouse=self.warehouse,
+            check_in=check_in,
+            check_out=check_out,
+            status="ON_TIME",
+        )
+
+    def test_monthly_salary_ignores_attendance(self):
+        employee = self._make_employee("MONTHLY", "1500.00", "10000001")
+        payroll = PayrollService.generate_payroll(
+            employee=employee,
+            period_start=date(2026, 8, 1),
+            period_end=date(2026, 8, 31),
+            user=self.user,
+        )
+        self.assertEqual(payroll.base_salary, Decimal("1500.00"))
+        self.assertEqual(payroll.net_amount, Decimal("1500.00"))
+
+    def test_daily_salary_counts_distinct_worked_days(self):
+        employee = self._make_employee("DAILY", "50.00", "10000002")
+        self._make_closed_attendance(
+            employee,
+            datetime(2026, 8, 3, 9, 0, tzinfo=dt_timezone.utc),
+            datetime(2026, 8, 3, 17, 0, tzinfo=dt_timezone.utc),
+        )
+        self._make_closed_attendance(
+            employee,
+            datetime(2026, 8, 4, 9, 0, tzinfo=dt_timezone.utc),
+            datetime(2026, 8, 4, 17, 0, tzinfo=dt_timezone.utc),
+        )
+        payroll = PayrollService.generate_payroll(
+            employee=employee,
+            period_start=date(2026, 8, 1),
+            period_end=date(2026, 8, 31),
+            user=self.user,
+        )
+        self.assertEqual(payroll.base_salary, Decimal("100.00"))
+
+    def test_hourly_salary_sums_worked_hours(self):
+        employee = self._make_employee("HOURLY", "10.00", "10000003")
+        self._make_closed_attendance(
+            employee,
+            datetime(2026, 8, 3, 22, 0, tzinfo=dt_timezone.utc),
+            datetime(2026, 8, 4, 6, 0, tzinfo=dt_timezone.utc),
+        )
+        payroll = PayrollService.generate_payroll(
+            employee=employee,
+            period_start=date(2026, 8, 1),
+            period_end=date(2026, 8, 31),
+            user=self.user,
+        )
+        self.assertEqual(payroll.base_salary, Decimal("80.00"))
+
+    def test_bonuses_and_deductions_affect_net_amount(self):
+        employee = self._make_employee("MONTHLY", "1500.00", "10000004")
+        payroll = PayrollService.generate_payroll(
+            employee=employee,
+            period_start=date(2026, 8, 1),
+            period_end=date(2026, 8, 31),
+            bonuses=Decimal("100.00"),
+            deductions=Decimal("30.00"),
+            user=self.user,
+        )
+        self.assertEqual(payroll.net_amount, Decimal("1570.00"))
+
+    def test_generating_twice_for_same_period_raises(self):
+        employee = self._make_employee("MONTHLY", "1500.00", "10000005")
+        PayrollService.generate_payroll(
+            employee=employee,
+            period_start=date(2026, 8, 1),
+            period_end=date(2026, 8, 31),
+            user=self.user,
+        )
+        with self.assertRaises(PayrollAlreadyExistsError):
+            PayrollService.generate_payroll(
+                employee=employee,
+                period_start=date(2026, 8, 1),
+                period_end=date(2026, 8, 31),
+                user=self.user,
+            )
+
+    def test_mark_paid_sets_status_and_payment_date(self):
+        employee = self._make_employee("MONTHLY", "1500.00", "10000006")
+        payroll = PayrollService.generate_payroll(
+            employee=employee,
+            period_start=date(2026, 8, 1),
+            period_end=date(2026, 8, 31),
+            user=self.user,
+        )
+        paid = PayrollService.mark_paid(
+            payroll=payroll, payment_date=date(2026, 9, 1), user=self.user
+        )
+        self.assertEqual(paid.status, "PAID")
+        self.assertEqual(paid.payment_date, date(2026, 9, 1))
+
+    def test_mark_paid_twice_raises_and_does_not_alter_frozen_amount(self):
+        employee = self._make_employee("MONTHLY", "1500.00", "10000007")
+        payroll = PayrollService.generate_payroll(
+            employee=employee,
+            period_start=date(2026, 8, 1),
+            period_end=date(2026, 8, 31),
+            bonuses=Decimal("50.00"),
+            user=self.user,
+        )
+        PayrollService.mark_paid(
+            payroll=payroll, payment_date=date(2026, 9, 1), user=self.user
+        )
+        with self.assertRaises(PayrollAlreadyPaidError):
+            PayrollService.mark_paid(
+                payroll=payroll, payment_date=date(2026, 9, 2), user=self.user
+            )
+
+        payroll.refresh_from_db()
+        self.assertEqual(payroll.net_amount, Decimal("1550.00"))
+        self.assertEqual(payroll.payment_date, date(2026, 9, 1))
