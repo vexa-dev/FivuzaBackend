@@ -506,3 +506,67 @@ class POSSearchView(APIView):
         if not query:
             return Response([])
         return Response(POSCatalogService.search(warehouse=warehouse, query=query))
+
+
+class SalesReportView(APIView):
+    """GET /ventas/reports/sales/?date_from=&date_to=&warehouse=&export=
+    (Sprint 24, API Spec §4.16). Ventas por periodo -una fila por venta,
+    con vendedor y cliente. [ALCANCE] El desglose por producto/vendedor que
+    menciona la fila original del plan queda para el Sprint 25, que ya
+    reserva esa semana para terminar la cobertura de reportes exportables;
+    esta version cubre el caso de uso central (exportar el periodo)."""
+
+    permission_classes = _SALES_READ_PERMISSIONS
+
+    def get(self, request):
+        from rest_framework.exceptions import ValidationError
+
+        from usuarios.services import ReportExportService
+
+        date_from = request.query_params.get("date_from")
+        date_to = request.query_params.get("date_to")
+        if not date_from or not date_to:
+            raise ValidationError("date_from y date_to son requeridos.")
+
+        queryset = Sale.objects.select_related("customer", "user").filter(
+            status="COMPLETED",
+            created_at__date__gte=date_from,
+            created_at__date__lte=date_to,
+        )
+        warehouse_id = request.query_params.get("warehouse")
+        if warehouse_id:
+            queryset = queryset.filter(warehouse_id=warehouse_id)
+
+        rows = [
+            {
+                "invoice_number": sale.invoice_number,
+                "date": sale.created_at.date().isoformat(),
+                "seller": sale.user.email,
+                "customer": sale.customer.name,
+                "subtotal": str(sale.subtotal),
+                "discount_total": str(sale.discount_total),
+                "total": str(sale.total),
+                "payment_status": sale.payment_status,
+            }
+            for sale in queryset.order_by("created_at")
+        ]
+
+        export_format = request.query_params.get("export")
+        if export_format:
+            columns = [
+                "invoice_number",
+                "date",
+                "seller",
+                "customer",
+                "subtotal",
+                "discount_total",
+                "total",
+                "payment_status",
+            ]
+            return ReportExportService.export_queryset(
+                rows=rows,
+                columns=columns,
+                format=export_format,
+                filename=f"ventas_{date_from}_a_{date_to}",
+            )
+        return Response(rows)

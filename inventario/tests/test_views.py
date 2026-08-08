@@ -555,3 +555,90 @@ class InventoryMovementOversellFilterTests(TenantTestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data), 2)
+
+
+class InventoryReportsEndpointsTests(TenantTestCase):
+    """Reportes exportables de inventario (Sprint 24, API Spec §4.16):
+    valorizacion de stock y exportacion de stock bajo minimo."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_inventario_reports"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-inventario-reports.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.password = "ClaveSegura123"
+        cls.admin_role = Role.objects.get(name="admin")
+        cls.admin_user = User.objects.create(
+            email="admin@negocio.com", role=cls.admin_role
+        )
+        cls.admin_user.set_password(cls.password)
+        cls.admin_user.save()
+
+        cls.warehouse = Warehouse.objects.create(name="Principal")
+        category = Category.objects.create(name="Ropa")
+        product = ProductVariantService.create_product(
+            product_data={
+                "type": "PRODUCT",
+                "name": "Pantalon",
+                "category": category,
+                "unit_of_measure": "UND",
+            },
+            variants_data=[{"sku": "VALUATION-SKU", "cost": "15.00", "min_stock": "5"}],
+        )
+        cls.variant = product.variants.first()
+        StockService.adjust_stock(
+            variant=cls.variant,
+            warehouse=cls.warehouse,
+            counted_quantity=2,
+            concept="ADJUSTMENT",
+            user=cls.admin_user,
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    def setUp(self):
+        cache.clear()
+
+    def _client(self):
+        client = APIClient(HTTP_HOST=self.domain.domain)
+        login = client.post(
+            "/api/v1/auth/login/",
+            {"email": self.admin_user.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def test_stock_valuation_report_totals_quantity_times_cost(self):
+        response = self._client().get("/api/v1/inventario/reports/stock-valuation/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["total_value"], "30.0000")
+
+    def test_stock_valuation_report_xlsx_export(self):
+        response = self._client().get(
+            "/api/v1/inventario/reports/stock-valuation/?export=xlsx"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response["Content-Type"],
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+    def test_low_stock_endpoint_still_returns_json_by_default(self):
+        response = self._client().get("/api/v1/inventario/stock/low-stock/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 1)
+
+    def test_low_stock_endpoint_csv_export(self):
+        response = self._client().get("/api/v1/inventario/stock/low-stock/?export=csv")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/csv")

@@ -212,6 +212,12 @@ class TenantSettings(models.Model):
     cash_difference_alert_threshold = models.DecimalField(
         max_digits=12, decimal_places=4, default=20
     )
+    # Sprint 24: cada cuantos minutos DashboardRefreshService recalcula las
+    # vistas materializadas de este tenant (Esquema Backend §9.2). No hay un
+    # valor "correcto" documentado -15 minutos es el piso que la propia fila
+    # del plan sugiere ("cada 15-30 min"), ajustable por tenant segun cuanto
+    # trafico de ventas tenga.
+    dashboard_refresh_minutes = models.IntegerField(default=15)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

@@ -59,6 +59,11 @@ urlpatterns = [
         views.SaleSyncView.as_view(),
         name="sale-sync",
     ),
+    path(
+        "ventas/reports/sales/",
+        views.SalesReportView.as_view(),
+        name="sales-report",
+    ),
 ]
 
 # El router va al final: open/ debe resolverse antes de que el patron de
