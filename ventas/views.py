@@ -18,8 +18,10 @@ from ventas.models import (
     Customer,
     CustomerBalanceLedger,
     CustomerDebtLedger,
+    ProductReservation,
     Promotion,
     PromotionProduct,
+    Quote,
     Sale,
     SaleReturn,
 )
@@ -34,9 +36,15 @@ from ventas.serializers import (
     CustomerBalanceLedgerSerializer,
     CustomerDebtLedgerSerializer,
     CustomerSerializer,
+    ProductReservationSerializer,
     PromotionProductSerializer,
     PromotionSerializer,
+    QuoteConvertSerializer,
+    QuoteCreateSerializer,
+    QuoteSerializer,
     RegisterDebtPaymentSerializer,
+    ReservationConvertSerializer,
+    ReservationCreateSerializer,
     SaleCreateSerializer,
     SaleReturnCreateSerializer,
     SaleReturnSerializer,
@@ -47,7 +55,9 @@ from ventas.serializers import (
 from ventas.services import (
     CreditLedgerService,
     POSCatalogService,
+    QuoteService,
     ReceiptService,
+    ReservationService,
     SaleNotFoundError,
 )
 
@@ -474,6 +484,145 @@ class SaleReturnViewSet(
         return Response(
             SaleReturnSerializer(sale_return).data, status=status.HTTP_201_CREATED
         )
+
+
+class ProductReservationViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.CreateModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Apartado/reserva de stock (Sprint 28, Ficha de Producto §5.2). Sin
+    update/destroy: se cancela o se convierte via las acciones dedicadas,
+    nunca se edita a mano (mismo criterio que SaleReturnViewSet)."""
+
+    queryset = ProductReservation.objects.all().order_by("-created_at")
+    serializer_class = ProductReservationSerializer
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return ReservationCreateSerializer
+        return ProductReservationSerializer
+
+    def get_permissions(self):
+        if self.action in ("list", "retrieve"):
+            return [permission() for permission in _SALES_READ_PERMISSIONS]
+        return [permission() for permission in _SALES_WRITE_PERMISSIONS]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        params = self.request.query_params
+        customer_id = params.get("customer")
+        if customer_id:
+            queryset = queryset.filter(customer_id=customer_id)
+        status_filter = params.get("status")
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        return queryset
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        reservation = serializer.save()
+        return Response(
+            ProductReservationSerializer(reservation).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(detail=True, methods=["post"], url_path="convert")
+    def convert(self, request, pk=None):
+        reservation = get_object_or_404(self.get_queryset(), pk=pk)
+        serializer = ReservationConvertSerializer(
+            data=request.data,
+            context={"reservation": reservation, "request": request},
+        )
+        serializer.is_valid(raise_exception=True)
+        sale = serializer.save()
+        return Response(SaleSerializer(sale).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"], url_path="cancel")
+    def cancel(self, request, pk=None):
+        reservation = get_object_or_404(self.get_queryset(), pk=pk)
+        reservation = ReservationService.cancel_reservation(
+            reservation=reservation, user=request.user
+        )
+        return Response(ProductReservationSerializer(reservation).data)
+
+
+class QuoteViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.CreateModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Cotizacion/presupuesto (Sprint 28, Ficha de Producto §5.2). Sin
+    update/destroy: el estado avanza solo via las acciones dedicadas
+    (mark-sent/mark-accepted/mark-rejected/convert), nunca editando las
+    lineas ya congeladas."""
+
+    queryset = Quote.objects.all().order_by("-created_at")
+    serializer_class = QuoteSerializer
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return QuoteCreateSerializer
+        return QuoteSerializer
+
+    def get_permissions(self):
+        if self.action in ("list", "retrieve", "document"):
+            return [permission() for permission in _SALES_READ_PERMISSIONS]
+        return [permission() for permission in _SALES_WRITE_PERMISSIONS]
+
+    def get_queryset(self):
+        queryset = super().get_queryset().prefetch_related("details")
+        params = self.request.query_params
+        customer_id = params.get("customer")
+        if customer_id:
+            queryset = queryset.filter(customer_id=customer_id)
+        status_filter = params.get("status")
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        return queryset
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        quote = serializer.save()
+        return Response(QuoteSerializer(quote).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["get"], url_path="document")
+    def document(self, request, pk=None):
+        quote = get_object_or_404(self.get_queryset().select_related("customer"), pk=pk)
+        html = QuoteService.render_html(quote, request.tenant)
+        return HttpResponse(html, content_type="text/html")
+
+    @action(detail=True, methods=["post"], url_path="mark-sent")
+    def mark_sent(self, request, pk=None):
+        quote = get_object_or_404(self.get_queryset(), pk=pk)
+        quote = QuoteService.mark_sent(quote=quote)
+        return Response(QuoteSerializer(quote).data)
+
+    @action(detail=True, methods=["post"], url_path="mark-accepted")
+    def mark_accepted(self, request, pk=None):
+        quote = get_object_or_404(self.get_queryset(), pk=pk)
+        quote = QuoteService.mark_accepted(quote=quote)
+        return Response(QuoteSerializer(quote).data)
+
+    @action(detail=True, methods=["post"], url_path="mark-rejected")
+    def mark_rejected(self, request, pk=None):
+        quote = get_object_or_404(self.get_queryset(), pk=pk)
+        quote = QuoteService.mark_rejected(quote=quote)
+        return Response(QuoteSerializer(quote).data)
+
+    @action(detail=True, methods=["post"], url_path="convert")
+    def convert(self, request, pk=None):
+        quote = get_object_or_404(self.get_queryset(), pk=pk)
+        serializer = QuoteConvertSerializer(
+            data=request.data, context={"quote": quote, "request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        sale = serializer.save()
+        return Response(SaleSerializer(sale).data, status=status.HTTP_201_CREATED)
 
 
 class POSCatalogView(APIView):

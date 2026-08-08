@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
+from inventario.models import ProductVariant, Warehouse
 from ventas.models import (
     CashMovement,
     CashRegister,
@@ -9,8 +10,11 @@ from ventas.models import (
     Customer,
     CustomerBalanceLedger,
     CustomerDebtLedger,
+    ProductReservation,
     Promotion,
     PromotionProduct,
+    Quote,
+    QuoteDetail,
     Sale,
     SaleDetail,
     SalePayment,
@@ -21,6 +25,8 @@ from ventas.services import (
     CashMovementReceiptService,
     CashSessionService,
     CreditLedgerService,
+    QuoteService,
+    ReservationService,
     ReturnService,
     SaleService,
     SaleSyncService,
@@ -510,4 +516,179 @@ class CashSessionCloseSerializer(serializers.Serializer):
             user=self.context["request"].user,
             tenant=self.context["request"].tenant,
             notes=validated_data.get("notes"),
+        )
+
+
+class ProductReservationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductReservation
+        fields = [
+            "id",
+            "customer",
+            "variant",
+            "warehouse",
+            "quantity",
+            "expires_at",
+            "status",
+            "sale",
+            "user",
+            "created_at",
+        ]
+        read_only_fields = ["status", "sale", "user", "created_at"]
+
+
+class ReservationCreateSerializer(serializers.Serializer):
+    """No es un ModelSerializer -delega en ReservationService.
+    create_reservation(), que valida el stock disponible restando las
+    reservas ACTIVE ya existentes (mismo patron que SaleCreateSerializer)."""
+
+    customer_id = serializers.PrimaryKeyRelatedField(
+        source="customer", queryset=Customer.objects.all()
+    )
+    variant_id = serializers.PrimaryKeyRelatedField(
+        source="variant", queryset=ProductVariant.objects.all()
+    )
+    warehouse_id = serializers.PrimaryKeyRelatedField(
+        source="warehouse", queryset=Warehouse.objects.all()
+    )
+    quantity = serializers.DecimalField(
+        max_digits=12, decimal_places=3, min_value=Decimal("0.001")
+    )
+    expires_at = serializers.DateTimeField()
+
+    def create(self, validated_data):
+        return ReservationService.create_reservation(
+            customer=validated_data["customer"],
+            variant=validated_data["variant"],
+            warehouse=validated_data["warehouse"],
+            quantity=validated_data["quantity"],
+            expires_at=validated_data["expires_at"],
+            user=self.context["request"].user,
+        )
+
+
+class ReservationConvertSerializer(serializers.Serializer):
+    """No es un ModelSerializer -delega en ReservationService.
+    convert_to_sale(), que reutiliza SaleService.create_sale() (mismo
+    patron que SaleReturnCreateSerializer)."""
+
+    cash_session_id = serializers.PrimaryKeyRelatedField(
+        source="cash_session", queryset=CashSession.objects.all()
+    )
+    payments = SalePaymentInputSerializer(many=True)
+
+    def validate_payments(self, value):
+        if not value:
+            raise serializers.ValidationError("Agrega al menos un pago.")
+        return value
+
+    def create(self, validated_data):
+        return ReservationService.convert_to_sale(
+            reservation=self.context["reservation"],
+            cash_session=validated_data["cash_session"],
+            user=self.context["request"].user,
+            payments=validated_data["payments"],
+        )
+
+
+class QuoteDetailSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = QuoteDetail
+        fields = [
+            "id",
+            "variant_id",
+            "product_name_snapshot",
+            "sku_snapshot",
+            "quantity",
+            "unit_price",
+            "discount_amount",
+            "subtotal",
+        ]
+
+
+class QuoteSerializer(serializers.ModelSerializer):
+    details = QuoteDetailSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Quote
+        fields = [
+            "id",
+            "customer",
+            "user",
+            "status",
+            "valid_until",
+            "subtotal",
+            "discount_total",
+            "total",
+            "sale",
+            "details",
+            "created_at",
+        ]
+        read_only_fields = [
+            "user",
+            "status",
+            "subtotal",
+            "discount_total",
+            "total",
+            "sale",
+            "created_at",
+        ]
+
+
+class QuoteLineInputSerializer(serializers.Serializer):
+    variant_id = serializers.IntegerField()
+    quantity = serializers.DecimalField(
+        max_digits=12, decimal_places=3, min_value=Decimal("0.001")
+    )
+    discount_amount = serializers.DecimalField(
+        max_digits=12, decimal_places=4, min_value=0, required=False, allow_null=True
+    )
+
+
+class QuoteCreateSerializer(serializers.Serializer):
+    """No es un ModelSerializer -delega en QuoteService.create_quote(), que
+    congela precio/descuento por linea al momento de cotizar (mismo patron
+    que SaleCreateSerializer, pero sin tocar stock ni caja)."""
+
+    customer_id = serializers.PrimaryKeyRelatedField(
+        source="customer", queryset=Customer.objects.all()
+    )
+    valid_until = serializers.DateTimeField()
+    lines = QuoteLineInputSerializer(many=True)
+
+    def validate_lines(self, value):
+        if not value:
+            raise serializers.ValidationError("Agrega al menos una linea.")
+        return value
+
+    def create(self, validated_data):
+        return QuoteService.create_quote(
+            customer=validated_data["customer"],
+            user=self.context["request"].user,
+            lines=validated_data["lines"],
+            valid_until=validated_data["valid_until"],
+        )
+
+
+class QuoteConvertSerializer(serializers.Serializer):
+    """No es un ModelSerializer -delega en QuoteService.convert_to_sale(),
+    que pasa los precios ya congelados en QuoteDetail tal cual a
+    SaleService.create_sale() (mismo patron que ReservationConvertSerializer)."""
+
+    cash_session_id = serializers.PrimaryKeyRelatedField(
+        source="cash_session", queryset=CashSession.objects.all()
+    )
+    payments = SalePaymentInputSerializer(many=True)
+
+    def validate_payments(self, value):
+        if not value:
+            raise serializers.ValidationError("Agrega al menos un pago.")
+        return value
+
+    def create(self, validated_data):
+        return QuoteService.convert_to_sale(
+            quote=self.context["quote"],
+            cash_session=validated_data["cash_session"],
+            user=self.context["request"].user,
+            payments=validated_data["payments"],
         )

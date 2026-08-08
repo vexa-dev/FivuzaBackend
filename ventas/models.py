@@ -355,6 +355,124 @@ class CustomerDebtLedger(models.Model):
         ]
 
 
+class ProductReservation(models.Model):
+    """Apartado de stock para un cliente sin registrar la venta todavia
+    (Sprint 28, Ficha de Producto §5.2): no genera InventoryMovement -el
+    stock fisico no se mueve hasta convertir() la reserva en una venta real.
+    La disponibilidad "vendible" de una variante+almacen se calcula restando
+    la suma de reservas ACTIVE a su Stock.quantity (ReservationService).
+    warehouse no esta en el listado literal del Plan de Implementacion, pero
+    es indispensable: todo el resto del sistema modela el stock por
+    variante+almacen, no solo por variante."""
+
+    customer = models.ForeignKey(
+        Customer, on_delete=models.PROTECT, related_name="reservations"
+    )
+    variant = models.ForeignKey(
+        ProductVariant, on_delete=models.PROTECT, related_name="reservations"
+    )
+    warehouse = models.ForeignKey(
+        Warehouse, on_delete=models.PROTECT, related_name="reservations"
+    )
+    quantity = models.DecimalField(max_digits=12, decimal_places=3)
+    expires_at = models.DateTimeField()
+    status = models.CharField(
+        max_length=10,
+        choices=[
+            ("ACTIVE", "ACTIVE"),
+            ("CONVERTED", "CONVERTED"),
+            ("EXPIRED", "EXPIRED"),
+            ("CANCELLED", "CANCELLED"),
+        ],
+        default="ACTIVE",
+    )
+    sale = models.ForeignKey(
+        Sale,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="reservations",
+    )
+    user = models.ForeignKey(
+        User, on_delete=models.PROTECT, related_name="product_reservations"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "product_reservations"
+        indexes = [models.Index(fields=["status", "expires_at"])]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(
+                    status__in=["ACTIVE", "CONVERTED", "EXPIRED", "CANCELLED"]
+                ),
+                name="ck_product_reservations_status",
+            )
+        ]
+
+
+class Quote(models.Model):
+    """Cotizacion/presupuesto (Sprint 28, Ficha de Producto §5.2): documento
+    no vinculante con precios congelados al momento de cotizar (igual que
+    Sale/SaleDetail son el snapshot congelado de una venta real). No hay un
+    estado CONVERTED explicito -una vez aceptada, convert_to_sale() la
+    vincula a `sale`; `sale_id is not None` es la señal de que ya se
+    convirtio (evita una segunda conversion)."""
+
+    customer = models.ForeignKey(
+        Customer, on_delete=models.PROTECT, related_name="quotes"
+    )
+    user = models.ForeignKey(User, on_delete=models.PROTECT, related_name="quotes")
+    status = models.CharField(
+        max_length=10,
+        choices=[
+            ("DRAFT", "DRAFT"),
+            ("SENT", "SENT"),
+            ("ACCEPTED", "ACCEPTED"),
+            ("EXPIRED", "EXPIRED"),
+            ("REJECTED", "REJECTED"),
+        ],
+        default="DRAFT",
+    )
+    valid_until = models.DateTimeField()
+    subtotal = models.DecimalField(max_digits=12, decimal_places=4)
+    discount_total = models.DecimalField(max_digits=12, decimal_places=4, default=0)
+    total = models.DecimalField(max_digits=12, decimal_places=4)
+    sale = models.ForeignKey(
+        Sale, on_delete=models.PROTECT, null=True, blank=True, related_name="quotes"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "quotes"
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(
+                    status__in=["DRAFT", "SENT", "ACCEPTED", "EXPIRED", "REJECTED"]
+                ),
+                name="ck_quotes_status",
+            )
+        ]
+
+
+class QuoteDetail(models.Model):
+    """Misma forma que SaleDetail (variant_id desacoplado, snapshot de
+    nombre/sku/precio) -al convertir la cotizacion, estos valores ya
+    congelados pasan tal cual a SaleService.create_sale(), sin recalcular."""
+
+    quote = models.ForeignKey(Quote, on_delete=models.CASCADE, related_name="details")
+    variant_id = models.IntegerField()
+    product_name_snapshot = models.CharField(max_length=200)
+    sku_snapshot = models.CharField(max_length=100)
+    quantity = models.DecimalField(max_digits=12, decimal_places=3)
+    unit_price = models.DecimalField(max_digits=12, decimal_places=4)
+    discount_amount = models.DecimalField(max_digits=12, decimal_places=4, default=0)
+    subtotal = models.DecimalField(max_digits=12, decimal_places=4)
+
+    class Meta:
+        db_table = "quote_details"
+
+
 class CustomerBalanceLedger(models.Model):
     """Libro exclusivo del saldo a favor generado por devoluciones."""
 

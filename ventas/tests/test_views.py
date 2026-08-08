@@ -1,5 +1,6 @@
 # Pruebas de ViewSets/vistas: permisos, apertura/cierre de caja, arqueo.
 import os
+from datetime import timedelta
 from decimal import Decimal
 from unittest import mock
 
@@ -2045,3 +2046,305 @@ class CashReportTests(TenantTestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response["Content-Type"], "text/csv")
+
+
+class ReservationEndpointsTests(TenantTestCase):
+    """CRUD y acciones convert/cancel de /ventas/reservations/ (Sprint 28,
+    Ficha de Producto §5.2)."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_ventas_reservation_endpoints"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-ventas-reservation-endpoints.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.password = "ClaveSegura123"
+        cls.admin_user = User.objects.create(
+            email="admin@negocio.com", role=Role.objects.get(name="admin")
+        )
+        cls.admin_user.set_password(cls.password)
+        cls.admin_user.save()
+
+        cls.warehouse = Warehouse.objects.create(name="Principal")
+        category = Category.objects.create(name="Ropa")
+        product = ProductVariantService.create_product(
+            product_data={
+                "type": "PRODUCT",
+                "name": "Camiseta",
+                "category": category,
+                "unit_of_measure": "UND",
+            },
+            variants_data=[{"sku": "RESERVA-ENDPOINT-SKU", "price": "20.00"}],
+        )
+        cls.variant = product.variants.first()
+        StockService.adjust_stock(
+            variant=cls.variant,
+            warehouse=cls.warehouse,
+            counted_quantity=10,
+            concept="ADJUSTMENT",
+            user=cls.admin_user,
+        )
+        cls.customer = Customer.objects.create(
+            document_type="DNI", document_number="66666666", name="Cliente Reserva"
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    def setUp(self):
+        cache.clear()
+
+    def _client(self):
+        client = APIClient(HTTP_HOST=self.domain.domain)
+        login = client.post(
+            "/api/v1/auth/login/",
+            {"email": self.admin_user.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def _open_session(self, client):
+        register = CashRegister.objects.create(
+            warehouse=self.warehouse, name=f"Caja {timezone.now().timestamp()}"
+        )
+        response = client.post(
+            "/api/v1/ventas/cash-sessions/open/",
+            {"cash_register_id": register.id, "opening_amount": "0"},
+            format="json",
+        )
+        return response.data["id"]
+
+    def test_create_and_list_reservation(self):
+        client = self._client()
+        response = client.post(
+            "/api/v1/ventas/reservations/",
+            {
+                "customer_id": self.customer.id,
+                "variant_id": self.variant.id,
+                "warehouse_id": self.warehouse.id,
+                "quantity": "3",
+                "expires_at": (timezone.now() + timedelta(days=1)).isoformat(),
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["status"], "ACTIVE")
+
+        listing = client.get("/api/v1/ventas/reservations/?status=ACTIVE")
+        self.assertEqual(listing.status_code, 200)
+        self.assertEqual(len(listing.data), 1)
+
+    def test_reservation_exceeding_stock_returns_409(self):
+        client = self._client()
+        response = client.post(
+            "/api/v1/ventas/reservations/",
+            {
+                "customer_id": self.customer.id,
+                "variant_id": self.variant.id,
+                "warehouse_id": self.warehouse.id,
+                "quantity": "50",
+                "expires_at": (timezone.now() + timedelta(days=1)).isoformat(),
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["error"]["code"], "INSUFFICIENT_STOCK")
+
+    def test_convert_reservation_creates_sale(self):
+        client = self._client()
+        create_response = client.post(
+            "/api/v1/ventas/reservations/",
+            {
+                "customer_id": self.customer.id,
+                "variant_id": self.variant.id,
+                "warehouse_id": self.warehouse.id,
+                "quantity": "2",
+                "expires_at": (timezone.now() + timedelta(days=1)).isoformat(),
+            },
+            format="json",
+        )
+        reservation_id = create_response.data["id"]
+        session_id = self._open_session(client)
+
+        response = client.post(
+            f"/api/v1/ventas/reservations/{reservation_id}/convert/",
+            {
+                "cash_session_id": session_id,
+                "payments": [{"method": "CASH", "amount": "40.00"}],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["status"], "COMPLETED")
+
+    def test_cancel_reservation(self):
+        client = self._client()
+        create_response = client.post(
+            "/api/v1/ventas/reservations/",
+            {
+                "customer_id": self.customer.id,
+                "variant_id": self.variant.id,
+                "warehouse_id": self.warehouse.id,
+                "quantity": "2",
+                "expires_at": (timezone.now() + timedelta(days=1)).isoformat(),
+            },
+            format="json",
+        )
+        reservation_id = create_response.data["id"]
+
+        response = client.post(f"/api/v1/ventas/reservations/{reservation_id}/cancel/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["status"], "CANCELLED")
+
+
+class QuoteEndpointsTests(TenantTestCase):
+    """CRUD y acciones de estado/convert de /ventas/quotes/ (Sprint 28,
+    Ficha de Producto §5.2)."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_ventas_quote_endpoints"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-ventas-quote-endpoints.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.password = "ClaveSegura123"
+        cls.admin_user = User.objects.create(
+            email="admin@negocio.com", role=Role.objects.get(name="admin")
+        )
+        cls.admin_user.set_password(cls.password)
+        cls.admin_user.save()
+
+        cls.warehouse = Warehouse.objects.create(name="Principal")
+        category = Category.objects.create(name="Ropa")
+        product = ProductVariantService.create_product(
+            product_data={
+                "type": "PRODUCT",
+                "name": "Camiseta",
+                "category": category,
+                "unit_of_measure": "UND",
+            },
+            variants_data=[{"sku": "COTIZA-ENDPOINT-SKU", "price": "20.00"}],
+        )
+        cls.variant = product.variants.first()
+        StockService.adjust_stock(
+            variant=cls.variant,
+            warehouse=cls.warehouse,
+            counted_quantity=10,
+            concept="ADJUSTMENT",
+            user=cls.admin_user,
+        )
+        cls.customer = Customer.objects.create(
+            document_type="DNI", document_number="77777777", name="Cliente Cotizacion"
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    def setUp(self):
+        cache.clear()
+
+    def _client(self):
+        client = APIClient(HTTP_HOST=self.domain.domain)
+        login = client.post(
+            "/api/v1/auth/login/",
+            {"email": self.admin_user.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def _open_session(self, client):
+        register = CashRegister.objects.create(
+            warehouse=self.warehouse, name=f"Caja {timezone.now().timestamp()}"
+        )
+        response = client.post(
+            "/api/v1/ventas/cash-sessions/open/",
+            {"cash_register_id": register.id, "opening_amount": "0"},
+            format="json",
+        )
+        return response.data["id"]
+
+    def _create_quote(self, client):
+        return client.post(
+            "/api/v1/ventas/quotes/",
+            {
+                "customer_id": self.customer.id,
+                "valid_until": (timezone.now() + timedelta(days=7)).isoformat(),
+                "lines": [{"variant_id": self.variant.id, "quantity": "2"}],
+            },
+            format="json",
+        )
+
+    def test_create_quote_freezes_price(self):
+        client = self._client()
+        response = self._create_quote(client)
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["status"], "DRAFT")
+        self.assertEqual(response.data["total"], "40.0000")
+        self.assertEqual(response.data["details"][0]["unit_price"], "20.0000")
+
+    def test_quote_document_returns_html(self):
+        client = self._client()
+        quote_id = self._create_quote(client).data["id"]
+        response = client.get(f"/api/v1/ventas/quotes/{quote_id}/document/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/html")
+
+    def test_full_lifecycle_sent_accepted_convert(self):
+        client = self._client()
+        quote_id = self._create_quote(client).data["id"]
+
+        sent = client.post(f"/api/v1/ventas/quotes/{quote_id}/mark-sent/")
+        self.assertEqual(sent.data["status"], "SENT")
+
+        accepted = client.post(f"/api/v1/ventas/quotes/{quote_id}/mark-accepted/")
+        self.assertEqual(accepted.data["status"], "ACCEPTED")
+
+        session_id = self._open_session(client)
+        response = client.post(
+            f"/api/v1/ventas/quotes/{quote_id}/convert/",
+            {
+                "cash_session_id": session_id,
+                "payments": [{"method": "CASH", "amount": "40.00"}],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["total"], "40.0000")
+
+    def test_convert_quote_not_accepted_returns_409(self):
+        client = self._client()
+        quote_id = self._create_quote(client).data["id"]
+        session_id = self._open_session(client)
+
+        response = client.post(
+            f"/api/v1/ventas/quotes/{quote_id}/convert/",
+            {
+                "cash_session_id": session_id,
+                "payments": [{"method": "CASH", "amount": "40.00"}],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["error"]["code"], "QUOTE_NOT_ACCEPTED")
+
+    def test_mark_rejected(self):
+        client = self._client()
+        quote_id = self._create_quote(client).data["id"]
+        response = client.post(f"/api/v1/ventas/quotes/{quote_id}/mark-rejected/")
+        self.assertEqual(response.data["status"], "REJECTED")

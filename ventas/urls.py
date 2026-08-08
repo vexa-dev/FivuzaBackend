@@ -32,6 +32,10 @@ router.register(
     views.CustomerBalanceLedgerViewSet,
     basename="customer-balance-ledger",
 )
+router.register(
+    "ventas/reservations", views.ProductReservationViewSet, basename="reservation"
+)
+router.register("ventas/quotes", views.QuoteViewSet, basename="quote")
 
 urlpatterns = [
     path(
