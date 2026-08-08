@@ -182,6 +182,65 @@ class StockService:
         )
         return movement
 
+    @staticmethod
+    @transaction.atomic
+    def transfer_stock(
+        *,
+        variant: ProductVariant,
+        from_warehouse: Warehouse,
+        to_warehouse: Warehouse,
+        quantity: Decimal,
+        user,
+    ) -> tuple[InventoryMovement, InventoryMovement]:
+        """Traslado de stock entre dos almacenes del mismo tenant (Sprint 26,
+        Ficha de Producto §5.1): no pasa por una venta ni una compra. Se
+        implementa como dos llamadas a adjust_stock() dentro de la misma
+        transacción -cada una ya trae su propio select_for_update(), asi
+        que la seguridad de concurrencia es la misma que un ajuste
+        individual, solo que ahora sobre dos filas de Stock en vez de una."""
+        if from_warehouse.pk == to_warehouse.pk:
+            raise ValidationError("El almacén de origen y destino deben ser distintos.")
+        if quantity <= 0:
+            raise ValidationError("La cantidad a trasladar debe ser mayor a cero.")
+
+        origin_stock, _ = Stock.objects.get_or_create(
+            variant=variant, warehouse=from_warehouse, defaults={"quantity": 0}
+        )
+        origin_stock = Stock.objects.select_for_update().get(pk=origin_stock.pk)
+        if origin_stock.quantity < quantity:
+            raise ValidationError(
+                "No hay stock suficiente en el almacén de origen para este traslado."
+            )
+
+        out_movement = StockService.adjust_stock(
+            variant=variant,
+            warehouse=from_warehouse,
+            counted_quantity=origin_stock.quantity - quantity,
+            concept="TRANSFER_OUT",
+            user=user,
+        )
+
+        dest_stock, _ = Stock.objects.get_or_create(
+            variant=variant, warehouse=to_warehouse, defaults={"quantity": 0}
+        )
+        dest_stock = Stock.objects.select_for_update().get(pk=dest_stock.pk)
+        in_movement = StockService.adjust_stock(
+            variant=variant,
+            warehouse=to_warehouse,
+            counted_quantity=dest_stock.quantity + quantity,
+            concept="TRANSFER_IN",
+            user=user,
+        )
+
+        # Se vinculan entre si via reference_id -recien aqui, porque cada
+        # movimiento necesita el id del otro ya generado.
+        out_movement.reference_id = in_movement.id
+        out_movement.save(update_fields=["reference_id"])
+        in_movement.reference_id = out_movement.id
+        in_movement.save(update_fields=["reference_id"])
+
+        return out_movement, in_movement
+
 
 class PurchaseService:
     """Recibir una orden de compra es la unica forma en que sus lineas

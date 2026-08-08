@@ -293,6 +293,148 @@ class StockServiceTests(TenantTestCase):
         self.assertEqual(stock.quantity, last_movement.resulting_balance)
 
 
+class StockServiceTransferTests(TenantTestCase):
+    """StockService.transfer_stock() (Sprint 26, Ficha de Producto §5.1):
+    dos llamadas a adjust_stock() (TRANSFER_OUT/TRANSFER_IN) dentro de la
+    misma transaccion, vinculadas entre si via reference_id."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_inventario_transfer"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-inventario-transfer.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        role = Role.objects.create(name="admin", is_system_default=True)
+        cls.user = User.objects.create(email="admin@negocio.com", role=role)
+        cls.origin = Warehouse.objects.create(name="Principal")
+        cls.destination = Warehouse.objects.create(name="Sucursal")
+        cls.category = Category.objects.create(name="Ropa")
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    _sku_counter = 0
+
+    def _create_variant(self):
+        StockServiceTransferTests._sku_counter += 1
+        product = ProductVariantService.create_product(
+            product_data={
+                "type": "PRODUCT",
+                "name": "Camiseta",
+                "category": self.category,
+                "unit_of_measure": "UND",
+            },
+            variants_data=[
+                {"sku": f"SKU-TRANSFER-{StockServiceTransferTests._sku_counter}"}
+            ],
+        )
+        return product.variants.first()
+
+    def test_transfer_moves_stock_between_warehouses(self):
+        variant = self._create_variant()
+        StockService.adjust_stock(
+            variant=variant,
+            warehouse=self.origin,
+            counted_quantity=10,
+            concept="ADJUSTMENT",
+            user=self.user,
+        )
+
+        out_movement, in_movement = StockService.transfer_stock(
+            variant=variant,
+            from_warehouse=self.origin,
+            to_warehouse=self.destination,
+            quantity=Decimal("4"),
+            user=self.user,
+        )
+
+        self.assertEqual(out_movement.concept, "TRANSFER_OUT")
+        self.assertEqual(out_movement.type, "OUT")
+        self.assertEqual(out_movement.resulting_balance, 6)
+        self.assertEqual(in_movement.concept, "TRANSFER_IN")
+        self.assertEqual(in_movement.type, "IN")
+        self.assertEqual(in_movement.resulting_balance, 4)
+        self.assertEqual(out_movement.reference_id, in_movement.id)
+        self.assertEqual(in_movement.reference_id, out_movement.id)
+
+        origin_stock = Stock.objects.get(variant=variant, warehouse=self.origin)
+        dest_stock = Stock.objects.get(variant=variant, warehouse=self.destination)
+        self.assertEqual(origin_stock.quantity, 6)
+        self.assertEqual(dest_stock.quantity, 4)
+
+    def test_transfer_cannot_exceed_available_stock_in_origin(self):
+        variant = self._create_variant()
+        StockService.adjust_stock(
+            variant=variant,
+            warehouse=self.origin,
+            counted_quantity=3,
+            concept="ADJUSTMENT",
+            user=self.user,
+        )
+
+        with self.assertRaises(ValidationError):
+            StockService.transfer_stock(
+                variant=variant,
+                from_warehouse=self.origin,
+                to_warehouse=self.destination,
+                quantity=Decimal("5"),
+                user=self.user,
+            )
+
+        origin_stock = Stock.objects.get(variant=variant, warehouse=self.origin)
+        self.assertEqual(origin_stock.quantity, 3)
+        self.assertFalse(
+            Stock.objects.filter(variant=variant, warehouse=self.destination).exists()
+        )
+
+    def test_transfer_to_same_warehouse_is_rejected(self):
+        variant = self._create_variant()
+        StockService.adjust_stock(
+            variant=variant,
+            warehouse=self.origin,
+            counted_quantity=10,
+            concept="ADJUSTMENT",
+            user=self.user,
+        )
+
+        with self.assertRaises(ValidationError):
+            StockService.transfer_stock(
+                variant=variant,
+                from_warehouse=self.origin,
+                to_warehouse=self.origin,
+                quantity=Decimal("1"),
+                user=self.user,
+            )
+
+    def test_transfer_into_new_warehouse_creates_stock_row(self):
+        variant = self._create_variant()
+        StockService.adjust_stock(
+            variant=variant,
+            warehouse=self.origin,
+            counted_quantity=10,
+            concept="ADJUSTMENT",
+            user=self.user,
+        )
+
+        StockService.transfer_stock(
+            variant=variant,
+            from_warehouse=self.origin,
+            to_warehouse=self.destination,
+            quantity=Decimal("10"),
+            user=self.user,
+        )
+
+        dest_stock = Stock.objects.get(variant=variant, warehouse=self.destination)
+        self.assertEqual(dest_stock.quantity, 10)
+
+
 class PurchaseServiceTests(TenantTestCase):
     """PurchaseService.receive_order(): recibir una orden mueve Stock via
     StockService y recalcula el costo promedio ponderado (Sprint 5)."""

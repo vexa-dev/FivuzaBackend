@@ -34,6 +34,11 @@ router.register(
     views.PurchaseOrderViewSet,
     basename="purchase-order",
 )
+router.register(
+    "inventario/volume-pricing-tiers",
+    views.VolumePricingTierViewSet,
+    basename="volume-pricing-tier",
+)
 
 urlpatterns = [
     path(
@@ -60,6 +65,11 @@ urlpatterns = [
         "inventario/reports/stock-valuation/",
         views.StockValuationReportView.as_view(),
         name="stock-valuation-report",
+    ),
+    path(
+        "inventario/stock/transfer/",
+        views.StockTransferView.as_view(),
+        name="stock-transfer",
     ),
 ]
 

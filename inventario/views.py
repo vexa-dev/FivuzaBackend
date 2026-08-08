@@ -24,6 +24,7 @@ from inventario.models import (
     Stock,
     Supplier,
     TaxRate,
+    VolumePricingTier,
     Warehouse,
 )
 from inventario.permissions import HasInventoryAccess
@@ -40,8 +41,10 @@ from inventario.serializers import (
     PurchaseOrderSerializer,
     StockAdjustSerializer,
     StockSerializer,
+    StockTransferSerializer,
     SupplierSerializer,
     TaxRateSerializer,
+    VolumePricingTierSerializer,
     WarehouseSerializer,
 )
 from usuarios.permissions import HasModulePermission
@@ -58,6 +61,16 @@ _PURCHASES_PERMISSIONS = [
     TenantNotCanceled,
     RequiresFeature("HAS_PURCHASES_MODULE"),
     HasModulePermission("PURCHASES_MANAGE"),
+]
+# Sprint 26: un traslado solo tiene sentido si el tenant tiene mas de un
+# almacen -mismo feature flag que ya bloquea crear un segundo almacen
+# (WarehouseViewSet.perform_create) sin el plan/configuracion correspondiente.
+_TRANSFER_PERMISSIONS = [
+    IsAuthenticated,
+    TenantNotSuspended,
+    TenantNotCanceled,
+    RequiresFeature("HAS_MULTI_WAREHOUSE"),
+    HasInventoryAccess,
 ]
 
 
@@ -506,3 +519,47 @@ class StockValuationReportView(APIView):
                 filename="valorizacion_stock",
             )
         return Response({"total_value": str(total_value), "rows": rows})
+
+
+class StockTransferView(APIView):
+    """POST -> traslado de stock entre dos almacenes del mismo tenant
+    (Sprint 26, API Spec §2.2). Unico punto de entrada HTTP hacia
+    StockService.transfer_stock() -mismo criterio que StockAdjustView."""
+
+    permission_classes = _TRANSFER_PERMISSIONS
+
+    def post(self, request):
+        serializer = StockTransferSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        try:
+            result = serializer.save()
+        except DjangoValidationError as exc:
+            raise ValidationError(exc.message) from exc
+        return Response(
+            {
+                "out_movement": InventoryMovementSerializer(
+                    result["out_movement"]
+                ).data,
+                "in_movement": InventoryMovementSerializer(result["in_movement"]).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class VolumePricingTierViewSet(viewsets.ModelViewSet):
+    """Tramos de precio por cantidad mínima (Sprint 26, Ficha de Producto
+    §5.1) -CRUD normal, sin acción propia: a diferencia de Stock, no tiene
+    efectos secundarios sobre otras tablas al crearse/editarse."""
+
+    queryset = VolumePricingTier.objects.all().order_by("variant_id", "min_quantity")
+    serializer_class = VolumePricingTierSerializer
+    permission_classes = _BASE_PERMISSIONS
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        variant_id = self.request.query_params.get("variant")
+        if variant_id:
+            queryset = queryset.filter(variant_id=variant_id)
+        return queryset

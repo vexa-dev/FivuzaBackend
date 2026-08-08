@@ -642,3 +642,213 @@ class InventoryReportsEndpointsTests(TenantTestCase):
         response = self._client().get("/api/v1/inventario/stock/low-stock/?export=csv")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response["Content-Type"], "text/csv")
+
+
+class StockTransferEndpointTests(TenantTestCase):
+    """POST /inventario/stock/transfer/: gateado por
+    RequiresFeature('HAS_MULTI_WAREHOUSE') (Sprint 26)."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_inventario_transfer_views"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-inventario-transfer-views.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.password = "ClaveSegura123"
+        cls.admin_user = User.objects.create(
+            email="admin@negocio.com", role=Role.objects.get(name="admin")
+        )
+        cls.admin_user.set_password(cls.password)
+        cls.admin_user.save()
+        cls.category = Category.objects.create(name="Ropa")
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    def setUp(self):
+        cache.clear()
+        settings = TenantSettings.objects.get(tenant=self.tenant)
+        settings.multi_warehouse_enabled = True
+        settings.save(update_fields=["multi_warehouse_enabled"])
+
+    def _client(self):
+        client = APIClient(HTTP_HOST=self.domain.domain)
+        login = client.post(
+            "/api/v1/auth/login/",
+            {"email": self.admin_user.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def _create_variant(self, sku="TRANSFER-SKU"):
+        product = ProductVariantService.create_product(
+            product_data={
+                "type": "PRODUCT",
+                "name": "Producto de traslado",
+                "category": self.category,
+                "unit_of_measure": "UND",
+            },
+            variants_data=[{"sku": sku}],
+        )
+        return product.variants.first()
+
+    def test_transfer_blocked_without_multi_warehouse_flag(self):
+        settings = TenantSettings.objects.get(tenant=self.tenant)
+        settings.multi_warehouse_enabled = False
+        settings.save(update_fields=["multi_warehouse_enabled"])
+
+        origin = Warehouse.objects.create(name="Principal")
+        destination = Warehouse.objects.create(name="Sucursal")
+        variant = self._create_variant()
+
+        response = self._client().post(
+            "/api/v1/inventario/stock/transfer/",
+            {
+                "variant": variant.id,
+                "from_warehouse": origin.id,
+                "to_warehouse": destination.id,
+                "quantity": "1",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data["code"], "MODULE_DISABLED")
+
+    def test_transfer_moves_stock_and_returns_both_movements(self):
+        origin = Warehouse.objects.create(name="Principal")
+        destination = Warehouse.objects.create(name="Sucursal")
+        variant = self._create_variant()
+        StockService.adjust_stock(
+            variant=variant,
+            warehouse=origin,
+            counted_quantity=10,
+            concept="ADJUSTMENT",
+            user=self.admin_user,
+        )
+
+        response = self._client().post(
+            "/api/v1/inventario/stock/transfer/",
+            {
+                "variant": variant.id,
+                "from_warehouse": origin.id,
+                "to_warehouse": destination.id,
+                "quantity": "4",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["out_movement"]["concept"], "TRANSFER_OUT")
+        self.assertEqual(response.data["in_movement"]["concept"], "TRANSFER_IN")
+
+    def test_transfer_exceeding_origin_stock_is_rejected(self):
+        origin = Warehouse.objects.create(name="Principal")
+        destination = Warehouse.objects.create(name="Sucursal")
+        variant = self._create_variant()
+        StockService.adjust_stock(
+            variant=variant,
+            warehouse=origin,
+            counted_quantity=2,
+            concept="ADJUSTMENT",
+            user=self.admin_user,
+        )
+
+        response = self._client().post(
+            "/api/v1/inventario/stock/transfer/",
+            {
+                "variant": variant.id,
+                "from_warehouse": origin.id,
+                "to_warehouse": destination.id,
+                "quantity": "5",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+
+class VolumePricingTierEndpointTests(TenantTestCase):
+    """CRUD de /inventario/volume-pricing-tiers/ (Sprint 26)."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_inventario_pricing_tier_views"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-inventario-pricing-tier-views.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.password = "ClaveSegura123"
+        cls.admin_user = User.objects.create(
+            email="admin@negocio.com", role=Role.objects.get(name="admin")
+        )
+        cls.admin_user.set_password(cls.password)
+        cls.admin_user.save()
+        cls.category = Category.objects.create(name="Ropa")
+        product = ProductVariantService.create_product(
+            product_data={
+                "type": "PRODUCT",
+                "name": "Producto con tramos",
+                "category": cls.category,
+                "unit_of_measure": "UND",
+            },
+            variants_data=[{"sku": "TIER-SKU", "price": "20.00"}],
+        )
+        cls.variant = product.variants.first()
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    def setUp(self):
+        cache.clear()
+
+    def _client(self):
+        client = APIClient(HTTP_HOST=self.domain.domain)
+        login = client.post(
+            "/api/v1/auth/login/",
+            {"email": self.admin_user.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def test_create_and_list_pricing_tier(self):
+        client = self._client()
+        response = client.post(
+            "/api/v1/inventario/volume-pricing-tiers/",
+            {"variant": self.variant.id, "min_quantity": "12", "unit_price": "15.00"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+
+        listing = client.get(
+            f"/api/v1/inventario/volume-pricing-tiers/?variant={self.variant.id}"
+        )
+        self.assertEqual(listing.status_code, 200)
+        self.assertEqual(len(listing.data), 1)
+        self.assertEqual(listing.data[0]["min_quantity"], "12.000")
+
+    def test_duplicate_min_quantity_for_same_variant_is_rejected(self):
+        client = self._client()
+        client.post(
+            "/api/v1/inventario/volume-pricing-tiers/",
+            {"variant": self.variant.id, "min_quantity": "12", "unit_price": "15.00"},
+            format="json",
+        )
+        response = client.post(
+            "/api/v1/inventario/volume-pricing-tiers/",
+            {"variant": self.variant.id, "min_quantity": "12", "unit_price": "14.00"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)

@@ -7,7 +7,7 @@ from django.utils import timezone
 from django_tenants.test.cases import TenantTestCase
 
 from core.models import TenantSettings
-from inventario.models import Category, Stock, Warehouse
+from inventario.models import Category, Stock, VolumePricingTier, Warehouse
 from inventario.services import ProductVariantService, StockService
 from usuarios.models import AuditLog, Role, User
 from ventas.models import (
@@ -385,6 +385,167 @@ class SaleServiceTests(TenantTestCase):
         self.assertTrue(
             AuditLog.objects.filter(action="SALE_CREATED", entity_id=sale_a.id).exists()
         )
+
+
+class SaleServiceVolumePricingTests(TenantTestCase):
+    """SaleService._resolve_unit_price(): resuelve el tramo de mayor
+    min_quantity que la cantidad vendida alcance a cubrir (Sprint 26, BDD
+    v5 "volume_pricing_tiers"); si ninguno aplica, usa
+    ProductVariant.price sin cambios. Corre antes de las promociones, asi
+    que una promocion sigue pudiendo aplicar un descuento adicional sobre
+    el precio mayorista ya resuelto."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_ventas_volume_pricing"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-ventas-volume-pricing.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        role = Role.objects.get(name="admin")
+        cls.user = User.objects.create(email="admin@negocio.com", role=role)
+        cls.warehouse = Warehouse.objects.create(name="Principal")
+        cls.category = Category.objects.create(name="Ropa")
+        cls.customer = Customer.objects.create(
+            document_type="DNI", document_number="22222222", name="Cliente Dos"
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    _sku_counter = 0
+
+    def _create_variant(self, *, price="20.00", stock_quantity="100"):
+        SaleServiceVolumePricingTests._sku_counter += 1
+        product = ProductVariantService.create_product(
+            product_data={
+                "type": "PRODUCT",
+                "name": "Camiseta",
+                "category": self.category,
+                "unit_of_measure": "UND",
+            },
+            variants_data=[
+                {
+                    "sku": f"SKU-VOLPRICE-{SaleServiceVolumePricingTests._sku_counter}",
+                    "price": price,
+                }
+            ],
+        )
+        variant = product.variants.first()
+        StockService.adjust_stock(
+            variant=variant,
+            warehouse=self.warehouse,
+            counted_quantity=Decimal(stock_quantity),
+            concept="ADJUSTMENT",
+            user=self.user,
+        )
+        return variant
+
+    def _open_session(self):
+        SaleServiceVolumePricingTests._sku_counter += 1
+        register = CashRegister.objects.create(
+            warehouse=self.warehouse,
+            name=f"Caja {SaleServiceVolumePricingTests._sku_counter}",
+        )
+        return CashSession.objects.create(
+            cash_register=register,
+            user=self.user,
+            opening_amount="0",
+            opening_at=timezone.now(),
+            status="OPEN",
+        )
+
+    def test_price_unchanged_when_quantity_does_not_reach_threshold(self):
+        variant = self._create_variant(price="20.00")
+        VolumePricingTier.objects.create(
+            variant=variant, min_quantity="12", unit_price="15.00"
+        )
+        session = self._open_session()
+
+        sale = SaleService.create_sale(
+            customer=self.customer,
+            cash_session=session,
+            user=self.user,
+            lines=[{"variant_id": variant.id, "quantity": "5"}],
+            payments=[{"method": "CASH", "amount": Decimal("100.00")}],
+        )
+
+        self.assertEqual(sale.details.first().unit_price, Decimal("20.00"))
+        self.assertEqual(sale.total, Decimal("100.00"))
+
+    def test_tier_price_applies_exactly_at_threshold(self):
+        variant = self._create_variant(price="20.00")
+        VolumePricingTier.objects.create(
+            variant=variant, min_quantity="12", unit_price="15.00"
+        )
+        session = self._open_session()
+
+        sale = SaleService.create_sale(
+            customer=self.customer,
+            cash_session=session,
+            user=self.user,
+            lines=[{"variant_id": variant.id, "quantity": "12"}],
+            payments=[{"method": "CASH", "amount": Decimal("180.00")}],
+        )
+
+        self.assertEqual(sale.details.first().unit_price, Decimal("15.00"))
+        self.assertEqual(sale.total, Decimal("180.00"))
+
+    def test_most_specific_tier_wins_when_quantity_crosses_several(self):
+        variant = self._create_variant(price="20.00")
+        VolumePricingTier.objects.create(
+            variant=variant, min_quantity="12", unit_price="15.00"
+        )
+        VolumePricingTier.objects.create(
+            variant=variant, min_quantity="24", unit_price="12.00"
+        )
+        session = self._open_session()
+
+        sale = SaleService.create_sale(
+            customer=self.customer,
+            cash_session=session,
+            user=self.user,
+            lines=[{"variant_id": variant.id, "quantity": "30"}],
+            payments=[{"method": "CASH", "amount": Decimal("360.00")}],
+        )
+
+        self.assertEqual(sale.details.first().unit_price, Decimal("12.00"))
+        self.assertEqual(sale.total, Decimal("360.00"))
+
+    def test_promotion_still_applies_on_top_of_tier_price(self):
+        variant = self._create_variant(price="20.00")
+        VolumePricingTier.objects.create(
+            variant=variant, min_quantity="12", unit_price="10.00"
+        )
+        promotion = Promotion.objects.create(
+            name="10% descuento",
+            type="PERCENTAGE",
+            value="10.00",
+            start_date=timezone.now() - timedelta(days=1),
+            end_date=timezone.now() + timedelta(days=1),
+            is_active=True,
+        )
+        PromotionProduct.objects.create(promotion=promotion, variant=variant)
+        session = self._open_session()
+
+        sale = SaleService.create_sale(
+            customer=self.customer,
+            cash_session=session,
+            user=self.user,
+            lines=[{"variant_id": variant.id, "quantity": "12"}],
+            payments=[{"method": "CASH", "amount": Decimal("108.00")}],
+        )
+
+        detail = sale.details.first()
+        self.assertEqual(detail.unit_price, Decimal("10.00"))
+        self.assertEqual(sale.discount_total, Decimal("12.0000"))
+        self.assertEqual(sale.total, Decimal("108.00"))
 
 
 class POSCatalogServiceTests(TenantTestCase):
