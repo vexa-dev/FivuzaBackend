@@ -1,0 +1,9 @@
+<div class="label-sheet">
+  {% for label in labels %}
+  <div class="label" style="width:{{ width_mm }}mm;height:{{ height_mm }}mm;">
+    <div class="label-name">{{ label.product_name }}</div>
+    <div class="label-barcode">{{ label.barcode_svg|safe }}</div>
+    <div class="label-price">S/ {{ label.price }}</div>
+  </div>
+  {% endfor %}
+</div>

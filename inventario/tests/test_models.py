@@ -18,6 +18,7 @@ from inventario.models import (
 from inventario.selectors import get_low_stock_variant_ids
 from inventario.services import (
     CatalogImportService,
+    LabelService,
     ProductVariantService,
     PurchaseService,
     StockService,
@@ -659,3 +660,69 @@ class CatalogImportServiceTests(TenantTestCase):
         first_line = template.splitlines()[0]
         self.assertIn("nombre_producto", first_line)
         self.assertIn("codigo_barras", first_line)
+
+
+class LabelServiceTests(TenantTestCase):
+    """LabelService: imagen del código de barras (SVG/PNG) y HTML
+    imprimible de una hoja de etiquetas (Sprint 27, Ficha de Producto §5.1)."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_inventario_labels"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-inventario-labels.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.category = Category.objects.create(name="Ropa")
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    def _create_variant(self, *, barcode="7501234567890", price="29.90"):
+        product = ProductVariantService.create_product(
+            product_data={
+                "type": "PRODUCT",
+                "name": "Camiseta",
+                "category": self.category,
+                "unit_of_measure": "UND",
+            },
+            variants_data=[{"sku": "SKU-LABEL", "barcode": barcode, "price": price}],
+        )
+        return product.variants.first()
+
+    def test_generate_barcode_svg_returns_svg_markup(self):
+        variant = self._create_variant()
+        svg = LabelService.generate_barcode_svg(variant)
+        self.assertIn("<svg", svg)
+
+    def test_generate_barcode_png_returns_png_bytes(self):
+        variant = self._create_variant()
+        png = LabelService.generate_barcode_png(variant)
+        self.assertTrue(png.startswith(b"\x89PNG"))
+
+    def test_generate_barcode_without_assigned_barcode_raises(self):
+        variant = self._create_variant(barcode=None)
+        with self.assertRaises(ValidationError):
+            LabelService.generate_barcode_svg(variant)
+
+    def test_render_labels_html_repeats_label_per_quantity(self):
+        variant = self._create_variant(price="15.50")
+        html = LabelService.render_labels_html(
+            [{"variant": variant, "quantity": 3}], size="40x25"
+        )
+        self.assertEqual(html.count("label-price"), 3)
+        self.assertIn("15.50", html)
+        self.assertIn("width:40mm", html)
+
+    def test_render_labels_html_rejects_unsupported_size(self):
+        variant = self._create_variant()
+        with self.assertRaises(ValidationError):
+            LabelService.render_labels_html(
+                [{"variant": variant, "quantity": 1}], size="99x99"
+            )

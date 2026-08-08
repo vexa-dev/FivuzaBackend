@@ -852,3 +852,100 @@ class VolumePricingTierEndpointTests(TenantTestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 400)
+
+
+class LabelEndpointsTests(TenantTestCase):
+    """GET .../product-variants/{id}/barcode/ y POST /inventario/labels/print/
+    (Sprint 27, API Spec §2.2)."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_inventario_labels_views"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-inventario-labels-views.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.password = "ClaveSegura123"
+        cls.admin_user = User.objects.create(
+            email="admin@negocio.com", role=Role.objects.get(name="admin")
+        )
+        cls.admin_user.set_password(cls.password)
+        cls.admin_user.save()
+        cls.category = Category.objects.create(name="Ropa")
+        product = ProductVariantService.create_product(
+            product_data={
+                "type": "PRODUCT",
+                "name": "Producto con codigo",
+                "category": cls.category,
+                "unit_of_measure": "UND",
+            },
+            variants_data=[
+                {"sku": "LABEL-SKU", "barcode": "7501234567890", "price": "12.50"}
+            ],
+        )
+        cls.variant = product.variants.first()
+        no_barcode_product = ProductVariantService.create_product(
+            product_data={
+                "type": "PRODUCT",
+                "name": "Producto sin codigo",
+                "category": cls.category,
+                "unit_of_measure": "UND",
+            },
+            variants_data=[{"sku": "NO-BARCODE-SKU", "price": "5.00"}],
+        )
+        cls.variant_without_barcode = no_barcode_product.variants.first()
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    def setUp(self):
+        cache.clear()
+
+    def _client(self):
+        client = APIClient(HTTP_HOST=self.domain.domain)
+        login = client.post(
+            "/api/v1/auth/login/",
+            {"email": self.admin_user.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def test_barcode_endpoint_returns_svg_by_default(self):
+        response = self._client().get(
+            f"/api/v1/inventario/product-variants/{self.variant.id}/barcode/"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "image/svg+xml")
+
+    def test_barcode_endpoint_returns_png_when_requested(self):
+        response = self._client().get(
+            f"/api/v1/inventario/product-variants/{self.variant.id}/barcode/?img=png"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "image/png")
+
+    def test_barcode_endpoint_without_assigned_barcode_returns_400(self):
+        response = self._client().get(
+            f"/api/v1/inventario/product-variants/{self.variant_without_barcode.id}/barcode/"
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_print_labels_returns_html_with_requested_copies(self):
+        response = self._client().post(
+            "/api/v1/inventario/labels/print/",
+            {
+                "items": [{"variant_id": self.variant.id, "quantity": 2}],
+                "size": "50x30",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/html")
+        self.assertEqual(response.content.decode().count("label-price"), 2)

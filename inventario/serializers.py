@@ -253,6 +253,23 @@ class VolumePricingTierSerializer(serializers.ModelSerializer):
         fields = ["id", "variant", "min_quantity", "unit_price"]
 
 
+class LabelItemSerializer(serializers.Serializer):
+    """Una entrada de la hoja de etiquetas: variante + cuántas copias."""
+
+    variant_id = serializers.PrimaryKeyRelatedField(
+        queryset=ProductVariant.objects.all(), source="variant"
+    )
+    quantity = serializers.IntegerField(min_value=1, max_value=200)
+
+
+class PrintLabelsSerializer(serializers.Serializer):
+    """Payload de entrada de POST /inventario/labels/print/ (Sprint 27,
+    API Spec §2.2)."""
+
+    items = LabelItemSerializer(many=True)
+    size = serializers.ChoiceField(choices=["40x25", "50x30"], default="40x25")
+
+
 class TaxRateSerializer(serializers.ModelSerializer):
     class Meta:
         model = TaxRate

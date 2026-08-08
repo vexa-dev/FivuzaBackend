@@ -377,6 +377,11 @@ class POSCatalogService:
                     "sku": variant.sku,
                     "barcode": variant.barcode,
                     "product_name": variant.product.name,
+                    # Sprint 27: el POS necesita saber si el producto se
+                    # vende por peso (KG) para activar la lectura de
+                    # balanza en la cantidad -mismo campo que ya trae
+                    # Product.unit_of_measure, sin transformar.
+                    "unit_of_measure": variant.product.unit_of_measure,
                     "price": str(variant.price),
                     "stock": str(stock_by_variant.get(variant.id, Decimal("0"))),
                     "pricing_tiers": tiers_by_variant.get(variant.id, []),

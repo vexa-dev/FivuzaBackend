@@ -38,6 +38,7 @@ from inventario.serializers import (
     ProductTaxSerializer,
     ProductVariantImageUploadURLSerializer,
     ProductVariantSerializer,
+    PrintLabelsSerializer,
     PurchaseOrderSerializer,
     StockAdjustSerializer,
     StockSerializer,
@@ -246,6 +247,26 @@ class ProductVariantViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         result = serializer.save()
         return Response(result, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["get"], url_path="barcode")
+    def barcode_image(self, request, pk=None):
+        """GET -> imagen cruda del código de barras de la variante (Sprint
+        27, Ficha de Producto §5.1). ?img=png|svg, por defecto svg -no se
+        usa "?format=" porque colisiona con la negociación de contenido de
+        DRF (mismo hueco que "?format=" en la exportación de reportes del
+        Sprint 23, resuelto ahí renombrando a "?export=")."""
+        from inventario.services import LabelService
+
+        variant = self.get_object()
+        image_format = request.query_params.get("img", "svg")
+        try:
+            if image_format == "png":
+                content = LabelService.generate_barcode_png(variant)
+                return HttpResponse(content, content_type="image/png")
+            content = LabelService.generate_barcode_svg(variant)
+            return HttpResponse(content, content_type="image/svg+xml")
+        except DjangoValidationError as exc:
+            raise ValidationError(exc.message) from exc
 
 
 class StockViewSet(viewsets.ReadOnlyModelViewSet):
@@ -563,3 +584,25 @@ class VolumePricingTierViewSet(viewsets.ModelViewSet):
         if variant_id:
             queryset = queryset.filter(variant_id=variant_id)
         return queryset
+
+
+class PrintLabelsView(APIView):
+    """POST -> HTML imprimible de una hoja de etiquetas de código de
+    barras, en tamaño estándar (Sprint 27, API Spec §2.2). Mismo patrón que
+    ReceiptService: el backend arma el HTML, el frontend lo imprime con
+    window.print()."""
+
+    permission_classes = _BASE_PERMISSIONS
+
+    def post(self, request):
+        from inventario.services import LabelService
+
+        serializer = PrintLabelsSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            html = LabelService.render_labels_html(
+                serializer.validated_data["items"], serializer.validated_data["size"]
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError(exc.message) from exc
+        return HttpResponse(html, content_type="text/html")

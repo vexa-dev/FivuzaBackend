@@ -71,6 +71,11 @@ urlpatterns = [
         views.StockTransferView.as_view(),
         name="stock-transfer",
     ),
+    path(
+        "inventario/labels/print/",
+        views.PrintLabelsView.as_view(),
+        name="labels-print",
+    ),
 ]
 
 urlpatterns += router.urls
