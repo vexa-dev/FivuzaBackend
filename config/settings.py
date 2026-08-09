@@ -94,6 +94,7 @@ TENANT_APPS = (
     "inventario",
     "ventas",
     "dashboard",
+    "gimnasio",
 )
 
 INSTALLED_APPS = list(SHARED_APPS) + [
@@ -310,6 +311,17 @@ CELERY_BEAT_SCHEDULE = {
     "ventas-expire-overdue-reservations": {
         "task": "ventas.tasks.expire_overdue_reservations",
         "schedule": crontab(minute="*/15"),
+    },
+    # Sprint 29: mismo criterio que la expiracion de reservas.
+    "gimnasio-expire-overdue-memberships": {
+        "task": "gimnasio.tasks.expire_overdue_memberships",
+        "schedule": crontab(minute="*/15"),
+    },
+    # Una vez al dia -es un aviso informativo, no necesita la frecuencia de
+    # una alerta operativa como el stock bajo.
+    "gimnasio-alert-expiring-memberships": {
+        "task": "gimnasio.tasks.alert_expiring_memberships",
+        "schedule": crontab(hour=8, minute=30),
     },
 }
 

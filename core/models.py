@@ -99,6 +99,7 @@ FEATURE_CODE_CHOICES = [
     ("HAS_MULTI_WAREHOUSE", "HAS_MULTI_WAREHOUSE"),
     ("HAS_HR_MODULE", "HAS_HR_MODULE"),
     ("HAS_CASH_MODULE", "HAS_CASH_MODULE"),
+    ("HAS_GYM_MODULE", "HAS_GYM_MODULE"),
 ]
 
 
@@ -205,6 +206,9 @@ class TenantSettings(models.Model):
     multi_warehouse_enabled = models.BooleanField(default=False)
     hr_module_enabled = models.BooleanField(default=False)
     cash_module_enabled = models.BooleanField(default=True)
+    # Sprint 29: vertical de Gimnasios, apagado por defecto -no todo tenant
+    # opera un gimnasio, mismo criterio que hr_module_enabled.
+    gym_module_enabled = models.BooleanField(default=False)
     # Umbral de diferencia de arqueo (valor absoluto, moneda del tenant) a
     # partir del cual CashSessionService.close_session() dispara el aviso
     # asincrono al administrador (TRD §5.4). No hay un valor "correcto" único
