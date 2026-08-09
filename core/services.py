@@ -161,6 +161,9 @@ class TenantProvisioningService:
         # anular una venta completa.
         ("SALES_VOID", "SALES"),
         ("SALES_RETURN", "SALES"),
+        # Sprint 29: vertical de Gimnasios, un solo permiso para todo el
+        # modulo (mismo criterio que HR_MANAGE, sin split fino).
+        ("GYM_MANAGE", "GYM"),
     ]
     _ROLE_PERMISSIONS = {
         "admin": [
@@ -175,6 +178,7 @@ class TenantProvisioningService:
             "SALES_MANAGE",
             "SALES_VOID",
             "SALES_RETURN",
+            "GYM_MANAGE",
         ],
         "manager": [
             "USERS_MANAGE",
@@ -187,6 +191,7 @@ class TenantProvisioningService:
             "SALES_MANAGE",
             "SALES_VOID",
             "SALES_RETURN",
+            "GYM_MANAGE",
         ],
         # "seller" no recibe CASH_MANAGE todavia a proposito (ver nota
         # historica de Sprint 12), pero SI recibe SALES_MANAGE desde este
@@ -346,6 +351,7 @@ class FeatureFlagService:
         "HAS_HR_MODULE": "hr_module_enabled",
         "HAS_CASH_MODULE": "cash_module_enabled",
         "HAS_PURCHASES_MODULE": "purchases_enabled",
+        "HAS_GYM_MODULE": "gym_module_enabled",
     }
 
     @staticmethod

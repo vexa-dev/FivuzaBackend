@@ -1,0 +1,6 @@
+<p>Las siguientes membresías vencen en los próximos 7 días:</p>
+<ul>
+  {% for m in memberships %}
+  <li>{{ m.customer_name }} — {{ m.plan_name }} (vence {{ m.end_date }})</li>
+  {% endfor %}
+</ul>
