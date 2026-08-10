@@ -4,7 +4,7 @@ from datetime import date, timedelta
 from django.db import transaction
 from rest_framework.exceptions import APIException
 
-from gimnasio.models import Membership, MembershipPayment
+from gimnasio.models import ClassBooking, Membership, MembershipGroup, MembershipPayment
 
 
 def _add_months(base: date, months: int) -> date:
@@ -165,3 +165,109 @@ class MembershipService:
             .select_related("customer", "plan")
             .order_by("end_date")
         )
+
+
+class ClassFullError(APIException):
+    status_code = 409
+    default_code = "CLASS_FULL"
+    default_detail = {
+        "error": {
+            "code": "CLASS_FULL",
+            "message": "No hay cupo disponible para esta clase en la fecha indicada.",
+        }
+    }
+
+
+class ClassBookingAlreadyCancelledError(APIException):
+    status_code = 409
+    default_code = "CLASS_BOOKING_ALREADY_CANCELLED"
+    default_detail = {
+        "error": {
+            "code": "CLASS_BOOKING_ALREADY_CANCELLED",
+            "message": "Esta reserva ya esta cancelada.",
+        }
+    }
+
+
+class ClassBookingNotReservedError(APIException):
+    status_code = 409
+    default_code = "CLASS_BOOKING_NOT_RESERVED"
+    default_detail = {
+        "error": {
+            "code": "CLASS_BOOKING_NOT_RESERVED",
+            "message": "Solo se puede marcar asistencia sobre una reserva vigente.",
+        }
+    }
+
+
+class MembershipGroupSizeError(APIException):
+    status_code = 400
+    default_code = "MEMBERSHIP_GROUP_TOO_SMALL"
+    default_detail = {
+        "error": {
+            "code": "MEMBERSHIP_GROUP_TOO_SMALL",
+            "message": "Un grupo familiar/grupal necesita al menos 2 membresias.",
+        }
+    }
+
+
+class ClassBookingService:
+    """El cupo se cuenta por GymClass+fecha, no por ClassSchedule -una
+    misma clase puede repetirse en varios horarios de la semana, pero lo
+    que limita el cupo es cuantos socios ya reservaron ese dia puntual
+    (Sprint 30, Ficha de Producto §5.1)."""
+
+    @staticmethod
+    @transaction.atomic
+    def book_class(*, customer, gym_class, class_date: date) -> ClassBooking:
+        taken = ClassBooking.objects.filter(
+            gym_class=gym_class,
+            class_date=class_date,
+            status__in=["RESERVADO", "ASISTIO"],
+        ).count()
+        if taken >= gym_class.max_capacity:
+            raise ClassFullError()
+        return ClassBooking.objects.create(
+            customer=customer,
+            gym_class=gym_class,
+            class_date=class_date,
+            status="RESERVADO",
+        )
+
+    @staticmethod
+    def mark_attendance(*, booking: ClassBooking, attended: bool) -> ClassBooking:
+        if booking.status != "RESERVADO":
+            raise ClassBookingNotReservedError()
+        booking.status = "ASISTIO" if attended else "NO_ASISTIO"
+        booking.save(update_fields=["status"])
+        return booking
+
+    @staticmethod
+    def cancel_booking(*, booking: ClassBooking) -> ClassBooking:
+        if booking.status == "CANCELADO":
+            raise ClassBookingAlreadyCancelledError()
+        booking.status = "CANCELADO"
+        booking.save(update_fields=["status"])
+        return booking
+
+
+class MembershipGroupService:
+    """Une 2+ Membership bajo un solo MembershipGroup con un titular de
+    pago (Sprint 30) -las membresias mantienen su propio ciclo de vida
+    (renovar/congelar/cancelar via MembershipService), el grupo solo
+    las agrupa para cobro."""
+
+    @staticmethod
+    @transaction.atomic
+    def create_group(
+        *, holder_customer, name: str, memberships: list[Membership]
+    ) -> MembershipGroup:
+        if len(memberships) < 2:
+            raise MembershipGroupSizeError()
+        group = MembershipGroup.objects.create(
+            holder_customer=holder_customer, name=name
+        )
+        for membership in memberships:
+            membership.group = group
+            membership.save(update_fields=["group"])
+        return group
