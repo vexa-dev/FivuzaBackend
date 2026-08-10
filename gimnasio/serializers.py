@@ -1,7 +1,20 @@
 from rest_framework import serializers
 
-from gimnasio.models import Membership, MembershipPayment, MembershipPlan
-from gimnasio.services import MembershipService
+from gimnasio.models import (
+    ClassBooking,
+    ClassSchedule,
+    GymClass,
+    Membership,
+    MembershipGroup,
+    MembershipPayment,
+    MembershipPlan,
+)
+from gimnasio.services import (
+    ClassBookingService,
+    MembershipGroupService,
+    MembershipService,
+)
+from usuarios.models import Employee
 from ventas.models import Customer
 
 
@@ -40,6 +53,7 @@ class MembershipSerializer(serializers.ModelSerializer):
             "end_date",
             "status",
             "frozen_since",
+            "group",
             "payments",
             "created_at",
         ]
@@ -47,6 +61,7 @@ class MembershipSerializer(serializers.ModelSerializer):
             "end_date",
             "status",
             "frozen_since",
+            "group",
             "payments",
             "created_at",
         ]
@@ -88,4 +103,88 @@ class MembershipRenewSerializer(serializers.Serializer):
             user=self.context["request"].user,
             payment_amount=validated_data.get("payment_amount"),
             payment_method=validated_data.get("payment_method", "CASH"),
+        )
+
+
+class GymClassSerializer(serializers.ModelSerializer):
+    instructor = serializers.PrimaryKeyRelatedField(queryset=Employee.objects.all())
+    instructor_name = serializers.CharField(
+        source="instructor.full_name", read_only=True
+    )
+
+    class Meta:
+        model = GymClass
+        fields = [
+            "id",
+            "name",
+            "instructor",
+            "instructor_name",
+            "max_capacity",
+            "duration_minutes",
+            "is_active",
+            "created_at",
+        ]
+        read_only_fields = ["created_at"]
+
+
+class ClassScheduleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ClassSchedule
+        fields = ["id", "gym_class", "day_of_week", "start_time", "is_active"]
+
+
+class ClassBookingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ClassBooking
+        fields = [
+            "id",
+            "customer",
+            "gym_class",
+            "class_date",
+            "status",
+            "created_at",
+        ]
+        read_only_fields = ["status", "created_at"]
+
+
+class ClassBookingCreateSerializer(serializers.Serializer):
+    customer_id = serializers.PrimaryKeyRelatedField(
+        source="customer", queryset=Customer.objects.all()
+    )
+    gym_class_id = serializers.PrimaryKeyRelatedField(
+        source="gym_class", queryset=GymClass.objects.all()
+    )
+    class_date = serializers.DateField()
+
+    def create(self, validated_data):
+        return ClassBookingService.book_class(
+            customer=validated_data["customer"],
+            gym_class=validated_data["gym_class"],
+            class_date=validated_data["class_date"],
+        )
+
+
+class MembershipGroupSerializer(serializers.ModelSerializer):
+    memberships = MembershipSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = MembershipGroup
+        fields = ["id", "holder_customer", "name", "memberships", "created_at"]
+        read_only_fields = ["memberships", "created_at"]
+
+
+class MembershipGroupCreateSerializer(serializers.Serializer):
+    holder_customer_id = serializers.PrimaryKeyRelatedField(
+        source="holder_customer", queryset=Customer.objects.all()
+    )
+    name = serializers.CharField(required=False, allow_blank=True, default="")
+    membership_ids = serializers.PrimaryKeyRelatedField(
+        source="memberships", queryset=Membership.objects.all(), many=True
+    )
+
+    def create(self, validated_data):
+        return MembershipGroupService.create_group(
+            holder_customer=validated_data["holder_customer"],
+            name=validated_data.get("name", ""),
+            memberships=list(validated_data["memberships"]),
         )
