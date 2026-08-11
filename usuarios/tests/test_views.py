@@ -1,8 +1,12 @@
 # Pruebas de ViewSets/vistas: permisos, serialización, códigos de respuesta HTTP.
+from unittest import mock
+
+from django.core.cache import cache
 from django_tenants.test.cases import TenantTestCase
 from rest_framework.test import APIClient
 
 from core.models import TenantSettings
+from core.throttling import LoginRateThrottle
 from inventario.models import Warehouse
 from usuarios.models import Permission, Role, User
 
@@ -77,6 +81,30 @@ class TenantUserAuthTests(TenantTestCase):
         self.user.save()
         response = self._login()
         self.assertEqual(response.status_code, 400)
+
+    @mock.patch.dict(LoginRateThrottle.THROTTLE_RATES, {"login": "10/min"})
+    def test_login_is_rate_limited_after_repeated_attempts(self):
+        """Sprint 33 (TRD §6.1, §7.2): sin esto, /auth/login/ es un vector
+        trivial de fuerza bruta -DEFAULT_THROTTLE_RATES["login"] = 10/min.
+        En `settings.py` ese rate se desactiva bajo "test" in sys.argv (para
+        no romper el resto de la suite con logins acumulados). DRF fija
+        `THROTTLE_RATES` como atributo de clase al importar el modulo, asi
+        que @override_settings no lo actualiza -hay que parchear el dict
+        directamente. Cache limpio para no arrastrar conteos de otros tests
+        que ya pegaron a login."""
+        cache.clear()
+        for _ in range(10):
+            self.client.post(
+                "/api/v1/auth/login/",
+                {"email": self.user.email, "password": "incorrecta"},
+                format="json",
+            )
+        response = self.client.post(
+            "/api/v1/auth/login/",
+            {"email": self.user.email, "password": "incorrecta"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 429)
         self.user.is_active = True
         self.user.save()
 

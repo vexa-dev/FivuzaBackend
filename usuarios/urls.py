@@ -36,6 +36,9 @@ router.register(
     views.EmployeePayrollViewSet,
     basename="employee-payroll",
 )
+router.register(
+    "usuarios/data-exports", views.DataExportViewSet, basename="data-export"
+)
 
 urlpatterns = [
     # Especificacion de API, seccion 3.1: /api/v1/auth/... (flujo de
@@ -66,6 +69,17 @@ urlpatterns = [
         "usuarios/reports/payroll-cost/",
         views.PayrollCostReportView.as_view(),
         name="payroll_cost_report",
+    ),
+    # Derechos ARCO (Sprint 33, Ley N 29733).
+    path(
+        "usuarios/me/data-export/",
+        views.OwnDataExportView.as_view(),
+        name="own_data_export",
+    ),
+    path(
+        "usuarios/users/<int:pk>/anonymize/",
+        views.UserAnonymizeView.as_view(),
+        name="user_anonymize",
     ),
 ]
 

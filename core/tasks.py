@@ -145,3 +145,24 @@ def reset_demo_tenants_nightly() -> None:
                 tenant.id,
                 tenant.schema_name,
             )
+
+
+@shared_task
+def purge_expired_tenants_daily() -> None:
+    """Tarea periodica diaria (Sprint 33, Ley N 29733): elimina de forma
+    irreversible el esquema fisico de cada tenant cancelado cuyo periodo
+    de gracia de 30 dias ya vencio. Deja constancia via logging -no via
+    PlatformAuditLog, que exige un platform_staff real y esta tarea no
+    tiene un actor humano detras."""
+    from core.services import TenantDataRetentionService
+
+    purged = TenantDataRetentionService.purge_expired_tenants()
+    for entry in purged:
+        logger.info(
+            "Tenant purgado por vencimiento del periodo de gracia: "
+            "id=%s company_name=%s schema_name=%s canceled_at=%s",
+            entry["id"],
+            entry["company_name"],
+            entry["schema_name"],
+            entry["canceled_at"],
+        )

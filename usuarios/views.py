@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
@@ -13,8 +14,10 @@ from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from core.permissions import RequiresFeature, TenantNotCanceled, TenantNotSuspended
+from core.throttling import LoginRateThrottle
 from usuarios.models import (
     AuditLog,
+    DataExport,
     Employee,
     EmployeeAttendance,
     EmployeePayroll,
@@ -30,6 +33,8 @@ from usuarios.permissions import HasModulePermission
 from usuarios.serializers import (
     AuditLogSerializer,
     ClockInSerializer,
+    DataExportRequestSerializer,
+    DataExportSerializer,
     EmployeeAttendanceSerializer,
     EmployeePayrollSerializer,
     EmployeeScheduleSerializer,
@@ -52,8 +57,10 @@ from usuarios.services import (
     PasswordResetService,
     PayrollService,
     PermissionService,
+    PersonalDataService,
     ReportExportService,
     RoleService,
+    TenantDataExportService,
 )
 
 _HR_PERMISSIONS = [
@@ -71,6 +78,7 @@ class TenantUserLoginView(APIView):
     ya procesado por TenantMainMiddleware antes de llegar aqui."""
 
     permission_classes = [AllowAny]
+    throttle_classes = [LoginRateThrottle]
 
     def post(self, request):
         serializer = TenantUserTokenObtainSerializer(
@@ -204,6 +212,74 @@ class RolePermissionsHistoryViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = RolePermissionsHistory.objects.all()
     serializer_class = RolePermissionsHistorySerializer
     permission_classes = [IsAuthenticated, HasModulePermission("USERS_VIEW_AUDIT")]
+
+
+class OwnDataExportView(APIView):
+    """GET -> derecho de Acceso (ARCO, Sprint 33, Ley N 29733): un usuario
+    exporta sus propios datos personales (perfil, permisos, ficha de
+    empleado si tiene una vinculada). Sincrono -es un solo usuario, no el
+    negocio completo (eso es TenantDataExportService)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response(PersonalDataService.export_own_data(request.user))
+
+
+class UserAnonymizeView(APIView):
+    """POST -> derecho de Rectificacion/Cancelacion/Oposicion (ARCO): un
+    admin/soporte anonimiza los datos personales de un usuario a pedido
+    (email, nombre, telefono, documento). No es un hard delete -User esta
+    protegido por PROTECT desde casi todas las apps de negocio."""
+
+    permission_classes = [IsAuthenticated, HasModulePermission("USERS_MANAGE")]
+
+    def post(self, request, pk=None):
+        user = get_object_or_404(User, pk=pk)
+        user = PersonalDataService.anonymize_user(user)
+        AuditLogService.log_action(
+            user=request.user,
+            action="USER_ANONYMIZED",
+            entity="User",
+            entity_id=user.id,
+        )
+        return Response(UserSerializer(user).data)
+
+
+_DATA_EXPORT_PERMISSIONS = [
+    IsAuthenticated,
+    TenantNotSuspended,
+    TenantNotCanceled,
+    HasModulePermission("DATA_EXPORT"),
+]
+
+
+class DataExportViewSet(
+    mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet
+):
+    """Respaldo completo del negocio (Sprint 33, Ley N 29733, API Spec
+    §4.17). Sin update/destroy -el ciclo de vida de un DataExport lo
+    maneja unicamente generate_data_export/expire_data_exports."""
+
+    queryset = DataExport.objects.all().order_by("-requested_at")
+    serializer_class = DataExportSerializer
+    permission_classes = _DATA_EXPORT_PERMISSIONS
+
+    def create(self, request, *args, **kwargs):
+        serializer = DataExportRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        export = TenantDataExportService.request_export(
+            user=request.user, format=serializer.validated_data["format"]
+        )
+        return Response(
+            DataExportSerializer(export).data, status=status.HTTP_201_CREATED
+        )
+
+    @action(detail=True, methods=["get"], url_path="download")
+    def download(self, request, pk=None):
+        export = get_object_or_404(self.get_queryset(), pk=pk)
+        url = TenantDataExportService.get_download_url(export)
+        return Response({"download_url": url})
 
 
 class UserViewSet(viewsets.ModelViewSet):

@@ -51,6 +51,13 @@ class Tenant(TenantMixin):
     is_demo = models.BooleanField(default=False)
     suspended_at = models.DateTimeField(null=True, blank=True)
     canceled_at = models.DateTimeField(null=True, blank=True)
+    # Sprint 33 (Ley N 29733): quien registra el tenant (platform_staff, no
+    # hay signup publico) declara que el negocio acepto los Terminos y la
+    # Politica de Privacidad vigentes -se guarda la version exacta aceptada,
+    # no solo un booleano, para poder demostrar ante una auditoria bajo que
+    # texto se acepto.
+    terms_accepted_at = models.DateTimeField(null=True, blank=True)
+    terms_version_accepted = models.CharField(max_length=20, null=True, blank=True)
     created_on = models.DateField(auto_now_add=True)
     provisioning_status = models.CharField(
         max_length=20,

@@ -159,6 +159,16 @@ REST_FRAMEWORK = {
         # tabla (platform_staff / tenant.users) y no interfieren entre si.
         # Los endpoints de tenant.users llegan recien en Sprint 2.
     ),
+    # Sprint 33 (TRD §6.1): rate limiting en los endpoints de login -"login"
+    # es el scope que usa core.throttling.LoginRateThrottle. Por IP, no por
+    # usuario, para no depender de que el atacante mande un email valido.
+    # En tests el cache de throttle no se resetea entre test cases (a
+    # diferencia de la DB, que si hace rollback por test), asi que la suite
+    # completa acumula cientos de logins contra el mismo rate -por eso el
+    # limite real solo aplica fuera de "manage.py test".
+    "DEFAULT_THROTTLE_RATES": {
+        "login": "1000000/min" if "test" in sys.argv else "10/min",
+    },
 }
 
 SPECTACULAR_SETTINGS = {
@@ -328,6 +338,18 @@ CELERY_BEAT_SCHEDULE = {
     "core-reset-demo-tenants-nightly": {
         "task": "core.tasks.reset_demo_tenants_nightly",
         "schedule": crontab(hour=3, minute=0),
+    },
+    # Sprint 33: un respaldo con datos personales de clientes y empleados
+    # no puede quedar indefinidamente en el bucket de S3.
+    "usuarios-expire-data-exports": {
+        "task": "usuarios.tasks.expire_data_exports",
+        "schedule": crontab(hour=4, minute=0),
+    },
+    # Sprint 33 (Ley N 29733): diaria, no instantanea -el periodo de
+    # gracia se mide en dias, no hace falta revisar mas seguido.
+    "core-purge-expired-tenants-daily": {
+        "task": "core.tasks.purge_expired_tenants_daily",
+        "schedule": crontab(hour=5, minute=0),
     },
 }
 

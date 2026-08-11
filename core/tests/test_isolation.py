@@ -78,7 +78,12 @@ class MultiTenantIsolationTests(TenantTestCase):
     def tearDownClass(cls):
         TenantSettings.objects.filter(tenant=cls.tenant).delete()
         TenantSettings.objects.filter(tenant=cls.tenant_b).delete()
-        cls.tenant_b.delete(force_drop=True)
+        # _drop_schema() exige estar parado en el schema publico o en el
+        # propio del tenant a borrar -TenantTestCase deja la conexion en
+        # tenant_a durante toda la clase, asi que hay que cambiar de schema
+        # explicitamente antes del delete (mismo patron que setUpClass).
+        with schema_context(get_public_schema_name()):
+            cls.tenant_b.delete(force_drop=True)
         super().tearDownClass()
 
     def setUp(self):
@@ -143,3 +148,33 @@ class MultiTenantIsolationTests(TenantTestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 400)
+
+    def test_write_by_user_a_on_colliding_id_never_touches_tenant_b_row(self):
+        """Sprint 33 (TRD §6.1, §7.2): intento deliberado de escritura
+        cross-tenant, no solo lectura -product_a.id == product_b.id a
+        proposito (ver test_ids_collide_across_tenants). Un PATCH de A
+        contra ese id debe modificar unicamente la fila de A."""
+        client_a = self._login(self.domain.domain, self.user_a.email)
+        response = client_a.patch(
+            f"/api/v1/inventario/products/{self.product_a.id}/",
+            {"name": "Producto A Modificado"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["name"], "Producto A Modificado")
+
+        with schema_context(self.tenant_b.schema_name):
+            from inventario.models import Product
+
+            untouched = Product.objects.get(id=self.product_b.id)
+            self.assertEqual(untouched.name, "Producto B")
+
+    def test_delete_by_user_a_never_deletes_tenant_b_row(self):
+        client_a = self._login(self.domain.domain, self.user_a.email)
+        response = client_a.delete(f"/api/v1/inventario/products/{self.product_a.id}/")
+        self.assertIn(response.status_code, (200, 204))
+
+        with schema_context(self.tenant_b.schema_name):
+            from inventario.models import Product
+
+            self.assertTrue(Product.objects.filter(id=self.product_b.id).exists())

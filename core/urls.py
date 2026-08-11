@@ -132,6 +132,13 @@ urlpatterns = [
         views.TenantConsumptionView.as_view(),
         name="tenant_consumption",
     ),
+    # Sin autenticacion a proposito (Ley N 29733): cualquiera debe poder
+    # leer los Terminos/Privacidad vigentes antes de aceptar nada.
+    path(
+        "core/legal/<str:document>/",
+        views.LegalDocumentView.as_view(),
+        name="legal_document",
+    ),
 ]
 
 # El router va al final: suspend/reactivate/cancel/confirm deben resolverse

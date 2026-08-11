@@ -41,6 +41,8 @@ class Permission(models.Model):
             ("REPORTS", "REPORTS"),
             ("HR", "HR"),
             ("CASH", "CASH"),
+            ("GYM", "GYM"),
+            ("COMPLIANCE", "COMPLIANCE"),
         ],
     )
     description = models.CharField(max_length=255, blank=True)
@@ -339,4 +341,60 @@ class EmployeePayroll(models.Model):
                 check=models.Q(status__in=["PENDING", "PAID"]),
                 name="ck_employee_payroll_status",
             )
+        ]
+
+
+class DataExport(models.Model):
+    """Respaldo completo de los datos del negocio (Sprint 33, Ley N 29733,
+    API Spec §4.17) -es el mecanismo tecnico que sostiene el derecho ARCO
+    de Acceso a nivel de negocio (distinto de PersonalDataService, que
+    cubre el Acceso de UN usuario a SUS propios datos). Siempre asincrono:
+    TenantDataExportService.request_export() solo crea la fila PENDING y
+    encola la tarea de Celery, nunca genera el archivo en el mismo
+    request."""
+
+    requested_by = models.ForeignKey(
+        User, on_delete=models.PROTECT, related_name="data_exports"
+    )
+    scope = models.CharField(max_length=10, choices=[("FULL", "FULL")], default="FULL")
+    format = models.CharField(max_length=10, choices=[("ZIP", "ZIP"), ("XLSX", "XLSX")])
+    status = models.CharField(
+        max_length=12,
+        choices=[
+            ("PENDING", "PENDING"),
+            ("PROCESSING", "PROCESSING"),
+            ("COMPLETED", "COMPLETED"),
+            ("FAILED", "FAILED"),
+            ("EXPIRED", "EXPIRED"),
+        ],
+        default="PENDING",
+    )
+    file_key = models.CharField(max_length=255, blank=True, default="")
+    error_message = models.CharField(max_length=255, blank=True, default="")
+    requested_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "data_exports"
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(scope__in=["FULL"]), name="ck_data_exports_scope"
+            ),
+            models.CheckConstraint(
+                check=models.Q(format__in=["ZIP", "XLSX"]),
+                name="ck_data_exports_format",
+            ),
+            models.CheckConstraint(
+                check=models.Q(
+                    status__in=[
+                        "PENDING",
+                        "PROCESSING",
+                        "COMPLETED",
+                        "FAILED",
+                        "EXPIRED",
+                    ]
+                ),
+                name="ck_data_exports_status",
+            ),
         ]

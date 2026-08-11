@@ -27,6 +27,7 @@ from core.models import (
 from core.permissions import (
     CannotReactivateCanceledTenantError,
     TenantAlreadyCanceledError,
+    TermsNotAcceptedError,
 )
 
 # 60 minutos (Especificacion de API §4.24; Ficha de Producto §6): suficiente
@@ -69,12 +70,22 @@ class TenantRegistrationService:
         domain: str,
         plan_code: str,
         billing_cycle: str,
+        accept_terms: bool,
         ruc: str | None = None,
     ) -> Tenant:
+        if not accept_terms:
+            raise TermsNotAcceptedError()
+
         plan = Plan.objects.get(code=plan_code, is_active=True)
 
+        from core.legal import TERMS_VERSION
+
         tenant = Tenant.objects.create(
-            schema_name=schema_name, company_name=company_name, ruc=ruc
+            schema_name=schema_name,
+            company_name=company_name,
+            ruc=ruc,
+            terms_accepted_at=timezone.now(),
+            terms_version_accepted=TERMS_VERSION,
         )
         Domain.objects.create(domain=domain, tenant=tenant, is_primary=True)
 
@@ -167,6 +178,10 @@ class TenantProvisioningService:
         # Sprint 29: vertical de Gimnasios, un solo permiso para todo el
         # modulo (mismo criterio que HR_MANAGE, sin split fino).
         ("GYM_MANAGE", "GYM"),
+        # Sprint 33 (Ley N 29733): separado a proposito de USERS_MANAGE -un
+        # respaldo completo del negocio es mas sensible que administrar
+        # usuarios, y solo admin lo recibe por defecto (ni siquiera manager).
+        ("DATA_EXPORT", "COMPLIANCE"),
     ]
     _ROLE_PERMISSIONS = {
         "admin": [
@@ -182,6 +197,7 @@ class TenantProvisioningService:
             "SALES_VOID",
             "SALES_RETURN",
             "GYM_MANAGE",
+            "DATA_EXPORT",
         ],
         "manager": [
             "USERS_MANAGE",
@@ -1204,3 +1220,51 @@ class DemoTenantService:
             "employees": employee_count,
             "sales": len(sales),
         }
+
+
+class TenantDataRetentionService:
+    """Sostiene realmente la Ley N 29733 sobre la cancelacion de un tenant
+    (Sprint 33): un tenant `canceled` conserva sus datos en modo de solo
+    lectura durante DATA_RETENTION_GRACE_DAYS (30 dias); pasado ese plazo,
+    purge_expired_tenants() elimina su esquema fisico de forma
+    irreversible. Sin esto, el periodo de gracia que TenantNotCanceled ya
+    aplicaba desde el Sprint 8 nunca terminaba de verdad -un tenant
+    cancelado podia seguir leyendo sus datos para siempre."""
+
+    @staticmethod
+    def is_within_grace_period(tenant: Tenant) -> bool:
+        if tenant.status != "canceled" or tenant.canceled_at is None:
+            return True
+        deadline = tenant.canceled_at + timedelta(days=DATA_RETENTION_GRACE_DAYS)
+        return timezone.now() <= deadline
+
+    @staticmethod
+    def purge_expired_tenants() -> list[dict]:
+        """Tarea periodica diaria (Celery Beat): elimina el esquema fisico
+        de cada tenant `canceled` cuyo periodo de gracia ya vencio.
+        force_drop=True hace que django-tenants ejecute un DROP SCHEMA
+        CASCADE real -irreversible- antes de borrar la fila de Tenant.
+
+        No escribe en PlatformAuditLog (esa bitacora exige un
+        platform_staff real, y esta tarea no tiene un actor humano detras)
+        -el llamador (la tarea de Celery) es responsable de dejar
+        constancia via logging con la lista que devuelve este metodo."""
+        purged = []
+        for tenant in Tenant.objects.filter(status="canceled"):
+            if TenantDataRetentionService.is_within_grace_period(tenant):
+                continue
+
+            purged.append(
+                {
+                    "id": tenant.id,
+                    "company_name": tenant.company_name,
+                    "schema_name": tenant.schema_name,
+                    "canceled_at": str(tenant.canceled_at),
+                }
+            )
+            # TenantSettings.tenant es PROTECT -sin borrarla primero,
+            # tenant.delete() explota con ProtectedError antes de llegar
+            # siquiera al DROP SCHEMA.
+            TenantSettings.objects.filter(tenant=tenant).delete()
+            tenant.delete(force_drop=True)
+        return purged
