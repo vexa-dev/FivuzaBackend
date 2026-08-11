@@ -1,3 +1,4 @@
+from django.urls import path
 from rest_framework.routers import DefaultRouter
 
 from gimnasio import views
@@ -20,4 +21,21 @@ router.register(
     basename="membership-group",
 )
 
-urlpatterns = router.urls
+urlpatterns = router.urls + [
+    path("gimnasio/check-in/", views.CheckInView.as_view(), name="gym-check-in"),
+    path(
+        "gimnasio/reports/class-attendance/",
+        views.ClassAttendanceReportView.as_view(),
+        name="gym-report-class-attendance",
+    ),
+    path(
+        "gimnasio/reports/memberships-expiring/",
+        views.MembershipsExpiringReportView.as_view(),
+        name="gym-report-memberships-expiring",
+    ),
+    path(
+        "gimnasio/reports/revenue-by-plan/",
+        views.RevenueByPlanReportView.as_view(),
+        name="gym-report-revenue-by-plan",
+    ),
+]

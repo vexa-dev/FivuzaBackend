@@ -1,6 +1,8 @@
 import calendar
+import io
 from datetime import date, timedelta
 
+import qrcode
 from django.db import transaction
 from rest_framework.exceptions import APIException
 
@@ -271,3 +273,67 @@ class MembershipGroupService:
             membership.group = group
             membership.save(update_fields=["group"])
         return group
+
+
+class InvalidMembershipQrTokenError(APIException):
+    status_code = 400
+    default_code = "INVALID_MEMBERSHIP_QR_TOKEN"
+    default_detail = {
+        "error": {
+            "code": "INVALID_MEMBERSHIP_QR_TOKEN",
+            "message": "El codigo QR no corresponde a una membresia valida.",
+        }
+    }
+
+
+_QR_TOKEN_PREFIX = "FIVUZA-MEMBERSHIP-"
+
+_DENIAL_REASONS = {
+    "FROZEN": "MEMBERSHIP_FROZEN",
+    "EXPIRED": "MEMBERSHIP_EXPIRED",
+    "CANCELLED": "MEMBERSHIP_CANCELLED",
+}
+
+
+class AccessCheckService:
+    """Control de acceso del socio (Sprint 31, Ficha de Producto §5.1):
+    deliberadamente NO se acopla a una marca de torniquete o lector QR
+    especifica -expone un endpoint de verificacion simple (permitido/
+    denegado + motivo) para que cualquier hardware de terreno lo consulte,
+    y una credencial QR generica (Sprint 27 ya sento el mismo patron con
+    codigos de barras: el backend genera la imagen, el consumidor final
+    -impresora fisica o, aqui, un lector QR- es libre)."""
+
+    @staticmethod
+    def check_access(membership: Membership, *, at: date | None = None) -> dict:
+        at = at or date.today()
+        if membership.status == "ACTIVE" and membership.end_date >= at:
+            return {"allowed": True, "reason": None}
+        if membership.status == "ACTIVE" and membership.end_date < at:
+            # Todavia no paso por expire_overdue_memberships() (corre cada
+            # 15 min), pero para efectos de acceso ya esta vencida.
+            return {"allowed": False, "reason": "MEMBERSHIP_EXPIRED"}
+        return {
+            "allowed": False,
+            "reason": _DENIAL_REASONS.get(membership.status, membership.status),
+        }
+
+    @staticmethod
+    def qr_token(membership: Membership) -> str:
+        return f"{_QR_TOKEN_PREFIX}{membership.id}"
+
+    @staticmethod
+    def parse_qr_token(token: str) -> int:
+        if not token.startswith(_QR_TOKEN_PREFIX):
+            raise InvalidMembershipQrTokenError()
+        try:
+            return int(token[len(_QR_TOKEN_PREFIX) :])
+        except ValueError as exc:
+            raise InvalidMembershipQrTokenError() from exc
+
+    @staticmethod
+    def generate_qr_png(membership: Membership) -> bytes:
+        image = qrcode.make(AccessCheckService.qr_token(membership))
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        return buffer.getvalue()
