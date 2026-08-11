@@ -1106,6 +1106,46 @@ class DashboardSummaryViewTests(APITestCase):
         self.assertEqual(canceled_row["id"], self.canceled_tenant.id)
         self.assertIsNotNone(canceled_row["data_retention_until"])
 
+    def test_demo_tenant_excluded_from_every_aggregate(self):
+        """Sprint 32: el tenant de demostracion (is_demo=True) no debe
+        inflar ninguna metrica del panel interno -ni el conteo de
+        tenants, ni el MRR, ni los pagos pendientes."""
+        from core.models import Subscription, SubscriptionPayment
+
+        demo_tenant = Tenant.objects.create(
+            schema_name="test_dash_demo",
+            company_name="Demo Fivuza",
+            status="active",
+            is_demo=True,
+        )
+        demo_subscription = Subscription.objects.create(
+            tenant=demo_tenant,
+            plan=self.plan,
+            billing_cycle="ANNUAL",
+            price_paid=1200,
+            status="active",
+            starts_at="2026-01-01T00:00:00Z",
+            expires_at="2027-01-01T00:00:00Z",
+        )
+        SubscriptionPayment.objects.create(
+            subscription=demo_subscription,
+            amount=1200,
+            currency="PEN",
+            payment_method="CARD",
+            status="PENDING",
+        )
+
+        response = self._client_as(self.super_admin).get(
+            "/api/v1/core/dashboard/summary/"
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.data
+        # Sigue en 1 -no 2- pese al tenant demo activo recien creado.
+        self.assertEqual(data["tenants_by_status"]["active"], 1)
+        self.assertEqual(float(data["mrr"]), 25.0)  # sin el MRR del demo (1200/12)
+        self.assertEqual(data["pending_payments_count"], 0)
+        self.assertNotIn(demo_tenant.id, [row["id"] for row in data["recent_tenants"]])
+
 
 class ApiDocsAccessTests(APITestCase):
     """La documentacion de la API (schema/Swagger/ReDoc) no debe quedar

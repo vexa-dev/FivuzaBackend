@@ -123,3 +123,25 @@ def _mark_expired_subscriptions_past_due() -> None:
     Subscription.objects.filter(status="active", expires_at__lt=timezone.now()).update(
         status="past_due"
     )
+
+
+@shared_task
+def reset_demo_tenants_nightly() -> None:
+    """Tarea periodica nocturna (Sprint 32): cada tenant marcado
+    is_demo=True vuelve a un estado limpio y conocido antes de la
+    siguiente reunion comercial. DemoTenantService.reset_demo_tenant()
+    ya trae su propia salvaguarda (se niega si is_demo no es True) -esta
+    tarea nunca podria tocar un tenant real aunque el filtro de abajo
+    tuviera un bug."""
+    from core.models import Tenant
+    from core.services import DemoTenantService
+
+    for tenant in Tenant.objects.filter(is_demo=True):
+        try:
+            DemoTenantService.reset_demo_tenant(tenant)
+        except Exception:
+            logger.exception(
+                "Fallo el reset nocturno del tenant demo %s (%s).",
+                tenant.id,
+                tenant.schema_name,
+            )

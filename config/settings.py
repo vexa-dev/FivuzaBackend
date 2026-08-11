@@ -323,6 +323,12 @@ CELERY_BEAT_SCHEDULE = {
         "task": "gimnasio.tasks.alert_expiring_memberships",
         "schedule": crontab(hour=8, minute=30),
     },
+    # Sprint 32: de madrugada, para que cada reunion comercial del dia
+    # arranque con el tenant de demo en un estado limpio y conocido.
+    "core-reset-demo-tenants-nightly": {
+        "task": "core.tasks.reset_demo_tenants_nightly",
+        "schedule": crontab(hour=3, minute=0),
+    },
 }
 
 # Django Channels / WebSocket (Sprint 24, TRD §2.5): DashboardConsumer
