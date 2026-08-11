@@ -135,13 +135,13 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        python manage.py spectacular --file ../schema_pr.yml --fail-on-warn=False
+        python manage.py spectacular --file ../schema_pr.yml
     - name: Install main branch dependencies and generate its schema
       working-directory: main-branch
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        python manage.py spectacular --file ../schema_main.yml --fail-on-warn=False
+        python manage.py spectacular --file ../schema_main.yml
     - name: Diff schemas for breaking changes
       working-directory: pr-branch
       run: python scripts/check_openapi_diff.py ../schema_main.yml ../schema_pr.yml
