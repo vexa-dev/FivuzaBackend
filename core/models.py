@@ -48,6 +48,7 @@ class Tenant(TenantMixin):
         ],
         default="trial",
     )
+    is_demo = models.BooleanField(default=False)
     suspended_at = models.DateTimeField(null=True, blank=True)
     canceled_at = models.DateTimeField(null=True, blank=True)
     created_on = models.DateField(auto_now_add=True)
