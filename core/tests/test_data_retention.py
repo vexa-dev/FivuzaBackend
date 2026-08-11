@@ -91,6 +91,16 @@ class TenantNotCanceledGracePeriodPermissionTests(TestCase):
             cls.user.set_password(cls.password)
             cls.user.save()
 
+    def tearDown(self):
+        # El request via APIClient contra el dominio del tenant deja la
+        # conexion apuntando a su schema (TenantMainMiddleware la fija por
+        # request pero no la restaura) -sin este reset, el resto de la
+        # suite hereda ese schema y Tenant.objects.create() de otros tests
+        # revienta con "Can't create tenant outside the public schema".
+        from django.db import connection
+
+        connection.set_schema_to_public()
+
     def test_read_is_rejected_once_grace_period_expired(self):
         client = APIClient(HTTP_HOST=self.domain.domain)
         login = client.post(
