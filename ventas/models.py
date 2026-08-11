@@ -46,6 +46,13 @@ class CashSession(models.Model):
 
     class Meta:
         db_table = "cash_sessions"
+        # Sprint 34: CashSessionService/reportes filtran por status="OPEN" y
+        # por rango de opening_at constantemente -sin indice, cada consulta
+        # escanea toda la tabla.
+        indexes = [
+            models.Index(fields=["status"], name="ix_cash_sessions_status"),
+            models.Index(fields=["opening_at"], name="ix_cash_sessions_opening_at"),
+        ]
         constraints = [
             models.CheckConstraint(
                 check=models.Q(status__in=["OPEN", "CLOSED"]),
@@ -82,6 +89,10 @@ class CashMovement(models.Model):
 
     class Meta:
         db_table = "cash_movements"
+        # Sprint 34: CashMovementReportView filtra por rango de created_at.
+        indexes = [
+            models.Index(fields=["created_at"], name="ix_cash_movements_created_at")
+        ]
         constraints = [
             models.CheckConstraint(
                 check=models.Q(type__in=["IN", "OUT"]), name="ck_cash_movements_type"
@@ -222,6 +233,15 @@ class Sale(models.Model):
 
     class Meta:
         db_table = "sales"
+        # Sprint 34: SaleViewSet.get_queryset() ordena por created_at siempre
+        # y filtra por rango de fechas seguido; SalesReportView filtra por
+        # status. El indice compuesto cubre ambos patrones de acceso reales.
+        indexes = [
+            models.Index(
+                fields=["status", "created_at"], name="ix_sales_status_created"
+            ),
+            models.Index(fields=["payment_status"], name="ix_sales_payment_status"),
+        ]
         constraints = [
             models.CheckConstraint(
                 check=models.Q(payment_status__in=["PAID", "PARTIAL", "UNPAID"]),

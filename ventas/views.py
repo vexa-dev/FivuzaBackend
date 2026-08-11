@@ -382,7 +382,14 @@ class SaleViewSet(
     no es un ModelSerializer -delega toda la validacion de negocio en
     SaleService.create_sale(), Especificacion de API §4.1)."""
 
-    queryset = Sale.objects.all().order_by("-created_at")
+    # prefetch_related evita el N+1 de SaleSerializer, que anida "details" y
+    # "payments" (many=True) -sin esto, cada venta listada dispara 2 queries
+    # extra propias.
+    queryset = (
+        Sale.objects.all()
+        .order_by("-created_at")
+        .prefetch_related("details", "payments")
+    )
     serializer_class = SaleSerializer
 
     def get_serializer_class(self):
@@ -426,9 +433,7 @@ class SaleViewSet(
     @action(detail=True, methods=["get"], url_path="receipt")
     def receipt(self, request, pk=None):
         try:
-            sale = (
-                self.get_queryset().prefetch_related("details", "payments").get(pk=pk)
-            )
+            sale = self.get_queryset().get(pk=pk)
         except Sale.DoesNotExist as exc:
             raise SaleNotFoundError() from exc
 
@@ -457,7 +462,10 @@ class SaleReturnViewSet(
     """Sin update/destroy: una devolucion, igual que la venta que revierte,
     es un registro de auditoria (misma logica que SaleViewSet)."""
 
-    queryset = SaleReturn.objects.all().order_by("-created_at")
+    # Mismo motivo que SaleViewSet: SaleReturnSerializer anida "details".
+    queryset = (
+        SaleReturn.objects.all().order_by("-created_at").prefetch_related("details")
+    )
     serializer_class = SaleReturnSerializer
 
     def get_serializer_class(self):
