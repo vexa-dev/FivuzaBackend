@@ -1,9 +1,13 @@
 import csv
 import io
 import json
+import secrets
+import zipfile
 from datetime import timedelta
 from decimal import Decimal
 
+import boto3
+from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
@@ -13,6 +17,7 @@ from rest_framework.exceptions import APIException
 
 from usuarios.models import (
     AuditLog,
+    DataExport,
     Employee,
     EmployeeAttendance,
     EmployeePayroll,
@@ -562,3 +567,267 @@ class PasswordResetService:
         reset_token.used_at = timezone.now()
         reset_token.save(update_fields=["used_at"])
         return user
+
+
+class UserAlreadyAnonymizedError(APIException):
+    status_code = 409
+    default_code = "USER_ALREADY_ANONYMIZED"
+    default_detail = {
+        "error": {
+            "code": "USER_ALREADY_ANONYMIZED",
+            "message": "Este usuario ya fue anonimizado.",
+        }
+    }
+
+
+class PersonalDataService:
+    """Derechos ARCO de un usuario de tenant.users (Sprint 33, Ley N
+    29733). export_own_data() cubre Acceso; anonymize_user() cubre
+    Rectificacion/Cancelacion/Oposicion -no se puede hacer un hard delete
+    de User (esta protegido por PROTECT desde practicamente todas las
+    apps de negocio: ventas, auditoria, planilla...), asi que la
+    'cancelacion' real es anonimizar los campos personales y desactivar
+    la cuenta, no borrar la fila."""
+
+    _ANONYMIZED_EMAIL_PREFIX = "usuario-eliminado"
+
+    @staticmethod
+    def export_own_data(user: User) -> dict:
+        data = {
+            "email": user.email,
+            "role": user.role.name,
+            "is_active": user.is_active,
+            "last_login": user.last_login.isoformat() if user.last_login else None,
+            "created_at": user.created_at.isoformat(),
+            "permission_overrides": [
+                {
+                    "permission": override.permission.code,
+                    "is_granted": override.is_granted,
+                }
+                for override in user.permission_overrides.select_related("permission")
+            ],
+        }
+        employee = Employee.objects.filter(user=user).first()
+        if employee is not None:
+            data["employee"] = {
+                "full_name": employee.full_name,
+                "document_number": employee.document_number,
+                "phone": employee.phone,
+                "position": employee.position,
+                "hire_date": employee.hire_date.isoformat(),
+            }
+        return data
+
+    @staticmethod
+    @transaction.atomic
+    def anonymize_user(user: User) -> User:
+        if user.email.startswith(PersonalDataService._ANONYMIZED_EMAIL_PREFIX):
+            raise UserAlreadyAnonymizedError()
+
+        user.email = (
+            f"{PersonalDataService._ANONYMIZED_EMAIL_PREFIX}-{user.id}@fivuza.invalid"
+        )
+        user.is_active = False
+        user.set_password(secrets.token_urlsafe(32))
+        user.save(update_fields=["email", "is_active", "password"])
+
+        employee = Employee.objects.filter(user=user).first()
+        if employee is not None:
+            employee.full_name = f"Empleado anonimizado #{employee.id}"
+            employee.document_number = f"ANON-{employee.id}"
+            employee.phone = ""
+            employee.save(update_fields=["full_name", "document_number", "phone"])
+
+        return user
+
+
+class DataExportLimitExceededError(APIException):
+    status_code = 429
+    default_code = "DATA_EXPORT_LIMIT_EXCEEDED"
+    default_detail = {
+        "error": {
+            "code": "DATA_EXPORT_LIMIT_EXCEEDED",
+            "message": "Ya se solicito un respaldo completo hoy. Intenta de nuevo mañana.",
+        }
+    }
+
+
+class DataExportNotReadyError(APIException):
+    status_code = 409
+    default_code = "DATA_EXPORT_NOT_READY"
+    default_detail = {
+        "error": {
+            "code": "DATA_EXPORT_NOT_READY",
+            "message": "Este respaldo todavia no esta listo para descargar.",
+        }
+    }
+
+
+class DataExportExpiredError(APIException):
+    status_code = 410
+    default_code = "DATA_EXPORT_EXPIRED"
+    default_detail = {
+        "error": {
+            "code": "DATA_EXPORT_EXPIRED",
+            "message": "Este respaldo ya vencio. Solicita uno nuevo.",
+        }
+    }
+
+
+# Sesion de descarga corta a proposito -API Spec §4.17: "URL prefirmada de
+# 15 minutos". El archivo en si vive mas tiempo en S3 (ver
+# TenantDataExportService.EXPORT_TTL_HOURS); esta URL se genera de nuevo en
+# cada click de "Descargar", nunca se guarda una URL prefirmada en la fila
+# de DataExport.
+_DOWNLOAD_URL_TTL_SECONDS = 15 * 60
+
+
+class TenantDataExportService:
+    """Respaldo completo de los datos de negocio del tenant (Sprint 33,
+    Ley N 29733, API Spec §4.17) -siempre asincrono: request_export()
+    solo crea la fila PENDING y encola la tarea de Celery
+    (usuarios.tasks.generate_data_export), nunca genera el archivo en el
+    mismo request."""
+
+    # Cuanto vive el archivo en S3 antes de que la limpieza nocturna lo
+    # borre -no puede quedar indefinidamente en el bucket porque contiene
+    # datos personales de los clientes y empleados del negocio.
+    EXPORT_TTL_HOURS = 24
+
+    @staticmethod
+    def request_export(*, user: User, format: str) -> DataExport:
+        today = timezone.now().date()
+        already_requested_today = DataExport.objects.filter(
+            requested_at__date=today
+        ).exclude(status="FAILED")
+        if already_requested_today.exists():
+            raise DataExportLimitExceededError()
+
+        export = DataExport.objects.create(requested_by=user, format=format)
+
+        from usuarios.tasks import generate_data_export
+
+        generate_data_export.delay(
+            export_id=export.id, schema_name=connection.schema_name
+        )
+        return export
+
+    @staticmethod
+    def build_export_file(*, format: str) -> tuple[bytes, str]:
+        sections = {
+            "users": TenantDataExportService._dump_users(),
+            "customers": TenantDataExportService._dump_customers(),
+            "employees": TenantDataExportService._dump_employees(),
+            "products": TenantDataExportService._dump_products(),
+            "sales": TenantDataExportService._dump_sales(),
+        }
+        if format == "XLSX":
+            return TenantDataExportService._to_xlsx(sections), "xlsx"
+        return TenantDataExportService._to_zip(sections), "zip"
+
+    @staticmethod
+    def _dump_users():
+        columns = ["id", "email", "role", "is_active", "created_at"]
+        rows = [
+            [u.id, u.email, u.role.name, u.is_active, u.created_at]
+            for u in User.objects.select_related("role").all()
+        ]
+        return columns, rows
+
+    @staticmethod
+    def _dump_customers():
+        from ventas.models import Customer
+
+        columns = ["id", "document_number", "name", "phone", "address", "credit_limit"]
+        rows = [
+            [c.id, c.document_number, c.name, c.phone, c.address, c.credit_limit]
+            for c in Customer.objects.all()
+        ]
+        return columns, rows
+
+    @staticmethod
+    def _dump_employees():
+        columns = [
+            "id",
+            "full_name",
+            "document_number",
+            "phone",
+            "position",
+            "hire_date",
+        ]
+        rows = [
+            [e.id, e.full_name, e.document_number, e.phone, e.position, e.hire_date]
+            for e in Employee.objects.all()
+        ]
+        return columns, rows
+
+    @staticmethod
+    def _dump_products():
+        from inventario.models import ProductVariant
+
+        columns = ["id", "sku", "product_name", "price", "cost"]
+        rows = [
+            [v.id, v.sku, v.product.name, v.price, v.cost]
+            for v in ProductVariant.objects.select_related("product").all()
+        ]
+        return columns, rows
+
+    @staticmethod
+    def _dump_sales():
+        from ventas.models import Sale
+
+        columns = [
+            "id",
+            "invoice_number",
+            "customer_id",
+            "total",
+            "status",
+            "created_at",
+        ]
+        rows = [
+            [s.id, s.invoice_number, s.customer_id, s.total, s.status, s.created_at]
+            for s in Sale.objects.all()
+        ]
+        return columns, rows
+
+    @staticmethod
+    def _to_zip(sections: dict) -> bytes:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            for name, (columns, rows) in sections.items():
+                csv_buffer = io.StringIO()
+                writer = csv.writer(csv_buffer)
+                writer.writerow(columns)
+                writer.writerows(rows)
+                archive.writestr(f"{name}.csv", csv_buffer.getvalue())
+        return buffer.getvalue()
+
+    @staticmethod
+    def _to_xlsx(sections: dict) -> bytes:
+        from openpyxl import Workbook
+
+        workbook = Workbook()
+        workbook.remove(workbook.active)
+        for name, (columns, rows) in sections.items():
+            sheet = workbook.create_sheet(title=name[:31])
+            sheet.append(columns)
+            for row in rows:
+                sheet.append([str(value) for value in row])
+
+        buffer = io.BytesIO()
+        workbook.save(buffer)
+        return buffer.getvalue()
+
+    @staticmethod
+    def get_download_url(export: DataExport) -> str:
+        if export.status != "COMPLETED":
+            raise DataExportNotReadyError()
+        if export.expires_at is not None and export.expires_at < timezone.now():
+            raise DataExportExpiredError()
+
+        client = boto3.client("s3", region_name=settings.AWS_S3_REGION)
+        return client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": settings.AWS_STORAGE_BUCKET_NAME, "Key": export.file_key},
+            ExpiresIn=_DOWNLOAD_URL_TTL_SECONDS,
+        )

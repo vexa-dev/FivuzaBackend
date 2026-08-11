@@ -498,6 +498,7 @@ class TenantRegisterViewTests(APITestCase):
             "domain": "lucho.fivuza.localhost",
             "plan_code": "PLAN_2",
             "billing_cycle": "MONTHLY",
+            "accept_terms": True,
         }
         payload.update(overrides)
         return payload
@@ -529,6 +530,25 @@ class TenantRegisterViewTests(APITestCase):
         self.assertEqual(subscription.price_paid, 39)
         # TenantProvisioningService (signal post_save) ya debio correr:
         self.assertTrue(TenantSettings.objects.filter(tenant=tenant).exists())
+
+    def test_register_stores_terms_acceptance(self):
+        from core.legal import TERMS_VERSION
+
+        self._client_as(self.super_admin).post(
+            "/api/v1/core/tenants/register/", self._payload(), format="json"
+        )
+        tenant = Tenant.objects.get(schema_name="emp_lucho")
+        self.assertIsNotNone(tenant.terms_accepted_at)
+        self.assertEqual(tenant.terms_version_accepted, TERMS_VERSION)
+
+    def test_register_rejects_when_terms_not_accepted(self):
+        response = self._client_as(self.super_admin).post(
+            "/api/v1/core/tenants/register/",
+            self._payload(accept_terms=False),
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(Tenant.objects.filter(schema_name="emp_lucho").exists())
 
     def test_register_without_ruc_succeeds(self):
         payload = self._payload(
@@ -567,6 +587,43 @@ class TenantRegisterViewTests(APITestCase):
             "/api/v1/core/tenants/register/", self._payload(), format="json"
         )
         self.assertEqual(response.status_code, 401)
+
+
+class LegalDocumentViewTests(APITestCase):
+    """GET /api/v1/core/legal/terms|privacy/ (Sprint 33, Ley N 29733) -sin
+    autenticacion, cualquiera debe poder leerlos antes de aceptarlos."""
+
+    @classmethod
+    def setUpTestData(cls):
+        public_tenant = Tenant.objects.create(
+            schema_name="public", company_name="Servicio Publico"
+        )
+        Domain.objects.create(
+            domain="public.localhost", tenant=public_tenant, is_primary=True
+        )
+
+    def test_terms_document_is_publicly_readable(self):
+        from core.legal import TERMS_VERSION
+
+        response = APIClient(HTTP_HOST="public.localhost").get(
+            "/api/v1/core/legal/terms/"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["version"], TERMS_VERSION)
+        self.assertIn("TERMINOS", response.data["content"])
+
+    def test_privacy_document_is_publicly_readable(self):
+        response = APIClient(HTTP_HOST="public.localhost").get(
+            "/api/v1/core/legal/privacy/"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("PRIVACIDAD", response.data["content"])
+
+    def test_unknown_legal_document_returns_404(self):
+        response = APIClient(HTTP_HOST="public.localhost").get(
+            "/api/v1/core/legal/nope/"
+        )
+        self.assertEqual(response.status_code, 404)
 
 
 class PlatformAuditLogTests(APITestCase):

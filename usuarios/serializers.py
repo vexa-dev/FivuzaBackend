@@ -11,6 +11,7 @@ from rest_framework_simplejwt.utils import datetime_from_epoch
 
 from usuarios.models import (
     AuditLog,
+    DataExport,
     Employee,
     EmployeeAttendance,
     EmployeePayroll,
@@ -321,3 +322,24 @@ class PasswordResetRequestSerializer(serializers.Serializer):
 class PasswordResetConfirmSerializer(serializers.Serializer):
     token = serializers.CharField()
     new_password = serializers.CharField(write_only=True, trim_whitespace=False)
+
+
+class DataExportSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DataExport
+        fields = [
+            "id",
+            "requested_by",
+            "scope",
+            "format",
+            "status",
+            "error_message",
+            "requested_at",
+            "completed_at",
+            "expires_at",
+        ]
+        read_only_fields = fields
+
+
+class DataExportRequestSerializer(serializers.Serializer):
+    format = serializers.ChoiceField(choices=["ZIP", "XLSX"])

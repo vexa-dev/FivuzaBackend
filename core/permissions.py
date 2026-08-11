@@ -64,6 +64,33 @@ class CannotReactivateCanceledTenantError(APIException):
     }
 
 
+class TermsNotAcceptedError(APIException):
+    status_code = 400
+    default_code = "TERMS_NOT_ACCEPTED"
+    default_detail = {
+        "error": {
+            "code": "TERMS_NOT_ACCEPTED",
+            "message": "Debes confirmar que el negocio acepta los Terminos y la Politica de Privacidad para registrarlo.",
+        }
+    }
+
+
+class TenantRetentionPeriodExpiredError(APIException):
+    """Sprint 33: a diferencia de TenantNotCanceled (que solo bloquea
+    escritura durante el periodo de gracia), este error bloquea TODO
+    acceso -incluida lectura- una vez que TenantDataRetentionService
+    determina que ya vencieron los 30 dias de gracia tras la cancelacion."""
+
+    status_code = 403
+    default_code = "TENANT_RETENTION_PERIOD_EXPIRED"
+    default_detail = {
+        "error": {
+            "code": "TENANT_RETENTION_PERIOD_EXPIRED",
+            "message": "El periodo de gracia de este tenant cancelado ya vencio. Sus datos ya no son accesibles.",
+        }
+    }
+
+
 class TenantNotSuspended(BasePermission):
     """Bloquea cualquier request de negocio si el tenant resuelto por
     subdominio esta suspended -usado por las 4 apps de negocio (usuarios,
@@ -81,15 +108,25 @@ class TenantNotCanceled(BasePermission):
     """A diferencia de TenantNotSuspended (bloquea todo, incluidas lecturas),
     un tenant cancelado conserva lectura durante su periodo de gracia de 30
     dias -para que el negocio pueda exportar su respaldo (Especificacion de
-    API §4.12: "solo lectura/exportacion"). Solo bloquea metodos de escritura."""
+    API §4.12: "solo lectura/exportacion"). Solo bloquea metodos de escritura.
+
+    Sprint 33: una vez que TenantDataRetentionService.is_within_grace_period()
+    dice que el periodo de gracia ya vencio, esto pasa a bloquear TODO
+    metodo -inclusive lectura- porque a esas alturas purge_expired_tenants()
+    ya debio haber eliminado el esquema fisico; si todavia no corrio (la
+    tarea es diaria, no instantanea), este permiso igual corta el acceso."""
 
     def has_permission(self, request, view):
         tenant = getattr(request, "tenant", None)
-        if (
-            tenant is not None
-            and tenant.status == "canceled"
-            and request.method not in SAFE_METHODS
-        ):
+        if tenant is None or tenant.status != "canceled":
+            return True
+
+        from core.services import TenantDataRetentionService
+
+        if not TenantDataRetentionService.is_within_grace_period(tenant):
+            raise TenantRetentionPeriodExpiredError()
+
+        if request.method not in SAFE_METHODS:
             raise TenantCanceledError()
         return True
 

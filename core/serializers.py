@@ -318,6 +318,7 @@ class TenantRegisterSerializer(serializers.Serializer):
     domain = serializers.CharField(max_length=253)
     plan_code = serializers.CharField()
     billing_cycle = serializers.ChoiceField(choices=["MONTHLY", "SEMIANNUAL", "ANNUAL"])
+    accept_terms = serializers.BooleanField()
 
     def validate_schema_name(self, value):
         if Tenant.objects.filter(schema_name=value).exists():

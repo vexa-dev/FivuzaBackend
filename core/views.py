@@ -30,6 +30,7 @@ from core.models import (
     TenantSettings,
 )
 from core.permissions import CanImpersonate, IsPlatformStaff, require_platform_role
+from core.throttling import LoginRateThrottle
 from core.serializers import (
     PlanFeatureSerializer,
     PlanSerializer,
@@ -101,6 +102,7 @@ class PlatformStaffLoginView(APIView):
     """POST email/password de un miembro del equipo Fivuza -> par de tokens JWT."""
 
     permission_classes = [AllowAny]
+    throttle_classes = [LoginRateThrottle]
 
     def post(self, request):
         serializer = PlatformStaffTokenObtainSerializer(data=request.data)
@@ -122,6 +124,24 @@ class PlatformStaffLogoutView(APIView):
         except TokenError as exc:
             raise ValidationError({"refresh": str(exc)})
         return Response(status=status.HTTP_205_RESET_CONTENT)
+
+
+class LegalDocumentView(APIView):
+    """GET /core/legal/terms/ o /core/legal/privacy/ (Sprint 33, Ley N
+    29733) -sin autenticacion a proposito: cualquiera debe poder leer el
+    texto vigente antes de aceptarlo."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request, document):
+        from core.legal import get_legal_document
+
+        try:
+            return Response(get_legal_document(document))
+        except ValueError:
+            from django.http import Http404
+
+            raise Http404
 
 
 class TenantRegisterView(APIView):
