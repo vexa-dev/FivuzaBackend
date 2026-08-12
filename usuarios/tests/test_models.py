@@ -27,11 +27,13 @@ from usuarios.models import (
 from usuarios.services import (
     AttendanceService,
     AuditLogService,
+    CannotDeleteSystemRoleError,
     PasswordResetService,
     PayrollAlreadyExistsError,
     PayrollAlreadyPaidError,
     PayrollService,
     PermissionService,
+    RoleInUseError,
     RoleService,
 )
 
@@ -184,6 +186,67 @@ class RoleServiceTests(TenantTestCase):
                 role=self.role, permission=self.permission, action="REVOKED"
             ).exists()
         )
+
+
+class RoleServiceDeleteTests(TenantTestCase):
+    """RoleService.delete_role() (Esquema Backend §"bitacora"): baja logica
+    de un rol a medida, con dos invariantes -nunca un rol del sistema
+    (admin/manager/seller, sembrados por TenantProvisioningService), y
+    nunca uno que todavia tenga usuarios asignados."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_role_service_delete"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-role-service-delete.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.admin_role = Role.objects.get(name="admin")
+        cls.deleter = User.objects.create(
+            email="admin@negocio.com", role=cls.admin_role
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    def test_cannot_delete_a_system_role(self):
+        with self.assertRaises(CannotDeleteSystemRoleError):
+            RoleService.delete_role(self.admin_role, deleted_by=self.deleter)
+
+        self.admin_role.refresh_from_db()
+        self.assertIsNone(self.admin_role.deleted_at)
+
+    def test_cannot_delete_a_role_with_users_assigned(self):
+        role = Role.objects.create(name="rol_con_usuarios")
+        User.objects.create(email="cajero@negocio.com", role=role)
+
+        with self.assertRaises(RoleInUseError):
+            RoleService.delete_role(role, deleted_by=self.deleter)
+
+        role.refresh_from_db()
+        self.assertIsNone(role.deleted_at)
+
+    def test_deletes_a_custom_role_without_users(self):
+        role = Role.objects.create(name="rol_sin_uso")
+
+        RoleService.delete_role(role, deleted_by=self.deleter)
+
+        role.refresh_from_db()
+        self.assertIsNotNone(role.deleted_at)
+        self.assertEqual(role.deleted_by_id, self.deleter.id)
+
+    def test_deleted_role_is_excluded_from_the_default_manager(self):
+        role = Role.objects.create(name="rol_a_borrar")
+        RoleService.delete_role(role, deleted_by=self.deleter)
+
+        self.assertFalse(Role.objects.filter(id=role.id).exists())
+        self.assertTrue(Role.all_objects.filter(id=role.id).exists())
 
 
 class AuditLogServiceTests(TenantTestCase):
