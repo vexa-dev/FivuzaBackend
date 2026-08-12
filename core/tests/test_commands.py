@@ -34,10 +34,22 @@ class SeedPlansCommandTests(TestCase):
                 "feature_code", flat=True
             ),
         )
+        # Sprint 35: HAS_SALES_MODULE debe existir como fila explicita
+        # is_enabled=False para PLAN_1/PLAN_3 -no solo estar ausente. Ausente
+        # y "False" no son equivalentes para FeatureFlagService.is_enabled(),
+        # que defaultea a habilitado cuando no encuentra una fila (mismo
+        # patron "solo puede apagar" que TenantSettings).
+        self.assertFalse(
+            plan_1.features.get(feature_code="HAS_SALES_MODULE").is_enabled
+        )
+        plan_3 = Plan.objects.get(code="PLAN_3")
+        self.assertFalse(
+            plan_3.features.get(feature_code="HAS_SALES_MODULE").is_enabled
+        )
 
     def test_is_idempotent(self):
         call_command("seed_plans", stdout=StringIO())
         call_command("seed_plans", stdout=StringIO())
 
         self.assertEqual(Plan.objects.count(), 4)
-        self.assertEqual(PlanFeature.objects.filter(plan__code="PLAN_1").count(), 2)
+        self.assertEqual(PlanFeature.objects.filter(plan__code="PLAN_1").count(), 3)

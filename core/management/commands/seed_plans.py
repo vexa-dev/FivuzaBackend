@@ -18,7 +18,17 @@ PLANS = [
         "price_monthly": "29.00",
         "price_semiannual": "145.00",
         "price_annual": "290.00",
-        "features": {"HAS_VARIANTS": True, "HAS_MULTI_WAREHOUSE": True},
+        # HAS_SALES_MODULE=False explicito, no solo omitido -Sprint 35
+        # confirmo que FeatureFlagService.is_enabled() por diseno defaultea
+        # a habilitado cuando no encuentra una fila de PlanFeature (el mismo
+        # patron "solo puede apagar" que TenantSettings), asi que omitir la
+        # feature nunca la bloquea. Sin esta fila, "Inventario Solo" no
+        # bloqueaba Ventas en absoluto.
+        "features": {
+            "HAS_VARIANTS": True,
+            "HAS_MULTI_WAREHOUSE": True,
+            "HAS_SALES_MODULE": False,
+        },
     },
     {
         "code": "PLAN_2",
@@ -40,7 +50,12 @@ PLANS = [
         "price_monthly": "49.00",
         "price_semiannual": "245.00",
         "price_annual": "490.00",
-        "features": {"HAS_VARIANTS": True, "HAS_MULTI_WAREHOUSE": True},
+        # Mismo motivo que PLAN_1: "Inventario + Usuarios" tampoco incluye Ventas.
+        "features": {
+            "HAS_VARIANTS": True,
+            "HAS_MULTI_WAREHOUSE": True,
+            "HAS_SALES_MODULE": False,
+        },
     },
     {
         "code": "PLAN_4",

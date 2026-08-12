@@ -933,6 +933,39 @@ class SubscriptionPaymentConfirmViewTests(APITestCase):
         )
         self.assertEqual(response.status_code, 409)
 
+    def test_confirming_payment_reactivates_a_suspended_tenant(self):
+        """Sprint 35: sin esto, un tenant suspendido por falta de pago se
+        quedaba suspendido para siempre aunque su pago ya estuviera
+        confirmado -reactivarlo era una accion manual separada en otra
+        pantalla que nada obligaba a recordar (Especificacion de API §4.12,
+        ciclo "vencimiento -> suspension -> pago -> reactivacion")."""
+        self.tenant.status = "suspended"
+        self.tenant.suspended_at = timezone.now()
+        self.tenant.save(update_fields=["status", "suspended_at"])
+
+        response = self._client_as(self.billing_staff).post(
+            f"/api/v1/core/subscription-payments/{self.payment.id}/confirm/",
+            {},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        self.tenant.refresh_from_db()
+        self.assertEqual(self.tenant.status, "active")
+        self.assertIsNone(self.tenant.suspended_at)
+
+    def test_confirming_payment_does_not_touch_a_non_suspended_tenant(self):
+        status_before = self.tenant.status
+        response = self._client_as(self.billing_staff).post(
+            f"/api/v1/core/subscription-payments/{self.payment.id}/confirm/",
+            {},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        self.tenant.refresh_from_db()
+        self.assertEqual(self.tenant.status, status_before)
+
     def test_confirm_writes_audit_log(self):
         from core.models import PlatformAuditLog
 
@@ -980,6 +1013,134 @@ class SubscriptionPaymentConfirmViewTests(APITestCase):
         )
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]["id"], self.subscription.id)
+
+
+class TenantSuspensionPaymentCycleTests(APITestCase):
+    """Sprint 35: encadena el ciclo completo que la Especificacion de API
+    §4.12 describe -vencimiento -> aviso -> suspension -> 402 en un
+    endpoint de negocio real -> pago -> reactivacion- en un solo test, en
+    vez de piezas sueltas probadas por separado. No hay negocio piloto real
+    ni pago real (Sprint 35 del plan asume eso), asi que esto es lo maximo
+    verificable con evidencia real en este entorno: cada eslabon usa el
+    codigo de produccion tal cual (la tarea Celery de deteccion, el
+    endpoint HTTP de suspension, un endpoint de negocio real, y el
+    endpoint HTTP de confirmacion de pago), no atajos internos."""
+
+    @classmethod
+    def setUpTestData(cls):
+        from core.models import Plan, Subscription, SubscriptionPayment
+
+        public_tenant = Tenant.objects.create(
+            schema_name="public", company_name="Servicio Publico"
+        )
+        Domain.objects.create(
+            domain="public.localhost", tenant=public_tenant, is_primary=True
+        )
+        cls.password = "ClaveSegura123"
+        cls.billing_staff = PlatformStaff.objects.create(
+            email="billing-cycle@fivuza.com", full_name="Billing", role="BILLING"
+        )
+        cls.billing_staff.set_password(cls.password)
+        cls.billing_staff.save()
+
+        cls.tenant = Tenant.objects.create(
+            schema_name="test_suspension_cycle", company_name="Negocio del Ciclo"
+        )
+        cls.domain = Domain.objects.create(
+            domain="test-suspension-cycle.localhost", tenant=cls.tenant, is_primary=True
+        )
+
+        from django_tenants.utils import schema_context
+
+        with schema_context(cls.tenant.schema_name):
+            from usuarios.models import Role, User
+
+            role = Role.objects.get(name="admin")
+            cls.tenant_user = User.objects.create(email="admin@negocio.com", role=role)
+            cls.tenant_user.set_password(cls.password)
+            cls.tenant_user.save()
+
+        cls.plan = Plan.objects.create(
+            code="PLAN_CYCLE",
+            name="Plan Ciclo",
+            max_users=1,
+            price_monthly=39,
+            price_semiannual=195,
+            price_annual=390,
+        )
+        cls.subscription = Subscription.objects.create(
+            tenant=cls.tenant,
+            plan=cls.plan,
+            billing_cycle="MONTHLY",
+            price_paid=39,
+            status="active",
+            starts_at=timezone.now() - timedelta(days=40),
+            expires_at=timezone.now() - timedelta(days=10),
+        )
+        cls.payment = SubscriptionPayment.objects.create(
+            subscription=cls.subscription,
+            amount=39,
+            payment_method="TRANSFER",
+            status="PENDING",
+        )
+
+    def _staff_client(self):
+        client = APIClient(HTTP_HOST="public.localhost")
+        login = client.post(
+            "/api/v1/platform/auth/login/",
+            {"email": self.billing_staff.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def _tenant_client(self):
+        client = APIClient(HTTP_HOST=self.domain.domain)
+        login = client.post(
+            "/api/v1/auth/login/",
+            {"email": self.tenant_user.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def test_full_cycle_expiration_to_suspension_to_payment_to_reactivation(self):
+        from core.tasks import check_subscription_expirations
+
+        # 1. Vencimiento -> aviso -> past_due (tarea periodica real).
+        check_subscription_expirations()
+        self.subscription.refresh_from_db()
+        self.assertEqual(self.subscription.status, "past_due")
+
+        # 2. Suspension manual por platform_staff (endpoint real -no hay
+        # suspension automatica: es una decision de negocio, no del cron).
+        staff_client = self._staff_client()
+        suspend_response = staff_client.patch(
+            f"/api/v1/core/tenants/{self.tenant.id}/suspend/",
+            {"reason": "Pago vencido"},
+            format="json",
+        )
+        self.assertEqual(suspend_response.status_code, 200)
+
+        # 3. 402 en un endpoint de negocio real del tenant suspendido.
+        blocked_response = self._tenant_client().get("/api/v1/inventario/products/")
+        self.assertEqual(blocked_response.status_code, 402)
+        self.assertEqual(blocked_response.data["error"]["code"], "TENANT_SUSPENDED")
+
+        # 4. Pago confirmado (endpoint real) -> reactivacion automatica.
+        confirm_response = staff_client.post(
+            f"/api/v1/core/subscription-payments/{self.payment.id}/confirm/",
+            {},
+            format="json",
+        )
+        self.assertEqual(confirm_response.status_code, 200)
+
+        self.tenant.refresh_from_db()
+        self.assertEqual(self.tenant.status, "active")
+
+        # 5. El mismo endpoint que antes daba 402 ahora responde 200.
+        unblocked_response = self._tenant_client().get("/api/v1/inventario/products/")
+        self.assertEqual(unblocked_response.status_code, 200)
 
 
 class TenantFeatureOverrideTests(APITestCase):
