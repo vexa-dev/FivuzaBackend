@@ -353,6 +353,16 @@ class SubscriptionPaymentService:
 
         subscription.save(update_fields=update_fields)
 
+        # Sprint 35: un tenant suspended por falta de pago no volvia a
+        # active solo -antes de esto, confirmar el pago (que si reactivaba
+        # la Subscription) dejaba al tenant bloqueado indefinidamente hasta
+        # que alguien de platform_staff recordara ir a reactivarlo a mano
+        # en una pantalla completamente separada. El ciclo de negocio
+        # "vencimiento -> suspension -> pago -> reactivacion" (Especificacion
+        # de API §4.12) exige que el pago SI la restaure.
+        if subscription.tenant.status == "suspended":
+            TenantLifecycleService.reactivate_tenant(subscription.tenant)
+
         return payment
 
 
