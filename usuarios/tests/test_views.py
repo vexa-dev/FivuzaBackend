@@ -2,6 +2,7 @@
 from unittest import mock
 
 from django.core.cache import cache
+from django.utils import timezone
 from django_tenants.test.cases import TenantTestCase
 from rest_framework.test import APIClient
 
@@ -636,3 +637,101 @@ class EmployeeEndpointsTests(TenantTestCase):
             response["Content-Type"],
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
+
+
+class UsersModuleTenantSuspendedGatingTests(TenantTestCase):
+    """Revision general del proyecto: RoleViewSet, PermissionViewSet,
+    RolePermissionViewSet, RolePermissionsHistoryViewSet, UserViewSet,
+    UserPermissionViewSet, AuditLogViewSet y UserAnonymizeView importaban
+    TenantNotSuspended/TenantNotCanceled pero no los usaban -un tenant
+    suspendido o cancelado (fuera del periodo de gracia) podia seguir
+    gestionando usuarios/roles/permisos y ver auditoria, mientras el resto
+    del sistema (ventas, inventario, RRHH, gimnasio, dashboard) ya le
+    quedaba bloqueado desde hace varios sprints."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_users_module_gating"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-users-module-gating.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.password = "ClaveSegura123"
+        admin_role = Role.objects.get(name="admin")
+        cls.admin_user = User.objects.create(email="admin@negocio.com", role=admin_role)
+        cls.admin_user.set_password(cls.password)
+        cls.admin_user.save()
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    def setUp(self):
+        cache.clear()
+        # Login ANTES de suspender: TenantUserLoginView es AllowAny (un
+        # usuario suspendido debe poder autenticarse para enterarse de que
+        # esta suspendido), asi que el token se obtiene con el tenant
+        # todavia activo y luego se reusa contra el tenant ya suspendido.
+        client = APIClient(HTTP_HOST=self.domain.domain)
+        login = client.post(
+            "/api/v1/auth/login/",
+            {"email": self.admin_user.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        self.client_as_admin = client
+
+        self.tenant.status = "suspended"
+        self.tenant.suspended_at = timezone.now()
+        self.tenant.save(update_fields=["status", "suspended_at"])
+
+    def tearDown(self):
+        self.tenant.status = "active"
+        self.tenant.suspended_at = None
+        self.tenant.save(update_fields=["status", "suspended_at"])
+
+    def test_role_list_is_blocked(self):
+        response = self.client_as_admin.get("/api/v1/usuarios/roles/")
+        self.assertEqual(response.status_code, 402)
+
+    def test_permission_list_is_blocked(self):
+        response = self.client_as_admin.get("/api/v1/usuarios/permissions/")
+        self.assertEqual(response.status_code, 402)
+
+    def test_role_permission_list_is_blocked(self):
+        response = self.client_as_admin.get("/api/v1/usuarios/role-permissions/")
+        self.assertEqual(response.status_code, 402)
+
+    def test_role_permissions_history_is_blocked(self):
+        response = self.client_as_admin.get(
+            "/api/v1/usuarios/role-permissions-history/"
+        )
+        self.assertEqual(response.status_code, 402)
+
+    def test_user_list_is_blocked(self):
+        response = self.client_as_admin.get("/api/v1/usuarios/users/")
+        self.assertEqual(response.status_code, 402)
+
+    def test_user_permission_list_is_blocked(self):
+        response = self.client_as_admin.get("/api/v1/usuarios/user-permissions/")
+        self.assertEqual(response.status_code, 402)
+
+    def test_audit_log_list_is_blocked(self):
+        response = self.client_as_admin.get("/api/v1/usuarios/audit-logs/")
+        self.assertEqual(response.status_code, 402)
+
+    def test_user_anonymize_is_blocked(self):
+        response = self.client_as_admin.post(
+            f"/api/v1/usuarios/users/{self.admin_user.id}/anonymize/", {}, format="json"
+        )
+        self.assertEqual(response.status_code, 402)
+
+    def test_own_data_export_is_deliberately_not_blocked(self):
+        """Derecho ARCO personal -no depende de que el negocio haya pagado."""
+        response = self.client_as_admin.get("/api/v1/usuarios/me/data-export/")
+        self.assertEqual(response.status_code, 200)

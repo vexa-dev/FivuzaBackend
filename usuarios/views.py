@@ -151,7 +151,12 @@ class RoleViewSet(viewsets.ModelViewSet):
 
     queryset = Role.objects.all()
     serializer_class = RoleSerializer
-    permission_classes = [IsAuthenticated, HasModulePermission("USERS_MANAGE_ROLES")]
+    permission_classes = [
+        IsAuthenticated,
+        TenantNotSuspended,
+        TenantNotCanceled,
+        HasModulePermission("USERS_MANAGE_ROLES"),
+    ]
 
     def perform_destroy(self, instance):
         RoleService.delete_role(instance, deleted_by=self.request.user)
@@ -162,7 +167,7 @@ class PermissionViewSet(viewsets.ReadOnlyModelViewSet):
 
     queryset = Permission.objects.all()
     serializer_class = PermissionSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, TenantNotSuspended, TenantNotCanceled]
 
 
 class RolePermissionViewSet(viewsets.ModelViewSet):
@@ -172,7 +177,12 @@ class RolePermissionViewSet(viewsets.ModelViewSet):
 
     queryset = RolePermission.objects.all()
     serializer_class = RolePermissionSerializer
-    permission_classes = [IsAuthenticated, HasModulePermission("USERS_MANAGE_ROLES")]
+    permission_classes = [
+        IsAuthenticated,
+        TenantNotSuspended,
+        TenantNotCanceled,
+        HasModulePermission("USERS_MANAGE_ROLES"),
+    ]
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -211,14 +221,27 @@ class RolePermissionViewSet(viewsets.ModelViewSet):
 class RolePermissionsHistoryViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = RolePermissionsHistory.objects.all()
     serializer_class = RolePermissionsHistorySerializer
-    permission_classes = [IsAuthenticated, HasModulePermission("USERS_VIEW_AUDIT")]
+    permission_classes = [
+        IsAuthenticated,
+        TenantNotSuspended,
+        TenantNotCanceled,
+        HasModulePermission("USERS_VIEW_AUDIT"),
+    ]
 
 
 class OwnDataExportView(APIView):
     """GET -> derecho de Acceso (ARCO, Sprint 33, Ley N 29733): un usuario
     exporta sus propios datos personales (perfil, permisos, ficha de
     empleado si tiene una vinculada). Sincrono -es un solo usuario, no el
-    negocio completo (eso es TenantDataExportService)."""
+    negocio completo (eso es TenantDataExportService).
+
+    Deliberadamente SIN TenantNotSuspended/TenantNotCanceled: es un derecho
+    legal personal del usuario sobre sus propios datos (Ley N 29733), no
+    una funcionalidad de negocio -que el tenant deba dinero o haya sido
+    cancelado no le quita a un empleado el derecho a exportar su propia
+    informacion. Los datos siguen existiendo (suspender/cancelar nunca
+    borra nada) y siguen siendo suyos independientemente del estado de
+    facturacion de su empleador."""
 
     permission_classes = [IsAuthenticated]
 
@@ -232,7 +255,12 @@ class UserAnonymizeView(APIView):
     (email, nombre, telefono, documento). No es un hard delete -User esta
     protegido por PROTECT desde casi todas las apps de negocio."""
 
-    permission_classes = [IsAuthenticated, HasModulePermission("USERS_MANAGE")]
+    permission_classes = [
+        IsAuthenticated,
+        TenantNotSuspended,
+        TenantNotCanceled,
+        HasModulePermission("USERS_MANAGE"),
+    ]
 
     def post(self, request, pk=None):
         user = get_object_or_404(User, pk=pk)
@@ -285,7 +313,12 @@ class DataExportViewSet(
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserSerializer
-    permission_classes = [IsAuthenticated, HasModulePermission("USERS_MANAGE")]
+    permission_classes = [
+        IsAuthenticated,
+        TenantNotSuspended,
+        TenantNotCanceled,
+        HasModulePermission("USERS_MANAGE"),
+    ]
 
     def perform_destroy(self, instance):
         instance.deleted_at = timezone.now()
@@ -298,7 +331,12 @@ class UserViewSet(viewsets.ModelViewSet):
 class UserPermissionViewSet(viewsets.ModelViewSet):
     queryset = UserPermission.objects.all()
     serializer_class = UserPermissionSerializer
-    permission_classes = [IsAuthenticated, HasModulePermission("USERS_MANAGE")]
+    permission_classes = [
+        IsAuthenticated,
+        TenantNotSuspended,
+        TenantNotCanceled,
+        HasModulePermission("USERS_MANAGE"),
+    ]
 
     def perform_create(self, serializer):
         super().perform_create(serializer)
@@ -320,7 +358,12 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
 
     queryset = AuditLog.objects.all().order_by("-created_at")
     serializer_class = AuditLogSerializer
-    permission_classes = [IsAuthenticated, HasModulePermission("USERS_VIEW_AUDIT")]
+    permission_classes = [
+        IsAuthenticated,
+        TenantNotSuspended,
+        TenantNotCanceled,
+        HasModulePermission("USERS_VIEW_AUDIT"),
+    ]
 
 
 class EmployeeViewSet(viewsets.ModelViewSet):
