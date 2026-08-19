@@ -5,34 +5,56 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('inventario', '0008_inventory_movements_variant_created_idx'),
-        ('usuarios', '0005_alter_permission_module_dataexport'),
+        ("inventario", "0008_inventory_movements_variant_created_idx"),
+        ("usuarios", "0005_alter_permission_module_dataexport"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='attribute',
-            name='is_primary',
+            model_name="attribute",
+            name="is_primary",
             field=models.BooleanField(default=False),
         ),
         migrations.CreateModel(
-            name='Brand',
+            name="Brand",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('deleted_at', models.DateTimeField(blank=True, null=True)),
-                ('name', models.CharField(max_length=150)),
-                ('is_active', models.BooleanField(default=True)),
-                ('deleted_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='+', to='usuarios.user')),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("deleted_at", models.DateTimeField(blank=True, null=True)),
+                ("name", models.CharField(max_length=150)),
+                ("is_active", models.BooleanField(default=True)),
+                (
+                    "deleted_by",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.PROTECT,
+                        related_name="+",
+                        to="usuarios.user",
+                    ),
+                ),
             ],
             options={
-                'db_table': 'brands',
+                "db_table": "brands",
             },
         ),
         migrations.AddField(
-            model_name='product',
-            name='brand',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name='products', to='inventario.brand'),
+            model_name="product",
+            name="brand",
+            field=models.ForeignKey(
+                blank=True,
+                null=True,
+                on_delete=django.db.models.deletion.PROTECT,
+                related_name="products",
+                to="inventario.brand",
+            ),
         ),
     ]

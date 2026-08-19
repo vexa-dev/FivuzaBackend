@@ -5,19 +5,24 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('inventario', '0009_attribute_is_primary_brand_product_brand'),
+        ("inventario", "0009_attribute_is_primary_brand_product_brand"),
     ]
 
     operations = [
         migrations.RemoveField(
-            model_name='attribute',
-            name='is_primary',
+            model_name="attribute",
+            name="is_primary",
         ),
         migrations.AddField(
-            model_name='category',
-            name='primary_attribute',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to='inventario.attribute'),
+            model_name="category",
+            name="primary_attribute",
+            field=models.ForeignKey(
+                blank=True,
+                null=True,
+                on_delete=django.db.models.deletion.SET_NULL,
+                related_name="+",
+                to="inventario.attribute",
+            ),
         ),
     ]
