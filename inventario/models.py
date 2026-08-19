@@ -25,6 +25,15 @@ class Warehouse(SoftDeleteModel):
 class Category(SoftDeleteModel):
     name = models.CharField(max_length=150)
     is_active = models.BooleanField(default=True)
+    # Que atributo agrupa filas en la tabla de Productos del frontend PARA
+    # LOS PRODUCTOS DE ESTA CATEGORIA (ej. Talla en "Ropa", Talla numerica
+    # en "Calzado", ninguno en "Abarrotes") -a proposito por categoria y no
+    # uno solo global: un ERP generico vende mas de un tipo de producto a
+    # la vez y cada uno necesita su propio criterio de agrupacion, o
+    # ninguno. SET_NULL: borrar el Attribute no debe borrar la categoria.
+    primary_attribute = models.ForeignKey(
+        "Attribute", on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
     deleted_by = models.ForeignKey(
         User, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
     )
@@ -32,6 +41,20 @@ class Category(SoftDeleteModel):
     class Meta:
         db_table = "categories"
         verbose_name_plural = "categories"
+
+    def __str__(self):
+        return self.name
+
+
+class Brand(SoftDeleteModel):
+    name = models.CharField(max_length=150)
+    is_active = models.BooleanField(default=True)
+    deleted_by = models.ForeignKey(
+        User, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
+
+    class Meta:
+        db_table = "brands"
 
     def __str__(self):
         return self.name
@@ -62,6 +85,13 @@ class Product(SoftDeleteModel):
     description = models.TextField(blank=True)
     category = models.ForeignKey(
         Category, on_delete=models.PROTECT, related_name="products"
+    )
+    brand = models.ForeignKey(
+        Brand,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="products",
     )
     supplier = models.ForeignKey(
         Supplier,

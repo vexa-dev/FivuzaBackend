@@ -6,6 +6,7 @@ from rest_framework import serializers
 from inventario.models import (
     Attribute,
     AttributeValue,
+    Brand,
     Category,
     InventoryMovement,
     Product,
@@ -33,6 +34,12 @@ class WarehouseSerializer(serializers.ModelSerializer):
 class CategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = Category
+        fields = ["id", "name", "is_active", "primary_attribute"]
+
+
+class BrandSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Brand
         fields = ["id", "name", "is_active"]
 
 
@@ -139,6 +146,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "name",
             "description",
             "category",
+            "brand",
             "supplier",
             "unit_of_measure",
             "is_for_sale",

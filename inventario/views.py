@@ -15,6 +15,7 @@ from inventario import selectors
 from inventario.models import (
     Attribute,
     AttributeValue,
+    Brand,
     Category,
     InventoryMovement,
     Product,
@@ -31,6 +32,7 @@ from inventario.permissions import HasInventoryAccess
 from inventario.serializers import (
     AttributeSerializer,
     AttributeValueSerializer,
+    BrandSerializer,
     CategorySerializer,
     InventoryMovementSerializer,
     LowStockVariantSerializer,
@@ -111,6 +113,25 @@ class WarehouseViewSet(viewsets.ModelViewSet):
 class CategoryViewSet(viewsets.ModelViewSet):
     queryset = Category.objects.all().order_by("name")
     serializer_class = CategorySerializer
+    permission_classes = _BASE_PERMISSIONS
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        search = self.request.query_params.get("search")
+        if search:
+            queryset = queryset.filter(name__icontains=search)
+        return queryset
+
+    def perform_destroy(self, instance):
+        instance.deleted_at = timezone.now()
+        instance.deleted_by = self.request.user
+        instance.is_active = False
+        instance.save(update_fields=["deleted_at", "deleted_by", "is_active"])
+
+
+class BrandViewSet(viewsets.ModelViewSet):
+    queryset = Brand.objects.all().order_by("name")
+    serializer_class = BrandSerializer
     permission_classes = _BASE_PERMISSIONS
 
     def get_queryset(self):

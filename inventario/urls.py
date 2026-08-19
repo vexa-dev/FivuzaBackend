@@ -6,6 +6,7 @@ from inventario import views
 router = DefaultRouter()
 router.register("inventario/warehouses", views.WarehouseViewSet, basename="warehouse")
 router.register("inventario/categories", views.CategoryViewSet, basename="category")
+router.register("inventario/brands", views.BrandViewSet, basename="brand")
 router.register("inventario/suppliers", views.SupplierViewSet, basename="supplier")
 router.register("inventario/attributes", views.AttributeViewSet, basename="attribute")
 router.register(
