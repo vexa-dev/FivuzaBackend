@@ -57,7 +57,8 @@ class TenantUserAuthTests(TenantTestCase):
         response = self._login()
         self.assertEqual(response.status_code, 200)
         self.assertIn("access", response.data)
-        self.assertIn("refresh", response.data)
+        self.assertNotIn("refresh", response.data)
+        self.assertTrue(response.cookies["fivuza_tenant_refresh"]["httponly"])
         self.assertEqual(response.data["user"]["email"], self.user.email)
 
     def test_login_response_includes_permission_codes(self):
@@ -83,7 +84,7 @@ class TenantUserAuthTests(TenantTestCase):
         response = self._login()
         self.assertEqual(response.status_code, 400)
 
-    @mock.patch.dict(LoginRateThrottle.THROTTLE_RATES, {"login": "10/min"})
+    @mock.patch.dict(LoginRateThrottle.THROTTLE_RATES, {"login_ip": "10/min"})
     def test_login_is_rate_limited_after_repeated_attempts(self):
         """Sprint 33 (TRD §6.1, §7.2): sin esto, /auth/login/ es un vector
         trivial de fuerza bruta -DEFAULT_THROTTLE_RATES["login"] = 10/min.
@@ -109,35 +110,31 @@ class TenantUserAuthTests(TenantTestCase):
         self.user.is_active = True
         self.user.save()
 
-    def test_logout_requires_authentication(self):
-        response = self.client.post(
-            "/api/v1/auth/logout/", {"refresh": "x"}, format="json"
-        )
-        self.assertEqual(response.status_code, 401)
+    def test_logout_is_idempotent_without_access_token(self):
+        response = self.client.post("/api/v1/auth/logout/", {}, format="json")
+        self.assertEqual(response.status_code, 205)
 
     def test_refresh_then_logout_blacklists_refresh_token(self):
-        tokens = self._login().data
-        access, refresh = tokens["access"], tokens["refresh"]
+        login = self._login()
+        old_refresh = login.cookies["fivuza_tenant_refresh"].value
 
-        refresh_response = self.client.post(
-            "/api/v1/auth/refresh/", {"refresh": refresh}, format="json"
-        )
+        refresh_response = self.client.post("/api/v1/auth/refresh/", {}, format="json")
         self.assertEqual(refresh_response.status_code, 200)
+        self.assertNotIn("refresh", refresh_response.data)
+        new_refresh = refresh_response.cookies["fivuza_tenant_refresh"].value
 
-        old_refresh_reuse = self.client.post(
-            "/api/v1/auth/refresh/", {"refresh": refresh}, format="json"
-        )
+        old_client = APIClient(HTTP_HOST=self.domain.domain)
+        old_client.cookies["fivuza_tenant_refresh"] = old_refresh
+        old_refresh_reuse = old_client.post("/api/v1/auth/refresh/", {}, format="json")
         self.assertEqual(old_refresh_reuse.status_code, 401)
 
-        new_refresh = refresh_response.data["refresh"]
-        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
-        logout_response = self.client.post(
-            "/api/v1/auth/logout/", {"refresh": new_refresh}, format="json"
-        )
+        logout_response = self.client.post("/api/v1/auth/logout/", {}, format="json")
         self.assertEqual(logout_response.status_code, 205)
 
-        reuse_after_logout = self.client.post(
-            "/api/v1/auth/refresh/", {"refresh": new_refresh}, format="json"
+        reuse_client = APIClient(HTTP_HOST=self.domain.domain)
+        reuse_client.cookies["fivuza_tenant_refresh"] = new_refresh
+        reuse_after_logout = reuse_client.post(
+            "/api/v1/auth/refresh/", {}, format="json"
         )
         self.assertEqual(reuse_after_logout.status_code, 401)
 

@@ -98,9 +98,17 @@ class DashboardConsumerTests(TenantTestCase):
         TenantSettings.objects.filter(tenant=cls.tenant).delete()
         super().tearDownClass()
 
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.user = User.objects.create(
+            email="dashboard-socket@negocio.com", role=Role.objects.get(name="admin")
+        )
+
     def _make_token(self) -> str:
         token = AccessToken()
         token["schema_name"] = self.tenant.schema_name
+        token["user_id"] = self.user.id
         return str(token)
 
     async def test_connect_with_valid_token_accepts(self):

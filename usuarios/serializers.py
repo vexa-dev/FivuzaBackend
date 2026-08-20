@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
 
@@ -22,7 +23,9 @@ from usuarios.models import (
     RolePermissionsHistory,
     User,
     UserPermission,
+    UserWarehouse,
 )
+from usuarios.warehouse_access import WarehouseAccessService
 
 
 def issue_tokens_for_tenant_user(user: User, schema_name: str) -> RefreshToken:
@@ -87,6 +90,9 @@ class TenantUserTokenObtainSerializer(serializers.Serializer):
                 "id": user.id,
                 "email": user.email,
                 "role": user.role.name,
+                "warehouse_ids": list(
+                    WarehouseAccessService.allowed_warehouse_ids(user)
+                ),
                 # El frontend usa esto para mostrar/ocultar secciones segun
                 # permiso, nunca segun el NOMBRE del rol -los roles son
                 # personalizables (Convenciones), un nombre fijo no alcanza.
@@ -132,6 +138,9 @@ class UserSerializer(serializers.ModelSerializer):
     guarda en texto plano (mismo patron que PlatformStaffCRUDSerializer)."""
 
     password = serializers.CharField(write_only=True, required=False)
+    warehouse_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1), required=False, write_only=True
+    )
 
     class Meta:
         model = User
@@ -143,18 +152,66 @@ class UserSerializer(serializers.ModelSerializer):
             "is_active",
             "last_login",
             "created_at",
+            "warehouse_ids",
         ]
         read_only_fields = ["last_login", "created_at"]
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["warehouse_ids"] = list(
+            instance.warehouse_access.order_by("warehouse_id").values_list(
+                "warehouse_id", flat=True
+            )
+        )
+        return data
+
+    def validate_warehouse_ids(self, value):
+        ids = list(dict.fromkeys(value))
+        existing = set(
+            Warehouse.objects.filter(id__in=ids, is_active=True).values_list(
+                "id", flat=True
+            )
+        )
+        missing = sorted(set(ids) - existing)
+        if missing:
+            raise serializers.ValidationError(
+                f"Almacenes inexistentes o inactivos: {', '.join(map(str, missing))}."
+            )
+        return ids
+
+    def validate(self, attrs):
+        role = attrs.get("role", self.instance.role if self.instance else None)
+        warehouse_ids = attrs.get("warehouse_ids")
+        was_admin = bool(
+            self.instance
+            and self.instance.role.is_system_default
+            and self.instance.role.name.casefold() == "admin"
+        )
+        will_be_admin = bool(
+            role and role.is_system_default and role.name.casefold() == "admin"
+        )
+        if was_admin and not will_be_admin and not warehouse_ids:
+            raise serializers.ValidationError(
+                {
+                    "warehouse_ids": "Asigna al menos un almacén al cambiar el rol administrador."
+                }
+            )
+        return attrs
+
+    @transaction.atomic
     def create(self, validated_data):
+        warehouse_ids = validated_data.pop("warehouse_ids", [])
         password = validated_data.pop("password", None)
         instance = User(**validated_data)
         if password:
             instance.set_password(password)
         instance.save()
+        self._replace_warehouses(instance, warehouse_ids)
         return instance
 
+    @transaction.atomic
     def update(self, instance, validated_data):
+        warehouse_ids = validated_data.pop("warehouse_ids", None)
         password = validated_data.pop("password", None)
         role_changed = (
             "role" in validated_data and validated_data["role"] != instance.role
@@ -164,11 +221,40 @@ class UserSerializer(serializers.ModelSerializer):
         if password:
             instance.set_password(password)
         instance.save()
+        if warehouse_ids is not None:
+            self._replace_warehouses(instance, warehouse_ids)
         if role_changed:
             from usuarios.services import PermissionService
 
             PermissionService.invalidate_user_cache(instance.id)
         return instance
+
+    @staticmethod
+    def _replace_warehouses(instance, warehouse_ids):
+        is_admin = (
+            instance.role.is_system_default and instance.role.name.casefold() == "admin"
+        )
+        instance.warehouse_access.all().delete()
+        if not is_admin:
+            UserWarehouse.objects.bulk_create(
+                [
+                    UserWarehouse(user=instance, warehouse_id=warehouse_id)
+                    for warehouse_id in warehouse_ids
+                ]
+            )
+
+
+class UserWarehouseSerializer(serializers.ModelSerializer):
+    warehouse_name = serializers.CharField(source="warehouse.name", read_only=True)
+
+    class Meta:
+        model = UserWarehouse
+        fields = ["id", "user", "warehouse", "warehouse_name"]
+
+    def validate_warehouse(self, warehouse):
+        if not warehouse.is_active:
+            raise serializers.ValidationError("El almacén está inactivo.")
+        return warehouse
 
 
 class UserPermissionSerializer(serializers.ModelSerializer):
@@ -216,6 +302,12 @@ class EmployeeSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["created_at"]
 
+    def validate_warehouse(self, warehouse):
+        WarehouseAccessService.require_warehouse(
+            self.context["request"].user, warehouse
+        )
+        return warehouse
+
 
 class EmployeeScheduleSerializer(serializers.ModelSerializer):
     class Meta:
@@ -228,6 +320,12 @@ class EmployeeScheduleSerializer(serializers.ModelSerializer):
             "end_time",
             "is_active",
         ]
+
+    def validate_employee(self, employee):
+        WarehouseAccessService.require_warehouse(
+            self.context["request"].user, employee.warehouse_id
+        )
+        return employee
 
 
 class EmployeeAttendanceSerializer(serializers.ModelSerializer):
@@ -251,7 +349,7 @@ class EmployeeAttendanceSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
-    def get_worked_hours(self, obj):
+    def get_worked_hours(self, obj) -> str | None:
         from usuarios.services import AttendanceService
 
         hours = AttendanceService.calculate_worked_hours(obj)

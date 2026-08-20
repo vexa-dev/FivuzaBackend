@@ -7,9 +7,9 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
 from core.permissions import RequiresFeature, TenantNotCanceled, TenantNotSuspended
+from core.openapi import SchemaAPIView
 from gimnasio.models import (
     ClassBooking,
     ClassSchedule,
@@ -261,7 +261,7 @@ class MembershipGroupViewSet(
         )
 
 
-class CheckInView(APIView):
+class CheckInView(SchemaAPIView):
     """POST /gimnasio/check-in/ {"token": "..."} o {"membership_id": N}
     (Sprint 31, Ficha de Producto §5.1). Resuelve el token del QR (o el id
     tipeado a mano, para la busqueda manual) a una membresia y devuelve el
@@ -294,7 +294,7 @@ class CheckInView(APIView):
         )
 
 
-class ClassAttendanceReportView(APIView):
+class ClassAttendanceReportView(SchemaAPIView):
     """GET /gimnasio/reports/class-attendance/?date_from=&date_to=&gym_class=&export=
     (Sprint 31). Asistencia y ocupacion por clase+fecha en un rango."""
 
@@ -370,7 +370,7 @@ class ClassAttendanceReportView(APIView):
         return Response(rows)
 
 
-class MembershipsExpiringReportView(APIView):
+class MembershipsExpiringReportView(SchemaAPIView):
     """GET /gimnasio/reports/memberships-expiring/?days=&export= (Sprint
     31). Reutiliza MembershipService.get_expiring_soon() -misma consulta
     que la tarea de aviso por correo del Sprint 29, expuesta ahora tambien
@@ -405,7 +405,7 @@ class MembershipsExpiringReportView(APIView):
         return Response(rows)
 
 
-class RevenueByPlanReportView(APIView):
+class RevenueByPlanReportView(SchemaAPIView):
     """GET /gimnasio/reports/revenue-by-plan/?date_from=&date_to=&export=
     (Sprint 31). Ingresos por plan en un rango de fechas, sumando
     MembershipPayment.amount agrupado por MembershipPayment.membership.plan."""

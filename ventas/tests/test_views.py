@@ -15,7 +15,7 @@ from rest_framework.test import APIClient
 from core.models import TenantSettings
 from inventario.models import Category, Warehouse
 from inventario.services import ProductVariantService, StockService
-from usuarios.models import Role, User
+from usuarios.models import Role, User, UserWarehouse
 from ventas.models import (
     CashMovement,
     CashRegister,
@@ -55,6 +55,7 @@ class CashSessionEndpointsTests(TenantTestCase):
         cls.seller_user.save()
 
         cls.warehouse = Warehouse.objects.create(name="Principal")
+        UserWarehouse.objects.create(user=cls.seller_user, warehouse=cls.warehouse)
         cls.cash_register = CashRegister.objects.create(
             warehouse=cls.warehouse, name="Caja 1"
         )
@@ -663,6 +664,12 @@ class SaleEndpointsTests(TenantTestCase):
         cls.auditor_user.save()
 
         cls.warehouse = Warehouse.objects.create(name="Principal")
+        UserWarehouse.objects.bulk_create(
+            [
+                UserWarehouse(user=cls.seller_user, warehouse=cls.warehouse),
+                UserWarehouse(user=cls.auditor_user, warehouse=cls.warehouse),
+            ]
+        )
         category = Category.objects.create(name="Ropa")
         product = ProductVariantService.create_product(
             product_data={
@@ -951,6 +958,12 @@ class SaleVoidAndReturnTests(TenantTestCase):
         cls.auditor_user.save()
 
         cls.warehouse = Warehouse.objects.create(name="Principal")
+        UserWarehouse.objects.bulk_create(
+            [
+                UserWarehouse(user=cls.seller_user, warehouse=cls.warehouse),
+                UserWarehouse(user=cls.auditor_user, warehouse=cls.warehouse),
+            ]
+        )
         category = Category.objects.create(name="Ropa")
         product = ProductVariantService.create_product(
             product_data={

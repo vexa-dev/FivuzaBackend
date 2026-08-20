@@ -6,16 +6,20 @@ from django.db import connection
 from django.db.utils import OperationalError
 from django.shortcuts import get_object_or_404
 from rest_framework import mixins, status, viewsets
-from rest_framework.decorators import api_view, permission_classes
 from rest_framework.exceptions import ValidationError
 from rest_framework.filters import OrderingFilter
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from core.auth_cookies import (
+    clear_refresh_cookie,
+    get_refresh_cookie,
+    set_refresh_cookie,
+)
+from core.openapi import SchemaAPIView
 from core.models import (
     PlatformAuditLog,
     PlatformStaff,
@@ -30,7 +34,7 @@ from core.models import (
     TenantSettings,
 )
 from core.permissions import CanImpersonate, IsPlatformStaff, require_platform_role
-from core.throttling import LoginRateThrottle
+from core.throttling import LoginIdentifierRateThrottle, LoginRateThrottle
 from core.serializers import (
     PlanFeatureSerializer,
     PlanSerializer,
@@ -45,6 +49,7 @@ from core.serializers import (
     TenantRegisterSerializer,
     TenantSerializer,
     TenantSettingsSerializer,
+    issue_tokens_for_platform_staff,
 )
 from core.services import (
     DATA_RETENTION_GRACE_DAYS,
@@ -98,35 +103,76 @@ class AuditLoggedViewSetMixin:
         )
 
 
-class PlatformStaffLoginView(APIView):
+class PlatformStaffLoginView(SchemaAPIView):
     """POST email/password de un miembro del equipo Fivuza -> par de tokens JWT."""
 
     permission_classes = [AllowAny]
-    throttle_classes = [LoginRateThrottle]
+    throttle_classes = [LoginRateThrottle, LoginIdentifierRateThrottle]
+    serializer_class = PlatformStaffTokenObtainSerializer
 
     def post(self, request):
         serializer = PlatformStaffTokenObtainSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        return Response(serializer.validated_data, status=status.HTTP_200_OK)
+        payload = dict(serializer.validated_data)
+        refresh = payload.pop("refresh")
+        response = Response(payload, status=status.HTTP_200_OK)
+        set_refresh_cookie(response, refresh, platform=True)
+        return response
 
 
-class PlatformStaffLogoutView(APIView):
-    """POST refresh token -> lo agrega a la blacklist, invalidandolo."""
-
-    permission_classes = [IsAuthenticated]
+class PlatformStaffRefreshView(SchemaAPIView):
+    permission_classes = [AllowAny]
 
     def post(self, request):
-        refresh_token = request.data.get("refresh")
-        if not refresh_token:
-            raise ValidationError({"refresh": "Este campo es requerido."})
+        raw = get_refresh_cookie(request, platform=True)
+        if not raw:
+            return Response({"detail": "Sesión no disponible."}, status=401)
         try:
-            RefreshToken(refresh_token).blacklist()
-        except TokenError as exc:
-            raise ValidationError({"refresh": str(exc)})
-        return Response(status=status.HTTP_205_RESET_CONTENT)
+            old_refresh = RefreshToken(raw)
+            if old_refresh.get("schema_name") is not None:
+                raise TokenError("Tipo de sesión inválido.")
+            staff = PlatformStaff.objects.get(
+                id=old_refresh.get("user_id"), is_active=True
+            )
+            old_refresh.blacklist()
+            refresh = issue_tokens_for_platform_staff(staff)
+        except (TokenError, PlatformStaff.DoesNotExist, TypeError, ValueError):
+            response = Response({"detail": "Sesión no válida."}, status=401)
+            clear_refresh_cookie(response, platform=True)
+            return response
+        response = Response(
+            {
+                "access": str(refresh.access_token),
+                "staff": {
+                    "id": staff.id,
+                    "email": staff.email,
+                    "full_name": staff.full_name,
+                    "role": staff.role,
+                },
+            }
+        )
+        set_refresh_cookie(response, str(refresh), platform=True)
+        return response
 
 
-class LegalDocumentView(APIView):
+class PlatformStaffLogoutView(SchemaAPIView):
+    """POST refresh token -> lo agrega a la blacklist, invalidandolo."""
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        refresh_token = get_refresh_cookie(request, platform=True)
+        try:
+            if refresh_token:
+                RefreshToken(refresh_token).blacklist()
+        except TokenError:
+            pass
+        response = Response(status=status.HTTP_205_RESET_CONTENT)
+        clear_refresh_cookie(response, platform=True)
+        return response
+
+
+class LegalDocumentView(SchemaAPIView):
     """GET /core/legal/terms/ o /core/legal/privacy/ (Sprint 33, Ley N
     29733) -sin autenticacion a proposito: cualquiera debe poder leer el
     texto vigente antes de aceptarlo."""
@@ -144,12 +190,13 @@ class LegalDocumentView(APIView):
             raise Http404
 
 
-class TenantRegisterView(APIView):
+class TenantRegisterView(SchemaAPIView):
     """POST -> registra un tenant nuevo (Especificacion de API §4.9). Solo
     platform_staff -no es un formulario de auto-registro publico (Especificacion
     de API §2.5: la creacion de tenants es "Solo platform_staff")."""
 
     permission_classes = [IsAuthenticated, IsPlatformStaff]
+    serializer_class = TenantRegisterSerializer
 
     def post(self, request):
         serializer = TenantRegisterSerializer(data=request.data)
@@ -176,7 +223,7 @@ class TenantRegisterView(APIView):
         )
 
 
-class TenantSuspendView(APIView):
+class TenantSuspendView(SchemaAPIView):
     """PATCH -> suspende un tenant (Especificacion de API §4.12). Solo platform_staff."""
 
     permission_classes = [IsAuthenticated, IsPlatformStaff]
@@ -202,7 +249,7 @@ class TenantSuspendView(APIView):
         )
 
 
-class TenantReactivateView(APIView):
+class TenantReactivateView(SchemaAPIView):
     """PATCH -> reactiva un tenant (Especificacion de API §4.12). Solo platform_staff."""
 
     permission_classes = [IsAuthenticated, IsPlatformStaff]
@@ -219,7 +266,7 @@ class TenantReactivateView(APIView):
         return Response({"id": tenant.id, "status": tenant.status})
 
 
-class TenantCancelView(APIView):
+class TenantCancelView(SchemaAPIView):
     """PATCH -> cancela un tenant de forma definitiva (Especificacion de API
     §4.12). Solo platform_staff. Transicion sin retorno: un tenant canceled
     no puede reactivarse."""
@@ -249,7 +296,7 @@ class TenantCancelView(APIView):
         )
 
 
-class TenantImpersonationStartView(APIView):
+class TenantImpersonationStartView(SchemaAPIView):
     """POST -> inicia una sesion de soporte tecnico (Especificacion de API
     §4.24). Solo SUPER_ADMIN/SUPPORT."""
 
@@ -264,7 +311,7 @@ class TenantImpersonationStartView(APIView):
         return Response(result, status=status.HTTP_201_CREATED)
 
 
-class TenantImpersonationEndView(APIView):
+class TenantImpersonationEndView(SchemaAPIView):
     """DELETE -> termina una sesion de soporte antes de que expire sola
     (Especificacion de API §4.24). Solo SUPER_ADMIN/SUPPORT -llamado desde
     el panel core. El botón "Salir" del banner en el ERP del tenant usa
@@ -284,7 +331,7 @@ class TenantImpersonationEndView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-class ImpersonationSelfEndView(APIView):
+class ImpersonationSelfEndView(SchemaAPIView):
     """POST -> el propio usuario impersonado termina la sesion desde el
     banner del ERP ("Salir"). Se identifica la sesion por el claim
     impersonation_session_id del token que autentico este request -no por
@@ -305,7 +352,7 @@ class ImpersonationSelfEndView(APIView):
         return Response(status=status.HTTP_205_RESET_CONTENT)
 
 
-class TenantFeatureOverrideListView(APIView):
+class TenantFeatureOverrideListView(SchemaAPIView):
     """GET -> caracteristicas con override individual para este tenant
     (Especificacion de API §4.25). Cualquier platform_staff puede leer; solo
     SUPER_ADMIN puede escribir (ver TenantFeatureOverrideView)."""
@@ -318,7 +365,7 @@ class TenantFeatureOverrideListView(APIView):
         return Response(TenantFeatureOverrideSerializer(overrides, many=True).data)
 
 
-class TenantFeatureOverrideView(APIView):
+class TenantFeatureOverrideView(SchemaAPIView):
     """PATCH/DELETE -> activa, desactiva o retira el override de UNA
     caracteristica para ESTE tenant (Especificacion de API §4.25). Solo
     SUPER_ADMIN."""
@@ -362,13 +409,14 @@ class TenantFeatureOverrideView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-class TenantNoteListCreateView(APIView):
+class TenantNoteListCreateView(SchemaAPIView):
     """GET/POST -> notas internas del equipo sobre un tenant (Especificacion
     de API §4.25). Nunca visibles para el propio negocio -viven enteramente
     en core, ningun endpoint de las 4 apps de negocio las expone. Cualquier
     platform_staff puede leer y escribir."""
 
     permission_classes = [IsAuthenticated, IsPlatformStaff]
+    serializer_class = TenantNoteSerializer
 
     def get(self, request, pk):
         tenant = get_object_or_404(Tenant, pk=pk)
@@ -384,7 +432,7 @@ class TenantNoteListCreateView(APIView):
         return Response(TenantNoteSerializer(note).data, status=status.HTTP_201_CREATED)
 
 
-class SubscriptionDiscountListCreateView(APIView):
+class SubscriptionDiscountListCreateView(SchemaAPIView):
     """GET/POST -> descuento de suscripcion negociado con un tenant puntual
     (Especificacion de API §4.25). Solo SUPER_ADMIN/BILLING."""
 
@@ -392,6 +440,7 @@ class SubscriptionDiscountListCreateView(APIView):
         IsAuthenticated,
         require_platform_role("SUPER_ADMIN", "BILLING"),
     ]
+    serializer_class = SubscriptionDiscountSerializer
 
     def get(self, request):
         queryset = SubscriptionDiscount.objects.all()
@@ -428,7 +477,7 @@ class SubscriptionDiscountListCreateView(APIView):
         )
 
 
-class SubscriptionDiscountDetailView(APIView):
+class SubscriptionDiscountDetailView(SchemaAPIView):
     """DELETE -> quita un descuento de suscripcion (Especificacion de API
     §4.25, seccion Frontend: "aplicar/quitar un descuento"). Solo
     SUPER_ADMIN/BILLING."""
@@ -451,7 +500,7 @@ class SubscriptionDiscountDetailView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-class TenantOnboardingView(APIView):
+class TenantOnboardingView(SchemaAPIView):
     """GET -> checklist de onboarding computado (Especificacion de API
     §4.26). Solo lectura, cualquier platform_staff."""
 
@@ -462,7 +511,7 @@ class TenantOnboardingView(APIView):
         return Response(TenantOnboardingService.get_checklist(tenant))
 
 
-class TenantHealthView(APIView):
+class TenantHealthView(SchemaAPIView):
     """GET -> panel de salud tecnica por tenant (Especificacion de API
     §4.26). Solo lectura, cualquier platform_staff."""
 
@@ -473,7 +522,7 @@ class TenantHealthView(APIView):
         return Response(TenantHealthService.get_health(tenant))
 
 
-class TenantConsumptionView(APIView):
+class TenantConsumptionView(SchemaAPIView):
     """GET -> reporte de consumo por tenant (Especificacion de API §4.26).
     Solo lectura, cualquier platform_staff."""
 
@@ -564,7 +613,7 @@ class SubscriptionPaymentViewSet(AuditLoggedViewSetMixin, viewsets.ModelViewSet)
         return queryset
 
 
-class SubscriptionPaymentConfirmView(APIView):
+class SubscriptionPaymentConfirmView(SchemaAPIView):
     """POST -> confirma manualmente un pago recibido por transferencia
     (Especificacion de API §4.10). Solo rol BILLING."""
 
@@ -678,7 +727,7 @@ class PlatformAuditLogViewSet(
         return queryset
 
 
-class DashboardSummaryView(APIView):
+class DashboardSummaryView(SchemaAPIView):
     """GET -> resumen agregado del panel interno (Especificacion de API §4.13)."""
 
     permission_classes = [IsAuthenticated, IsPlatformStaff]
@@ -687,20 +736,25 @@ class DashboardSummaryView(APIView):
         return Response(PlatformDashboardService.get_summary())
 
 
-@api_view(["GET"])
-@permission_classes([AllowAny])
-def health_check(request):
+class HealthCheckView(SchemaAPIView):
     """
     Endpoint de monitoreo (Health Check).
     Verifica conexion real a PostgreSQL y Redis -no solo responde un valor fijo-
     para que un monitor externo (UptimeRobot/CloudWatch) detecte una caida real.
     """
-    checks = {"database": _check_database(), "redis": _check_redis()}
-    status_code = 200 if all(checks.values()) else 503
-    return Response(
-        {"status": "healthy" if status_code == 200 else "unhealthy", "checks": checks},
-        status=status_code,
-    )
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        checks = {"database": _check_database(), "redis": _check_redis()}
+        status_code = 200 if all(checks.values()) else 503
+        return Response(
+            {
+                "status": "healthy" if status_code == 200 else "unhealthy",
+                "checks": checks,
+            },
+            status=status_code,
+        )
 
 
 def _check_database():

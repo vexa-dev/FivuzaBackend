@@ -1,5 +1,8 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.contrib.postgres.search import SearchQuery, SearchRank
+from django.db.models import F
 from django.http import HttpResponse
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -7,9 +10,9 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
 from core.permissions import RequiresFeature, TenantNotCanceled, TenantNotSuspended
+from core.openapi import SchemaAPIView
 from core.services import FeatureFlagService
 from inventario import selectors
 from inventario.models import (
@@ -51,6 +54,7 @@ from inventario.serializers import (
     WarehouseSerializer,
 )
 from usuarios.permissions import HasModulePermission
+from usuarios.warehouse_access import WarehouseAccessService
 
 _BASE_PERMISSIONS = [
     IsAuthenticated,
@@ -82,8 +86,16 @@ class WarehouseViewSet(viewsets.ModelViewSet):
     serializer_class = WarehouseSerializer
     permission_classes = _BASE_PERMISSIONS
 
+    def get_object(self):
+        warehouse = get_object_or_404(Warehouse.objects.all(), pk=self.kwargs["pk"])
+        WarehouseAccessService.require_warehouse(self.request.user, warehouse)
+        self.check_object_permissions(self.request, warehouse)
+        return warehouse
+
     def get_queryset(self):
-        queryset = super().get_queryset()
+        queryset = WarehouseAccessService.scope_queryset(
+            super().get_queryset(), self.request.user, lookup="id"
+        )
         search = self.request.query_params.get("search")
         if search:
             queryset = queryset.filter(name__icontains=search)
@@ -189,10 +201,18 @@ class ProductViewSet(viewsets.ModelViewSet):
         queryset = super().get_queryset().order_by("name")
         search = self.request.query_params.get("search")
         if search:
-            queryset = queryset.filter(name__icontains=search)
+            query = SearchQuery(search, config="simple", search_type="websearch")
+            queryset = (
+                queryset.annotate(search_rank=SearchRank(F("search_vector"), query))
+                .filter(search_vector=query)
+                .order_by("-search_rank", "name")
+            )
         category_id = self.request.query_params.get("category")
         if category_id:
             queryset = queryset.filter(category_id=category_id)
+        updated_since = self.request.query_params.get("updated_since")
+        if updated_since:
+            queryset = queryset.filter(updated_at__gte=updated_since)
         return queryset
 
     def perform_create(self, serializer):
@@ -234,6 +254,9 @@ class ProductVariantViewSet(viewsets.ModelViewSet):
         barcode = self.request.query_params.get("barcode")
         if barcode:
             queryset = queryset.filter(barcode=barcode)
+        updated_since = self.request.query_params.get("updated_since")
+        if updated_since:
+            queryset = queryset.filter(updated_at__gte=updated_since)
         return queryset
 
     def perform_destroy(self, instance):
@@ -299,12 +322,15 @@ class StockViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = _BASE_PERMISSIONS
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        queryset = WarehouseAccessService.scope_queryset(
+            super().get_queryset(), self.request.user
+        )
         variant_id = self.request.query_params.get("variant")
         if variant_id:
             queryset = queryset.filter(variant_id=variant_id)
         warehouse_id = self.request.query_params.get("warehouse")
         if warehouse_id:
+            WarehouseAccessService.require_warehouse(self.request.user, warehouse_id)
             queryset = queryset.filter(warehouse_id=warehouse_id)
         return queryset
 
@@ -324,12 +350,15 @@ class InventoryMovementViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = _BASE_PERMISSIONS
 
     def get_queryset(self):
-        queryset = super().get_queryset().order_by("-created_at")
+        queryset = WarehouseAccessService.scope_queryset(
+            super().get_queryset(), self.request.user
+        ).order_by("-created_at")
         variant_id = self.request.query_params.get("variant")
         if variant_id:
             queryset = queryset.filter(variant_id=variant_id)
         warehouse_id = self.request.query_params.get("warehouse")
         if warehouse_id:
+            WarehouseAccessService.require_warehouse(self.request.user, warehouse_id)
             queryset = queryset.filter(warehouse_id=warehouse_id)
         date_from = self.request.query_params.get("date_from")
         if date_from:
@@ -342,7 +371,8 @@ class InventoryMovementViewSet(viewsets.ReadOnlyModelViewSet):
         return queryset
 
 
-class StockAdjustView(APIView):
+class StockAdjustView(SchemaAPIView):
+    serializer_class = StockAdjustSerializer
     """POST conteo fisico/merma/ajuste -unico punto de entrada HTTP hacia
     StockService.adjust_stock() (API Spec §4.6)."""
 
@@ -367,7 +397,7 @@ class StockAdjustView(APIView):
         )
 
 
-class LowStockVariantsView(APIView):
+class LowStockVariantsView(SchemaAPIView):
     """GET listado de variantes por debajo de su min_stock -usado por el
     badge de alertas del layout (PRD, perfil 'Dueño'). Con ?export=csv|xlsx
     devuelve el archivo descargable en vez del JSON (Sprint 24, API Spec
@@ -377,7 +407,10 @@ class LowStockVariantsView(APIView):
     permission_classes = _BASE_PERMISSIONS
 
     def get(self, request):
-        variants = selectors.get_low_stock_variants()
+        warehouse_ids = None
+        if not WarehouseAccessService.is_admin(request.user):
+            warehouse_ids = WarehouseAccessService.allowed_warehouse_ids(request.user)
+        variants = selectors.get_low_stock_variants(warehouse_ids)
 
         export_format = request.query_params.get("export")
         if export_format:
@@ -433,7 +466,9 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
     permission_classes = _PURCHASES_PERMISSIONS
 
     def get_queryset(self):
-        queryset = super().get_queryset().order_by("-created_at")
+        queryset = WarehouseAccessService.scope_queryset(
+            super().get_queryset(), self.request.user
+        ).order_by("-created_at")
         status_param = self.request.query_params.get("status")
         if status_param:
             queryset = queryset.filter(status=status_param)
@@ -465,7 +500,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         )
 
 
-class CatalogImportTemplateView(APIView):
+class CatalogImportTemplateView(SchemaAPIView):
     """GET plantilla CSV descargable para la importacion masiva (Sprint 6,
     hueco #3)."""
 
@@ -483,7 +518,7 @@ class CatalogImportTemplateView(APIView):
         return response
 
 
-class CatalogImportView(APIView):
+class CatalogImportView(SchemaAPIView):
     """POST archivo CSV -valida fila por fila y confirma solo las validas,
     con reporte de errores (Sprint 6, hueco #3)."""
 
@@ -514,7 +549,7 @@ class CatalogImportView(APIView):
         return Response(report, status=status.HTTP_200_OK)
 
 
-class StockValuationReportView(APIView):
+class StockValuationReportView(SchemaAPIView):
     """GET /inventario/reports/stock-valuation/?warehouse=&export=
     (Sprint 24, API Spec §4.16). Valorización de stock: cantidad actual x
     costo actual de cada variante, por almacén."""
@@ -529,8 +564,10 @@ class StockValuationReportView(APIView):
         queryset = Stock.objects.select_related("variant__product", "warehouse").filter(
             quantity__gt=0
         )
+        queryset = WarehouseAccessService.scope_queryset(queryset, request.user)
         warehouse_id = request.query_params.get("warehouse")
         if warehouse_id:
+            WarehouseAccessService.require_warehouse(request.user, warehouse_id)
             queryset = queryset.filter(warehouse_id=warehouse_id)
 
         rows = []
@@ -563,7 +600,8 @@ class StockValuationReportView(APIView):
         return Response({"total_value": str(total_value), "rows": rows})
 
 
-class StockTransferView(APIView):
+class StockTransferView(SchemaAPIView):
+    serializer_class = StockTransferSerializer
     """POST -> traslado de stock entre dos almacenes del mismo tenant
     (Sprint 26, API Spec §2.2). Unico punto de entrada HTTP hacia
     StockService.transfer_stock() -mismo criterio que StockAdjustView."""
@@ -607,7 +645,8 @@ class VolumePricingTierViewSet(viewsets.ModelViewSet):
         return queryset
 
 
-class PrintLabelsView(APIView):
+class PrintLabelsView(SchemaAPIView):
+    serializer_class = PrintLabelsSerializer
     """POST -> HTML imprimible de una hoja de etiquetas de código de
     barras, en tamaño estándar (Sprint 27, API Spec §2.2). Mismo patrón que
     ReceiptService: el backend arma el HTML, el frontend lo imprime con

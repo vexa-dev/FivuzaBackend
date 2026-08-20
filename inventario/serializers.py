@@ -22,6 +22,7 @@ from inventario.models import (
     Warehouse,
 )
 from inventario.services import MediaService, ProductVariantService, StockService
+from usuarios.warehouse_access import WarehouseAccessService
 
 
 class WarehouseSerializer(serializers.ModelSerializer):
@@ -32,9 +33,41 @@ class WarehouseSerializer(serializers.ModelSerializer):
 
 
 class CategorySerializer(serializers.ModelSerializer):
+    allowed_attributes = serializers.PrimaryKeyRelatedField(
+        queryset=Attribute.objects.all(), many=True, required=False
+    )
+
     class Meta:
         model = Category
-        fields = ["id", "name", "is_active", "primary_attribute"]
+        fields = [
+            "id",
+            "name",
+            "is_active",
+            "primary_attribute",
+            "allowed_attributes",
+        ]
+
+    def validate(self, attrs):
+        primary_attribute = attrs.get(
+            "primary_attribute",
+            self.instance.primary_attribute if self.instance else None,
+        )
+        allowed_attributes = attrs.get("allowed_attributes")
+        if allowed_attributes is None:
+            allowed_attributes = (
+                list(self.instance.allowed_attributes.all()) if self.instance else []
+            )
+
+        if primary_attribute and primary_attribute not in allowed_attributes:
+            raise serializers.ValidationError(
+                {
+                    "primary_attribute": (
+                        "El atributo de agrupación debe estar incluido entre los "
+                        "atributos permitidos."
+                    )
+                }
+            )
+        return attrs
 
 
 class BrandSerializer(serializers.ModelSerializer):
@@ -125,6 +158,55 @@ class ProductVariantImageUploadURLSerializer(serializers.Serializer):
         )
 
 
+class ProductVariantCreateInputSerializer(serializers.Serializer):
+    """Valida cada variante incluida al crear un producto.
+
+    Antes ``variants_input`` aceptaba diccionarios sin estructura y los
+    errores terminaban apareciendo recién en la base de datos. Este
+    serializer mantiene el mismo payload, pero devuelve errores 400
+    legibles antes de abrir la transacción de creación.
+    """
+
+    sku = serializers.CharField(max_length=100)
+    barcode = serializers.CharField(
+        max_length=100, required=False, allow_blank=True, allow_null=True
+    )
+    cost = serializers.DecimalField(
+        max_digits=12, decimal_places=4, min_value=Decimal("0"), default=Decimal("0")
+    )
+    price = serializers.DecimalField(
+        max_digits=12, decimal_places=4, min_value=Decimal("0"), default=Decimal("0")
+    )
+    min_stock = serializers.DecimalField(
+        max_digits=12, decimal_places=3, min_value=Decimal("0"), default=Decimal("0")
+    )
+    attribute_value_ids = serializers.PrimaryKeyRelatedField(
+        queryset=AttributeValue.objects.all(), many=True, required=False
+    )
+
+    def validate_sku(self, value):
+        if ProductVariant.all_objects.filter(sku=value).exists():
+            raise serializers.ValidationError("Ya existe una variante con este SKU.")
+        return value
+
+    def validate_barcode(self, value):
+        if not value:
+            return None
+        if ProductVariant.all_objects.filter(barcode=value).exists():
+            raise serializers.ValidationError(
+                "Ya existe una variante con este código de barras."
+            )
+        return value
+
+    def validate_attribute_value_ids(self, values):
+        attribute_ids = [value.attribute_id for value in values]
+        if len(attribute_ids) != len(set(attribute_ids)):
+            raise serializers.ValidationError(
+                "Selecciona como máximo un valor por atributo."
+            )
+        return values
+
+
 class ProductSerializer(serializers.ModelSerializer):
     """variants es write_only en create(): el frontend siempre manda al
     menos 1 fila (aunque el producto no tenga variantes reales), y
@@ -134,8 +216,8 @@ class ProductSerializer(serializers.ModelSerializer):
     directamente, no este endpoint."""
 
     variants = ProductVariantSerializer(many=True, read_only=True)
-    variants_input = serializers.ListField(
-        child=serializers.DictField(), write_only=True, required=False
+    variants_input = ProductVariantCreateInputSerializer(
+        many=True, write_only=True, required=True, allow_empty=False
     )
 
     class Meta:
@@ -158,10 +240,62 @@ class ProductSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["updated_at", "created_at"]
 
+    def validate(self, attrs):
+        variants = attrs.get("variants_input", [])
+        skus = [variant["sku"] for variant in variants]
+        if len(skus) != len(set(skus)):
+            raise serializers.ValidationError(
+                {"variants_input": "Los SKU de las variantes no pueden repetirse."}
+            )
+
+        barcodes = [
+            variant.get("barcode") for variant in variants if variant.get("barcode")
+        ]
+        if len(barcodes) != len(set(barcodes)):
+            raise serializers.ValidationError(
+                {
+                    "variants_input": (
+                        "Los códigos de barras de las variantes no pueden repetirse."
+                    )
+                }
+            )
+
+        category = attrs.get("category")
+        if category:
+            allowed_ids = set(category.allowed_attributes.values_list("id", flat=True))
+            for index, variant in enumerate(variants):
+                selected = variant.get("attribute_value_ids", [])
+                invalid = [
+                    value.attribute.name
+                    for value in selected
+                    if value.attribute_id not in allowed_ids
+                ]
+                if invalid:
+                    names = ", ".join(sorted(set(invalid)))
+                    raise serializers.ValidationError(
+                        {
+                            "variants_input": (
+                                f"La variante {index + 1} usa atributos no permitidos "
+                                f"para la categoría: {names}."
+                            )
+                        }
+                    )
+        return attrs
+
     def create(self, validated_data):
         variants_data = validated_data.pop("variants_input", [])
+        normalized_variants = []
+        for variant_data in variants_data:
+            variant_data = dict(variant_data)
+            attribute_values = variant_data.pop("attribute_value_ids", [])
+            normalized_variants.append(
+                {
+                    **variant_data,
+                    "attribute_value_ids": [value.id for value in attribute_values],
+                }
+            )
         return ProductVariantService.create_product(
-            product_data=validated_data, variants_data=variants_data
+            product_data=validated_data, variants_data=normalized_variants
         )
 
 
@@ -223,6 +357,12 @@ class StockAdjustSerializer(serializers.Serializer):
         choices=["PURCHASE", "SALE", "ADJUSTMENT", "RETURN"], default="ADJUSTMENT"
     )
 
+    def validate_warehouse(self, warehouse):
+        WarehouseAccessService.require_warehouse(
+            self.context["request"].user, warehouse
+        )
+        return warehouse
+
     def create(self, validated_data):
         return StockService.adjust_stock(
             variant=validated_data["variant"],
@@ -243,6 +383,12 @@ class StockTransferSerializer(serializers.Serializer):
     )
     to_warehouse = serializers.PrimaryKeyRelatedField(queryset=Warehouse.objects.all())
     quantity = serializers.DecimalField(max_digits=12, decimal_places=3)
+
+    def validate(self, attrs):
+        user = self.context["request"].user
+        WarehouseAccessService.require_warehouse(user, attrs["from_warehouse"])
+        WarehouseAccessService.require_warehouse(user, attrs["to_warehouse"])
+        return attrs
 
     def create(self, validated_data):
         out_movement, in_movement = StockService.transfer_stock(
@@ -331,6 +477,12 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = ["user", "status", "total", "received_at", "created_at"]
+
+    def validate_warehouse(self, warehouse):
+        WarehouseAccessService.require_warehouse(
+            self.context["request"].user, warehouse
+        )
+        return warehouse
 
     def create(self, validated_data):
         details_data = validated_data.pop("details_input", [])

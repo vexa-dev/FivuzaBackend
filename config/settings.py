@@ -43,6 +43,11 @@ SECRET_KEY = os.getenv(
 # seguro (False) si la variable no esta definida; .env de desarrollo la fija
 # en True explicitamente.
 DEBUG = os.getenv("DEBUG", "False") == "True"
+AUTH_COOKIE_SECURE = (
+    os.getenv("AUTH_COOKIE_SECURE", "False" if DEBUG else "True").lower() == "true"
+)
+TENANT_REFRESH_COOKIE_NAME = "fivuza_tenant_refresh"
+PLATFORM_REFRESH_COOKIE_NAME = "fivuza_platform_refresh"
 
 # Antes se ignoraba la variable de entorno ALLOWED_HOSTS y quedaba en [] -en dev
 # eso "funcionaba por accidente" porque Django agrega '.localhost' cuando
@@ -85,6 +90,7 @@ SHARED_APPS = (
     "rest_framework",
     "rest_framework_simplejwt.token_blacklist",
     "drf_spectacular",
+    "django_filters",
     "corsheaders",
 )
 
@@ -159,6 +165,10 @@ REST_FRAMEWORK = {
         # tabla (platform_staff / tenant.users) y no interfieren entre si.
         # Los endpoints de tenant.users llegan recien en Sprint 2.
     ),
+    "DEFAULT_FILTER_BACKENDS": ("django_filters.rest_framework.DjangoFilterBackend",),
+    "DEFAULT_PAGINATION_CLASS": "core.api_contract.TransitionPageNumberPagination",
+    "EXCEPTION_HANDLER": "core.api_contract.standard_exception_handler",
+    "DEFAULT_THROTTLE_CLASSES": ("core.throttling.BusinessWriteRateThrottle",),
     # Sprint 33 (TRD §6.1): rate limiting en los endpoints de login -"login"
     # es el scope que usa core.throttling.LoginRateThrottle. Por IP, no por
     # usuario, para no depender de que el atacante mande un email valido.
@@ -167,15 +177,39 @@ REST_FRAMEWORK = {
     # completa acumula cientos de logins contra el mismo rate -por eso el
     # limite real solo aplica fuera de "manage.py test".
     "DEFAULT_THROTTLE_RATES": {
-        "login": "1000000/min" if "test" in sys.argv else "10/min",
+        "login_ip": "1000000/min" if "test" in sys.argv else "5/min",
+        "login_identifier": "1000000/min" if "test" in sys.argv else "5/min",
+        "business_write": "1000000/min" if "test" in sys.argv else "100/min",
     },
 }
+
+API_V1_PAGINATION_ENABLED = os.getenv("API_V1_PAGINATION_ENABLED", "False") == "True"
+API_STANDARD_ERRORS_ENABLED = (
+    os.getenv("API_STANDARD_ERRORS_ENABLED", "False") == "True"
+)
+DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 
 SPECTACULAR_SETTINGS = {
     "TITLE": "Fivuza API",
     "DESCRIPTION": "API para el sistema SaaS Fivuza (ERP multi-tenant)",
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
+    "ENUM_NAME_OVERRIDES": {
+        "MovementDirectionEnum": [("IN", "IN"), ("OUT", "OUT")],
+        "CashSessionStatusEnum": [("OPEN", "OPEN"), ("CLOSED", "CLOSED")],
+        "MembershipPaymentMethodEnum": [
+            ("CASH", "CASH"),
+            ("CARD", "CARD"),
+            ("YAPE", "YAPE"),
+        ],
+        "SalePaymentMethodEnum": [
+            ("CASH", "CASH"),
+            ("CARD", "CARD"),
+            ("YAPE", "YAPE"),
+            ("CREDIT_LEDGER", "CREDIT_LEDGER"),
+            ("BALANCE", "BALANCE"),
+        ],
+    },
 }
 
 # django-cors-headers: el frontend (puerto 5173) y el backend (puerto 8000)

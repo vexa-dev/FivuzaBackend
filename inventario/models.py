@@ -34,6 +34,13 @@ class Category(SoftDeleteModel):
     primary_attribute = models.ForeignKey(
         "Attribute", on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
     )
+    # Atributos que pueden utilizar las variantes de productos de esta
+    # categoría. El atributo principal es solo el criterio de agrupación;
+    # esta relación define la matriz completa permitida (p. ej. talla y
+    # color para Ropa).
+    allowed_attributes = models.ManyToManyField(
+        "Attribute", blank=True, related_name="categories"
+    )
     deleted_by = models.ForeignKey(
         User, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
     )

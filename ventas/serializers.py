@@ -3,6 +3,7 @@ from decimal import Decimal
 from rest_framework import serializers
 
 from inventario.models import ProductVariant, Warehouse
+from usuarios.warehouse_access import WarehouseAccessService
 from ventas.models import (
     CashMovement,
     CashRegister,
@@ -37,6 +38,12 @@ class CashRegisterSerializer(serializers.ModelSerializer):
     class Meta:
         model = CashRegister
         fields = ["id", "warehouse", "name", "is_active"]
+
+    def validate_warehouse(self, warehouse):
+        WarehouseAccessService.require_warehouse(
+            self.context["request"].user, warehouse
+        )
+        return warehouse
 
 
 class CashSessionSerializer(serializers.ModelSerializer):
@@ -85,6 +92,12 @@ class CashMovementSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = ["user", "created_at"]
+
+    def validate_cash_session(self, session):
+        WarehouseAccessService.require_warehouse(
+            self.context["request"].user, session.cash_register.warehouse_id
+        )
+        return session
 
     def create(self, validated_data):
         return CashSessionService.add_movement(
@@ -154,17 +167,17 @@ class CustomerSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["updated_at", "created_at"]
 
-    def get_current_debt(self, obj):
+    def get_current_debt(self, obj) -> str:
         return str(CreditLedgerService.get_debt(obj))
 
-    def get_current_balance(self, obj):
+    def get_current_balance(self, obj) -> str:
         return str(CreditLedgerService.get_balance(obj))
 
-    def get_oldest_unpaid_debt_at(self, obj):
+    def get_oldest_unpaid_debt_at(self, obj) -> str | None:
         if CreditLedgerService.get_debt(obj) <= 0:
             return None
         entry = obj.debt_ledger.filter(type="DEBIT").order_by("created_at").first()
-        return entry.created_at if entry else None
+        return entry.created_at.isoformat() if entry else None
 
 
 class CustomerDebtLedgerSerializer(serializers.ModelSerializer):
@@ -336,6 +349,12 @@ class SaleCreateSerializer(serializers.Serializer):
     lines = SaleLineInputSerializer(many=True)
     payments = SalePaymentInputSerializer(many=True)
 
+    def validate_cash_session_id(self, session):
+        WarehouseAccessService.require_warehouse(
+            self.context["request"].user, session.cash_register.warehouse_id
+        )
+        return session
+
     def validate_lines(self, value):
         if not value:
             raise serializers.ValidationError("Agrega al menos una linea.")
@@ -372,6 +391,12 @@ class SaleSyncItemSerializer(serializers.Serializer):
     )
     lines = SaleLineInputSerializer(many=True)
     payments = SalePaymentInputSerializer(many=True)
+
+    def validate_cash_session_id(self, session):
+        WarehouseAccessService.require_warehouse(
+            self.context["request"].user, session.cash_register.warehouse_id
+        )
+        return session
 
     def validate_lines(self, value):
         if not value:
@@ -467,6 +492,19 @@ class SaleReturnCreateSerializer(serializers.Serializer):
     )
     items = SaleReturnItemInputSerializer(many=True)
 
+    def validate_sale_id(self, sale):
+        WarehouseAccessService.require_warehouse(
+            self.context["request"].user, sale.warehouse_id
+        )
+        return sale
+
+    def validate_cash_session_id(self, session):
+        if session is not None:
+            WarehouseAccessService.require_warehouse(
+                self.context["request"].user, session.cash_register.warehouse_id
+            )
+        return session
+
     def validate_items(self, value):
         if not value:
             raise serializers.ValidationError("Agrega al menos una linea a devolver.")
@@ -495,6 +533,12 @@ class CashSessionOpenSerializer(serializers.Serializer):
         max_digits=12, decimal_places=4, min_value=0
     )
 
+    def validate_cash_register_id(self, cash_register):
+        WarehouseAccessService.require_warehouse(
+            self.context["request"].user, cash_register.warehouse_id
+        )
+        return cash_register
+
     def create(self, validated_data):
         return CashSessionService.open_session(
             cash_register=validated_data["cash_register"],
@@ -508,6 +552,13 @@ class CashSessionCloseSerializer(serializers.Serializer):
         max_digits=12, decimal_places=4, min_value=0
     )
     notes = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        WarehouseAccessService.require_warehouse(
+            self.context["request"].user,
+            self.context["session"].cash_register.warehouse_id,
+        )
+        return attrs
 
     def create(self, validated_data):
         return CashSessionService.close_session(
@@ -556,6 +607,12 @@ class ReservationCreateSerializer(serializers.Serializer):
     )
     expires_at = serializers.DateTimeField()
 
+    def validate_warehouse_id(self, warehouse):
+        WarehouseAccessService.require_warehouse(
+            self.context["request"].user, warehouse
+        )
+        return warehouse
+
     def create(self, validated_data):
         return ReservationService.create_reservation(
             customer=validated_data["customer"],
@@ -576,6 +633,12 @@ class ReservationConvertSerializer(serializers.Serializer):
         source="cash_session", queryset=CashSession.objects.all()
     )
     payments = SalePaymentInputSerializer(many=True)
+
+    def validate_cash_session_id(self, session):
+        WarehouseAccessService.require_warehouse(
+            self.context["request"].user, session.cash_register.warehouse_id
+        )
+        return session
 
     def validate_payments(self, value):
         if not value:
@@ -679,6 +742,12 @@ class QuoteConvertSerializer(serializers.Serializer):
         source="cash_session", queryset=CashSession.objects.all()
     )
     payments = SalePaymentInputSerializer(many=True)
+
+    def validate_cash_session_id(self, session):
+        WarehouseAccessService.require_warehouse(
+            self.context["request"].user, session.cash_register.warehouse_id
+        )
+        return session
 
     def validate_payments(self, value):
         if not value:

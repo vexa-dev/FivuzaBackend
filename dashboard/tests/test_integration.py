@@ -86,6 +86,7 @@ class SaleCompletedDashboardIntegrationTests(TenantTestCase):
     def _make_token(self) -> str:
         token = AccessToken()
         token["schema_name"] = self.tenant.schema_name
+        token["user_id"] = self.user.id
         return str(token)
 
     def test_completed_sale_invalidates_the_metrics_cache(self):

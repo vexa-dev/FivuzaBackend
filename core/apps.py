@@ -6,3 +6,4 @@ class CoreConfig(AppConfig):
 
     def ready(self):
         import core.signals  # noqa: F401
+        import core.schema  # noqa: F401

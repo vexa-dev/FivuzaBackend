@@ -1,6 +1,5 @@
 from django.urls import path
 from rest_framework.routers import DefaultRouter
-from rest_framework_simplejwt.views import TokenRefreshView
 
 from usuarios import views
 
@@ -18,6 +17,9 @@ router.register(
 router.register("usuarios/users", views.UserViewSet, basename="user")
 router.register(
     "usuarios/user-permissions", views.UserPermissionViewSet, basename="user-permission"
+)
+router.register(
+    "usuarios/user-warehouses", views.UserWarehouseViewSet, basename="user-warehouse"
 )
 router.register("usuarios/audit-logs", views.AuditLogViewSet, basename="audit-log")
 router.register("usuarios/employees", views.EmployeeViewSet, basename="employee")
@@ -44,7 +46,11 @@ urlpatterns = [
     # Especificacion de API, seccion 3.1: /api/v1/auth/... (flujo de
     # tenant.users, distinto de /api/v1/platform/auth/... para platform_staff).
     path("auth/login/", views.TenantUserLoginView.as_view(), name="tenant_user_login"),
-    path("auth/refresh/", TokenRefreshView.as_view(), name="tenant_user_refresh"),
+    path(
+        "auth/refresh/",
+        views.TenantUserRefreshView.as_view(),
+        name="tenant_user_refresh",
+    ),
     path(
         "auth/logout/", views.TenantUserLogoutView.as_view(), name="tenant_user_logout"
     ),

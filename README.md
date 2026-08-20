@@ -1,5 +1,11 @@
 # Fivuza — Backend
 
+> Contrato vigente: API `/api/v1`, OpenAPI en `/api/schema`, `/api/docs` y
+> `/api/redoc`; refresh en cookie HttpOnly y access solo en memoria. El acceso
+> operativo se limita mediante `WarehouseAccessService`. Los flags
+> `API_V1_PAGINATION_ENABLED` y `API_STANDARD_ERRORS_ENABLED` permiten el
+> despliegue coordinado sin romper clientes existentes.
+
 [![Backend CI](https://github.com/vexa-dev/FivuzaBackend/actions/workflows/ci.yml/badge.svg)](https://github.com/vexa-dev/FivuzaBackend/actions/workflows/ci.yml)
 
 API REST del **ERP SaaS multi-tenant** de Fivuza, orientado a pequeños y medianos negocios (bodegas, gimnasios, tiendas de retail). Construido con Django + Django REST Framework, con aislamiento de datos por esquema de PostgreSQL (schema-per-tenant vía [django-tenants](https://django-tenants.readthedocs.io/)).
@@ -53,7 +59,7 @@ El código está organizado en **5 apps de Django**, no necesariamente alineadas
 | `ventas` | Punto de venta, pagos, devoluciones, crédito/saldo de clientes, caja | Por tenant |
 | `dashboard` | Agregación de métricas de solo lectura sobre las otras 3 apps | Por tenant |
 
-Cada app de negocio sigue una arquitectura en capas: `ViewSet → Serializer → Service → Model`, donde toda la lógica de negocio vive en `services.py` (nunca en el ViewSet ni en el modelo).
+Cada app de negocio sigue una arquitectura en capas: `ViewSet → Serializer → Service → Model`. La lógica de escritura y orquestación vive en servicios; las consultas reutilizables viven en `selectors.py`. Los módulos grandes pueden usar paquetes `services/` por dominio conservando exports compatibles.
 
 ## Estructura del proyecto
 
@@ -76,7 +82,8 @@ Cada app de negocio comparte la misma estructura interna:
 ├── views.py
 ├── urls.py
 ├── permissions.py     # permisos específicos del módulo
-├── services.py        # lógica de negocio (SaleService, StockService, etc.)
+├── services.py|services/ # lógica de negocio, dividida por dominio cuando crece
+├── selectors.py       # consultas reutilizables y cruces entre aplicaciones
 ├── tasks.py           # tareas de Celery propias del módulo
 ├── signals.py         # ej. post_save que dispara eventos
 └── tests/
