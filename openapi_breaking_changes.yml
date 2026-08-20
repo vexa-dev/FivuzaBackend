@@ -1,0 +1,6 @@
+allowed_breaking_changes:
+  - change: "Schema eliminado: TokenRefresh"
+    reason: >-
+      El refresh token deja de formar parte del JSON y se migra a una cookie
+      HttpOnly rotativa. El frontend coordinado usa la cookie y ya no depende
+      de este componente.

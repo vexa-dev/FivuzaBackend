@@ -195,14 +195,17 @@ SPECTACULAR_SETTINGS = {
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
     "ENUM_NAME_OVERRIDES": {
-        "MovementDirectionEnum": [("IN", "IN"), ("OUT", "OUT")],
-        "CashSessionStatusEnum": [("OPEN", "OPEN"), ("CLOSED", "CLOSED")],
+        # Estos nombres ya formaban parte del OpenAPI de /v1. Aunque los
+        # nombres semanticos serian mas legibles, renombrarlos rompe clientes
+        # generados que importan directamente estos componentes.
+        "TypeAb4Enum": [("IN", "IN"), ("OUT", "OUT")],
+        "Status896Enum": [("OPEN", "OPEN"), ("CLOSED", "CLOSED")],
         "MembershipPaymentMethodEnum": [
             ("CASH", "CASH"),
             ("CARD", "CARD"),
             ("YAPE", "YAPE"),
         ],
-        "SalePaymentMethodEnum": [
+        "Method5c0Enum": [
             ("CASH", "CASH"),
             ("CARD", "CARD"),
             ("YAPE", "YAPE"),

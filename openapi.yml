@@ -9353,7 +9353,7 @@ components:
         cash_session:
           type: integer
         type:
-          $ref: '#/components/schemas/MovementDirectionEnum'
+          $ref: '#/components/schemas/TypeAb4Enum'
         concept:
           $ref: '#/components/schemas/CashMovementConceptEnum'
         amount:
@@ -9452,7 +9452,7 @@ components:
           nullable: true
         status:
           allOf:
-          - $ref: '#/components/schemas/CashSessionStatusEnum'
+          - $ref: '#/components/schemas/Status896Enum'
           readOnly: true
         closing_at:
           type: string
@@ -9528,7 +9528,7 @@ components:
           nullable: true
         status:
           allOf:
-          - $ref: '#/components/schemas/CashSessionStatusEnum'
+          - $ref: '#/components/schemas/Status896Enum'
           readOnly: true
         closing_at:
           type: string
@@ -9572,14 +9572,6 @@ components:
       required:
       - cash_register_id
       - opening_amount
-    CashSessionStatusEnum:
-      enum:
-      - OPEN
-      - CLOSED
-      type: string
-      description: |-
-        * `OPEN` - OPEN
-        * `CLOSED` - CLOSED
     Category:
       type: object
       properties:
@@ -10255,7 +10247,7 @@ components:
           readOnly: true
         type:
           allOf:
-          - $ref: '#/components/schemas/MovementDirectionEnum'
+          - $ref: '#/components/schemas/TypeAb4Enum'
           readOnly: true
         quantity:
           type: string
@@ -10509,6 +10501,20 @@ components:
         * `FROZEN` - FROZEN
         * `EXPIRED` - EXPIRED
         * `CANCELLED` - CANCELLED
+    Method5c0Enum:
+      enum:
+      - CASH
+      - CARD
+      - YAPE
+      - CREDIT_LEDGER
+      - BALANCE
+      type: string
+      description: |-
+        * `CASH` - CASH
+        * `CARD` - CARD
+        * `YAPE` - YAPE
+        * `CREDIT_LEDGER` - CREDIT_LEDGER
+        * `BALANCE` - BALANCE
     ModuleEnum:
       enum:
       - SALES
@@ -10531,14 +10537,6 @@ components:
         * `CASH` - CASH
         * `GYM` - GYM
         * `COMPLIANCE` - COMPLIANCE
-    MovementDirectionEnum:
-      enum:
-      - IN
-      - OUT
-      type: string
-      description: |-
-        * `IN` - IN
-        * `OUT` - OUT
     PaginatedAttributeList:
       type: object
       required:
@@ -13721,7 +13719,7 @@ components:
           type: integer
           readOnly: true
         method:
-          $ref: '#/components/schemas/SalePaymentMethodEnum'
+          $ref: '#/components/schemas/Method5c0Enum'
         amount:
           type: string
           format: decimal
@@ -13739,7 +13737,7 @@ components:
       type: object
       properties:
         method:
-          $ref: '#/components/schemas/SalePaymentMethodEnum'
+          $ref: '#/components/schemas/Method5c0Enum'
         amount:
           type: string
           format: decimal
@@ -13747,20 +13745,6 @@ components:
       required:
       - amount
       - method
-    SalePaymentMethodEnum:
-      enum:
-      - CASH
-      - CARD
-      - YAPE
-      - CREDIT_LEDGER
-      - BALANCE
-      type: string
-      description: |-
-        * `CASH` - CASH
-        * `CARD` - CARD
-        * `YAPE` - YAPE
-        * `CREDIT_LEDGER` - CREDIT_LEDGER
-        * `BALANCE` - BALANCE
     SaleReturn:
       type: object
       properties:
@@ -13925,6 +13909,14 @@ components:
       description: |-
         * `40x25` - 40x25
         * `50x30` - 50x30
+    Status896Enum:
+      enum:
+      - OPEN
+      - CLOSED
+      type: string
+      description: |-
+        * `OPEN` - OPEN
+        * `CLOSED` - CLOSED
     Stock:
       type: object
       properties:
@@ -14386,6 +14378,14 @@ components:
       required:
       - email
       - password
+    TypeAb4Enum:
+      enum:
+      - IN
+      - OUT
+      type: string
+      description: |-
+        * `IN` - IN
+        * `OUT` - OUT
     UnitOfMeasureEnum:
       enum:
       - UND
