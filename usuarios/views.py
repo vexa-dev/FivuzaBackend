@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
@@ -9,12 +10,18 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from core.auth_cookies import (
+    clear_refresh_cookie,
+    get_refresh_cookie,
+    set_refresh_cookie,
+)
+from core.openapi import SchemaAPIView
 from core.permissions import RequiresFeature, TenantNotCanceled, TenantNotSuspended
-from core.throttling import LoginRateThrottle
+from core.throttling import LoginIdentifierRateThrottle, LoginRateThrottle
 from usuarios.models import (
     AuditLog,
     DataExport,
@@ -28,6 +35,7 @@ from usuarios.models import (
     RolePermissionsHistory,
     User,
     UserPermission,
+    UserWarehouse,
 )
 from usuarios.permissions import HasModulePermission
 from usuarios.serializers import (
@@ -50,6 +58,8 @@ from usuarios.serializers import (
     TenantUserTokenObtainSerializer,
     UserPermissionSerializer,
     UserSerializer,
+    UserWarehouseSerializer,
+    issue_tokens_for_tenant_user,
 )
 from usuarios.services import (
     AttendanceService,
@@ -62,6 +72,7 @@ from usuarios.services import (
     RoleService,
     TenantDataExportService,
 )
+from usuarios.warehouse_access import WarehouseAccessService
 
 _HR_PERMISSIONS = [
     IsAuthenticated,
@@ -72,39 +83,89 @@ _HR_PERMISSIONS = [
 ]
 
 
-class TenantUserLoginView(APIView):
+class TenantUserLoginView(SchemaAPIView):
     """POST email/password de un usuario del tenant -> par de tokens JWT
     (API Spec §3.1). Resuelve el tenant por el subdominio de la request,
     ya procesado por TenantMainMiddleware antes de llegar aqui."""
 
     permission_classes = [AllowAny]
-    throttle_classes = [LoginRateThrottle]
+    throttle_classes = [LoginRateThrottle, LoginIdentifierRateThrottle]
+    serializer_class = TenantUserTokenObtainSerializer
 
     def post(self, request):
         serializer = TenantUserTokenObtainSerializer(
             data=request.data, context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
-        return Response(serializer.validated_data, status=status.HTTP_200_OK)
+        payload = dict(serializer.validated_data)
+        refresh = payload.pop("refresh")
+        response = Response(payload, status=status.HTTP_200_OK)
+        set_refresh_cookie(response, refresh)
+        return response
 
 
-class TenantUserLogoutView(APIView):
-    """POST refresh token -> lo agrega a la blacklist, invalidandolo."""
-
-    permission_classes = [IsAuthenticated]
+class TenantUserRefreshView(SchemaAPIView):
+    permission_classes = [AllowAny]
 
     def post(self, request):
-        refresh_token = request.data.get("refresh")
-        if not refresh_token:
-            raise ValidationError({"refresh": "Este campo es requerido."})
+        raw = get_refresh_cookie(request)
+        if not raw:
+            return Response({"detail": "Sesión no disponible."}, status=401)
         try:
-            RefreshToken(refresh_token).blacklist()
-        except TokenError as exc:
-            raise ValidationError({"refresh": str(exc)})
-        return Response(status=status.HTTP_205_RESET_CONTENT)
+            old_refresh = RefreshToken(raw)
+            schema_name = old_refresh.get("schema_name")
+            if schema_name != request.tenant.schema_name:
+                raise TokenError("El token no corresponde a este tenant.")
+            user = User.objects.select_related("role").get(
+                id=old_refresh.get("user_id"), is_active=True
+            )
+            if BlacklistedToken.objects.filter(token__jti=old_refresh["jti"]).exists():
+                raise TokenError("El token ya fue utilizado.")
+            with transaction.atomic():
+                old_refresh.blacklist()
+                refresh = issue_tokens_for_tenant_user(user, schema_name)
+        except (TokenError, User.DoesNotExist, TypeError, ValueError):
+            response = Response({"detail": "Sesión no válida."}, status=401)
+            clear_refresh_cookie(response)
+            return response
+        response = Response(
+            {
+                "access": str(refresh.access_token),
+                "user": {
+                    "id": user.id,
+                    "email": user.email,
+                    "role": user.role.name,
+                    "warehouse_ids": list(
+                        WarehouseAccessService.allowed_warehouse_ids(user)
+                    ),
+                    "permissions": sorted(PermissionService.get_permission_codes(user)),
+                },
+            }
+        )
+        set_refresh_cookie(response, str(refresh))
+        return response
 
 
-class PasswordResetRequestView(APIView):
+class TenantUserLogoutView(SchemaAPIView):
+    """POST refresh token -> lo agrega a la blacklist, invalidandolo."""
+
+    permission_classes = [AllowAny]
+    throttle_classes = [LoginRateThrottle]
+
+    def post(self, request):
+        refresh_token = get_refresh_cookie(request)
+        try:
+            if refresh_token:
+                RefreshToken(refresh_token).blacklist()
+        except TokenError:
+            pass
+        response = Response(status=status.HTTP_205_RESET_CONTENT)
+        clear_refresh_cookie(response)
+        return response
+
+
+class PasswordResetRequestView(SchemaAPIView):
+    serializer_class = PasswordResetRequestSerializer
     """POST email -> siempre responde 200, exista o no ese correo (nunca
     revela si un correo esta registrado). El envio real es asincrono via
     Celery, la respuesta HTTP no espera a que el correo salga."""
@@ -127,7 +188,8 @@ class PasswordResetRequestView(APIView):
         return Response(status=status.HTTP_200_OK)
 
 
-class PasswordResetConfirmView(APIView):
+class PasswordResetConfirmView(SchemaAPIView):
+    serializer_class = PasswordResetConfirmSerializer
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -229,7 +291,8 @@ class RolePermissionsHistoryViewSet(viewsets.ReadOnlyModelViewSet):
     ]
 
 
-class OwnDataExportView(APIView):
+class OwnDataExportView(SchemaAPIView):
+    serializer_class = DataExportRequestSerializer
     """GET -> derecho de Acceso (ARCO, Sprint 33, Ley N 29733): un usuario
     exporta sus propios datos personales (perfil, permisos, ficha de
     empleado si tiene una vinculada). Sincrono -es un solo usuario, no el
@@ -249,7 +312,7 @@ class OwnDataExportView(APIView):
         return Response(PersonalDataService.export_own_data(request.user))
 
 
-class UserAnonymizeView(APIView):
+class UserAnonymizeView(SchemaAPIView):
     """POST -> derecho de Rectificacion/Cancelacion/Oposicion (ARCO): un
     admin/soporte anonimiza los datos personales de un usuario a pedido
     (email, nombre, telefono, documento). No es un hard delete -User esta
@@ -352,6 +415,32 @@ class UserPermissionViewSet(viewsets.ModelViewSet):
         PermissionService.invalidate_user_cache(user_id)
 
 
+class UserWarehouseViewSet(viewsets.ModelViewSet):
+    queryset = UserWarehouse.objects.select_related("user", "warehouse").order_by(
+        "user_id", "warehouse_id"
+    )
+    serializer_class = UserWarehouseSerializer
+    permission_classes = [
+        IsAuthenticated,
+        TenantNotSuspended,
+        TenantNotCanceled,
+        HasModulePermission("USERS_MANAGE"),
+    ]
+
+    def get_queryset(self):
+        queryset = WarehouseAccessService.scope_queryset(
+            super().get_queryset(), self.request.user
+        )
+        user_id = self.request.query_params.get("user")
+        warehouse_id = self.request.query_params.get("warehouse")
+        if user_id:
+            queryset = queryset.filter(user_id=user_id)
+        if warehouse_id:
+            WarehouseAccessService.require_warehouse(self.request.user, warehouse_id)
+            queryset = queryset.filter(warehouse_id=warehouse_id)
+        return queryset
+
+
 class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
     """Solo lectura -se escribe unicamente via AuditLogService.log_action(),
     nunca por POST/PUT directo del cliente (API Spec §2.1)."""
@@ -377,9 +466,12 @@ class EmployeeViewSet(viewsets.ModelViewSet):
     permission_classes = _HR_PERMISSIONS
 
     def get_queryset(self):
-        queryset = super().get_queryset().order_by("full_name")
+        queryset = WarehouseAccessService.scope_queryset(
+            super().get_queryset(), self.request.user
+        ).order_by("full_name")
         warehouse_id = self.request.query_params.get("warehouse")
         if warehouse_id:
+            WarehouseAccessService.require_warehouse(self.request.user, warehouse_id)
             queryset = queryset.filter(warehouse_id=warehouse_id)
         search = self.request.query_params.get("search")
         if search:
@@ -402,7 +494,9 @@ class EmployeeScheduleViewSet(viewsets.ModelViewSet):
     permission_classes = _HR_PERMISSIONS
 
     def get_queryset(self):
-        queryset = super().get_queryset().order_by("employee_id", "day_of_week")
+        queryset = WarehouseAccessService.scope_queryset(
+            super().get_queryset(), self.request.user, lookup="employee__warehouse_id"
+        ).order_by("employee_id", "day_of_week")
         employee_id = self.request.query_params.get("employee")
         if employee_id:
             queryset = queryset.filter(employee_id=employee_id)
@@ -421,7 +515,9 @@ class EmployeeAttendanceViewSet(
     permission_classes = _HR_PERMISSIONS
 
     def get_queryset(self):
-        queryset = super().get_queryset().order_by("-check_in")
+        queryset = WarehouseAccessService.scope_queryset(
+            super().get_queryset(), self.request.user
+        ).order_by("-check_in")
         employee_id = self.request.query_params.get("employee")
         if employee_id:
             queryset = queryset.filter(employee_id=employee_id)
@@ -431,6 +527,9 @@ class EmployeeAttendanceViewSet(
     def clock_in(self, request):
         serializer = ClockInSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        WarehouseAccessService.require_warehouse(
+            request.user, serializer.validated_data["warehouse"]
+        )
         attendance = AttendanceService.clock_in(
             employee=serializer.validated_data["employee"],
             warehouse=serializer.validated_data["warehouse"],
@@ -470,7 +569,9 @@ class EmployeePayrollViewSet(
     permission_classes = _HR_PERMISSIONS
 
     def get_queryset(self):
-        queryset = super().get_queryset().order_by("-period_start")
+        queryset = WarehouseAccessService.scope_queryset(
+            super().get_queryset(), self.request.user, lookup="employee__warehouse_id"
+        ).order_by("-period_start")
         employee_id = self.request.query_params.get("employee")
         if employee_id:
             queryset = queryset.filter(employee_id=employee_id)
@@ -480,6 +581,9 @@ class EmployeePayrollViewSet(
     def generate(self, request):
         serializer = PayrollGenerateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        WarehouseAccessService.require_warehouse(
+            request.user, serializer.validated_data["employee"].warehouse_id
+        )
         payroll = PayrollService.generate_payroll(
             employee=serializer.validated_data["employee"],
             period_start=serializer.validated_data["period_start"],
@@ -505,7 +609,7 @@ class EmployeePayrollViewSet(
         return Response(EmployeePayrollSerializer(payroll).data)
 
 
-class AttendanceReportView(APIView):
+class AttendanceReportView(SchemaAPIView):
     """GET /usuarios/reports/attendance/?date_from=&date_to=&employee=&export=
     (Sprint 23, API Spec §2.1). Resumen de asistencia por trabajador en un
     rango de fechas. Con ?export=csv|xlsx devuelve el archivo en vez del
@@ -526,6 +630,7 @@ class AttendanceReportView(APIView):
         queryset = EmployeeAttendance.objects.select_related("employee").filter(
             check_in__date__gte=date_from, check_in__date__lte=date_to
         )
+        queryset = WarehouseAccessService.scope_queryset(queryset, request.user)
         employee_id = request.query_params.get("employee")
         if employee_id:
             queryset = queryset.filter(employee_id=employee_id)
@@ -579,7 +684,7 @@ class AttendanceReportView(APIView):
         return Response(rows)
 
 
-class PayrollCostReportView(APIView):
+class PayrollCostReportView(SchemaAPIView):
     """GET /usuarios/reports/payroll-cost/?period_start=&period_end=&export=
     (Sprint 23). Costo total de planilla en un rango de periodos."""
 
@@ -595,6 +700,9 @@ class PayrollCostReportView(APIView):
             EmployeePayroll.objects.select_related("employee")
             .filter(period_start__gte=period_start, period_end__lte=period_end)
             .order_by("employee__full_name")
+        )
+        queryset = WarehouseAccessService.scope_queryset(
+            queryset, request.user, lookup="employee__warehouse_id"
         )
 
         rows = [

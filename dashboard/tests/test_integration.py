@@ -86,6 +86,7 @@ class SaleCompletedDashboardIntegrationTests(TenantTestCase):
     def _make_token(self) -> str:
         token = AccessToken()
         token["schema_name"] = self.tenant.schema_name
+        token["user_id"] = self.user.id
         return str(token)
 
     def test_completed_sale_invalidates_the_metrics_cache(self):
@@ -110,6 +111,40 @@ class SaleCompletedDashboardIntegrationTests(TenantTestCase):
         after = DashboardMetricsService.get_all_metrics(warehouse_id=None)
         self.assertEqual(after["today"]["total_transactions"], 1)
         self.assertEqual(after["today"]["total_sales"], "40.0000")
+
+    def test_scoped_metrics_are_cached_per_warehouse_set(self):
+        """PR #79: get_all_metrics() dejaba de cachear apenas warehouse_ids
+        no era None -un usuario no-admin recalculaba las metricas completas
+        en cada carga del dashboard, sin ningun cache."""
+        from unittest import mock
+
+        self._create_variant()
+
+        with mock.patch.object(
+            DashboardMetricsService,
+            "_compute_all_metrics",
+            wraps=DashboardMetricsService._compute_all_metrics,
+        ) as compute:
+            DashboardMetricsService.get_all_metrics(warehouse_ids=(self.warehouse.id,))
+            DashboardMetricsService.get_all_metrics(warehouse_ids=(self.warehouse.id,))
+            self.assertEqual(compute.call_count, 1)
+
+    def test_scoped_metrics_cache_key_ignores_warehouse_id_order(self):
+        other_warehouse = Warehouse.objects.create(name="Sucursal Dashboard")
+        from unittest import mock
+
+        with mock.patch.object(
+            DashboardMetricsService,
+            "_compute_all_metrics",
+            wraps=DashboardMetricsService._compute_all_metrics,
+        ) as compute:
+            DashboardMetricsService.get_all_metrics(
+                warehouse_ids=(self.warehouse.id, other_warehouse.id)
+            )
+            DashboardMetricsService.get_all_metrics(
+                warehouse_ids=(other_warehouse.id, self.warehouse.id)
+            )
+            self.assertEqual(compute.call_count, 1)
 
     async def test_completed_sale_broadcasts_to_a_connected_client(self):
         from asgiref.sync import sync_to_async

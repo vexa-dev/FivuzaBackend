@@ -1,4 +1,5 @@
-from django.db import models
+from django.contrib.postgres.search import SearchQuery, SearchRank
+from django.db.models import F, Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -6,11 +7,12 @@ from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
 from core.permissions import RequiresFeature, TenantNotCanceled, TenantNotSuspended
+from core.openapi import SchemaAPIView
 from inventario.models import Warehouse
 from usuarios.permissions import HasModulePermission
+from usuarios.warehouse_access import WarehouseAccessService
 from ventas.models import (
     CashMovement,
     CashRegister,
@@ -117,6 +119,11 @@ class CashRegisterViewSet(viewsets.ModelViewSet):
     queryset = CashRegister.objects.all().order_by("name")
     serializer_class = CashRegisterSerializer
 
+    def get_queryset(self):
+        return WarehouseAccessService.scope_queryset(
+            super().get_queryset(), self.request.user
+        )
+
     def get_permissions(self):
         if self.action in ("list", "retrieve"):
             return [permission() for permission in _CASH_READ_PERMISSIONS]
@@ -140,7 +147,11 @@ class CashSessionViewSet(
         return CashSessionSerializer
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        queryset = WarehouseAccessService.scope_queryset(
+            super().get_queryset(),
+            self.request.user,
+            lookup="cash_register__warehouse_id",
+        )
         params = self.request.query_params
         cash_register_id = params.get("cash_register")
         if cash_register_id:
@@ -179,7 +190,11 @@ class CashMovementViewSet(
         return [permission() for permission in _CASH_WRITE_PERMISSIONS]
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        queryset = WarehouseAccessService.scope_queryset(
+            super().get_queryset(),
+            self.request.user,
+            lookup="cash_session__cash_register__warehouse_id",
+        )
         session_id = self.request.query_params.get("cash_session")
         if session_id:
             queryset = queryset.filter(cash_session_id=session_id)
@@ -196,7 +211,8 @@ class CashMovementViewSet(
         return Response(serializer.save())
 
 
-class CashSessionOpenView(APIView):
+class CashSessionOpenView(SchemaAPIView):
+    serializer_class = CashSessionOpenSerializer
     """POST -> abre una sesion de caja (Especificacion de API §4.4)."""
 
     permission_classes = _CASH_WRITE_PERMISSIONS
@@ -212,7 +228,8 @@ class CashSessionOpenView(APIView):
         )
 
 
-class CashSessionCloseView(APIView):
+class CashSessionCloseView(SchemaAPIView):
+    serializer_class = CashSessionCloseSerializer
     """POST -> cierra una sesion de caja con arqueo (Especificacion de API
     §4.4): calcula expected_closing_amount y guarda la diferencia contra lo
     contado."""
@@ -221,6 +238,9 @@ class CashSessionCloseView(APIView):
 
     def post(self, request, pk):
         session = get_object_or_404(CashSession, pk=pk)
+        WarehouseAccessService.require_warehouse(
+            request.user, session.cash_register.warehouse_id
+        )
         serializer = CashSessionCloseSerializer(
             data=request.data, context={"request": request, "session": session}
         )
@@ -246,11 +266,19 @@ class CustomerViewSet(viewsets.ModelViewSet):
         queryset = super().get_queryset().filter(deleted_at__isnull=True)
         search = self.request.query_params.get("search")
         if search:
-            queryset = queryset.filter(
-                models.Q(document_number__icontains=search)
-                | models.Q(name__icontains=search)
-                | models.Q(phone__icontains=search)
+            query = SearchQuery(search, config="simple", search_type="websearch")
+            queryset = (
+                queryset.annotate(search_rank=SearchRank(F("search_vector"), query))
+                .filter(
+                    Q(search_vector=query)
+                    | Q(phone__icontains=search)
+                    | Q(document_number__icontains=search)
+                )
+                .order_by("-search_rank", "name")
             )
+        updated_since = self.request.query_params.get("updated_since")
+        if updated_since:
+            queryset = queryset.filter(updated_at__gte=updated_since)
         return queryset
 
     def perform_destroy(self, instance):
@@ -337,6 +365,9 @@ class PromotionViewSet(viewsets.ModelViewSet):
         search = self.request.query_params.get("search")
         if search:
             queryset = queryset.filter(name__icontains=search)
+        updated_since = self.request.query_params.get("updated_since")
+        if updated_since:
+            queryset = queryset.filter(updated_at__gte=updated_since)
         return queryset
 
 
@@ -353,7 +384,8 @@ class PromotionProductViewSet(viewsets.ModelViewSet):
         return queryset
 
 
-class SaleSyncView(APIView):
+class SaleSyncView(SchemaAPIView):
+    serializer_class = SaleSyncSerializer
     """POST -> sincroniza un lote de ventas offline (Especificacion de API
     §4.2, Sprint 20). Deliberadamente NO es una @action de SaleViewSet -es
     una URL de coleccion propia (ventas/sales/sync/), registrada antes que
@@ -405,7 +437,9 @@ class SaleViewSet(
         return [permission() for permission in _SALES_WRITE_PERMISSIONS]
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        queryset = WarehouseAccessService.scope_queryset(
+            super().get_queryset(), self.request.user
+        )
         params = self.request.query_params
         customer_id = params.get("customer")
         if customer_id:
@@ -479,7 +513,9 @@ class SaleReturnViewSet(
         return [permission() for permission in _SALES_RETURN_PERMISSIONS]
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        queryset = WarehouseAccessService.scope_queryset(
+            super().get_queryset(), self.request.user, lookup="sale__warehouse_id"
+        )
         sale_id = self.request.query_params.get("sale")
         if sale_id:
             queryset = queryset.filter(sale_id=sale_id)
@@ -518,7 +554,9 @@ class ProductReservationViewSet(
         return [permission() for permission in _SALES_WRITE_PERMISSIONS]
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        queryset = WarehouseAccessService.scope_queryset(
+            super().get_queryset(), self.request.user
+        )
         params = self.request.query_params
         customer_id = params.get("customer")
         if customer_id:
@@ -633,7 +671,7 @@ class QuoteViewSet(
         return Response(SaleSerializer(sale).data, status=status.HTTP_201_CREATED)
 
 
-class POSCatalogView(APIView):
+class POSCatalogView(SchemaAPIView):
     """GET -> catalogo completo optimizado para el POS (Sprint 16, Esquema
     Backend §6.2): payload reducido pensado para cachearse en el cliente,
     base del futuro modo offline."""
@@ -644,10 +682,11 @@ class POSCatalogView(APIView):
         warehouse = get_object_or_404(
             Warehouse, pk=request.query_params.get("warehouse")
         )
+        WarehouseAccessService.require_warehouse(request.user, warehouse)
         return Response(POSCatalogService.catalog(warehouse=warehouse))
 
 
-class POSSearchView(APIView):
+class POSSearchView(SchemaAPIView):
     """GET -> busqueda del POS con prioridad de escaneo (Sprint 16): primero
     coincidencia exacta por barcode, y solo si falla, busqueda difusa por
     nombre/sku. Un escaneo debe resolver de inmediato, sin competir con
@@ -659,13 +698,14 @@ class POSSearchView(APIView):
         warehouse = get_object_or_404(
             Warehouse, pk=request.query_params.get("warehouse")
         )
+        WarehouseAccessService.require_warehouse(request.user, warehouse)
         query = request.query_params.get("q", "").strip()
         if not query:
             return Response([])
         return Response(POSCatalogService.search(warehouse=warehouse, query=query))
 
 
-class SalesReportView(APIView):
+class SalesReportView(SchemaAPIView):
     """GET /ventas/reports/sales/?date_from=&date_to=&warehouse=&export=
     (Sprint 24, API Spec §4.16). Ventas por periodo -una fila por venta,
     con vendedor y cliente. [ALCANCE] El desglose por producto/vendedor que
@@ -690,8 +730,10 @@ class SalesReportView(APIView):
             created_at__date__gte=date_from,
             created_at__date__lte=date_to,
         )
+        queryset = WarehouseAccessService.scope_queryset(queryset, request.user)
         warehouse_id = request.query_params.get("warehouse")
         if warehouse_id:
+            WarehouseAccessService.require_warehouse(request.user, warehouse_id)
             queryset = queryset.filter(warehouse_id=warehouse_id)
 
         rows = [
@@ -729,7 +771,7 @@ class SalesReportView(APIView):
         return Response(rows)
 
 
-class CashSessionReportView(APIView):
+class CashSessionReportView(SchemaAPIView):
     """GET /ventas/reports/cash-sessions/?date_from=&date_to=&export=
     (Sprint 25, API Spec §4.16). Sesiones de caja con su cuadre -mismo
     criterio que los demas reportes de este sprint: la misma consulta
@@ -751,6 +793,9 @@ class CashSessionReportView(APIView):
             CashSession.objects.select_related("cash_register", "user")
             .filter(opening_at__date__gte=date_from, opening_at__date__lte=date_to)
             .order_by("opening_at")
+        )
+        queryset = WarehouseAccessService.scope_queryset(
+            queryset, request.user, lookup="cash_register__warehouse_id"
         )
 
         rows = [
@@ -798,7 +843,7 @@ class CashSessionReportView(APIView):
         return Response(rows)
 
 
-class CashMovementReportView(APIView):
+class CashMovementReportView(SchemaAPIView):
     """GET /ventas/reports/cash-movements/?date_from=&date_to=&export=
     (Sprint 25, API Spec §4.16). Movimientos manuales y automaticos de
     caja en un rango de fechas."""
@@ -819,6 +864,11 @@ class CashMovementReportView(APIView):
             CashMovement.objects.select_related("cash_session__cash_register", "user")
             .filter(created_at__date__gte=date_from, created_at__date__lte=date_to)
             .order_by("created_at")
+        )
+        queryset = WarehouseAccessService.scope_queryset(
+            queryset,
+            request.user,
+            lookup="cash_session__cash_register__warehouse_id",
         )
 
         rows = [

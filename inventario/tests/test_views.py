@@ -4,7 +4,15 @@ from django_tenants.test.cases import TenantTestCase
 from rest_framework.test import APIClient
 
 from core.models import TenantSettings
-from inventario.models import Category, Supplier, Warehouse
+from inventario.models import (
+    Attribute,
+    AttributeValue,
+    Category,
+    Product,
+    ProductVariant,
+    Supplier,
+    Warehouse,
+)
 from inventario.services import ProductVariantService, StockService
 from usuarios.models import Role, User
 
@@ -84,7 +92,7 @@ class InventoryCatalogEndpointsTests(TenantTestCase):
         self.assertFalse(Category.objects.filter(id=target.id).exists())
         self.assertTrue(Category.all_objects.filter(id=target.id).exists())
 
-    def test_create_product_without_variants_generates_default_variant(self):
+    def test_create_product_requires_at_least_one_variant(self):
         response = self._client_as(self.admin_user).post(
             "/api/v1/inventario/products/",
             {
@@ -95,9 +103,8 @@ class InventoryCatalogEndpointsTests(TenantTestCase):
             },
             format="json",
         )
-        self.assertEqual(response.status_code, 201)
-        self.assertEqual(len(response.data["variants"]), 1)
-        self.assertTrue(response.data["variants"][0]["is_default"])
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("variants_input", response.data)
 
     def test_create_product_with_variant_matrix(self):
         settings = TenantSettings.objects.get(tenant=self.tenant)
@@ -121,6 +128,53 @@ class InventoryCatalogEndpointsTests(TenantTestCase):
         self.assertEqual(response.status_code, 201)
         self.assertEqual(len(response.data["variants"]), 2)
 
+    def test_add_variant_rejects_attribute_outside_category_allowed_list(self):
+        """add_variant() (POST /product-variants/, a diferencia de POST
+        /products/) no pasaba antes por la validacion de allowed_attributes
+        de la categoria -este endpoint es el que quedaba sin cubrir."""
+        talla = Attribute.objects.create(name="Talla")
+        color = Attribute.objects.create(name="Color")
+        mediana = AttributeValue.objects.create(attribute=talla, value="M")
+        azul = AttributeValue.objects.create(attribute=color, value="Azul")
+        self.category.allowed_attributes.add(talla)
+
+        admin = self._client_as(self.admin_user)
+        product_response = admin.post(
+            "/api/v1/inventario/products/",
+            {
+                "type": "PRODUCT",
+                "name": "Polo",
+                "category": self.category.id,
+                "unit_of_measure": "UND",
+                "variants_input": [{"sku": "POLO-BASE"}],
+            },
+            format="json",
+        )
+        product_id = product_response.data["id"]
+
+        response = admin.post(
+            "/api/v1/inventario/product-variants/",
+            {
+                "product": product_id,
+                "sku": "POLO-AZUL",
+                "attribute_value_ids": [azul.id],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(ProductVariant.objects.filter(sku="POLO-AZUL").exists())
+
+        valid = admin.post(
+            "/api/v1/inventario/product-variants/",
+            {
+                "product": product_id,
+                "sku": "POLO-M",
+                "attribute_value_ids": [mediana.id],
+            },
+            format="json",
+        )
+        self.assertEqual(valid.status_code, 201)
+
     def test_cannot_delete_the_only_variant_of_a_product(self):
         admin = self._client_as(self.admin_user)
         product_response = admin.post(
@@ -130,6 +184,7 @@ class InventoryCatalogEndpointsTests(TenantTestCase):
                 "name": "Producto unico",
                 "category": self.category.id,
                 "unit_of_measure": "UND",
+                "variants_input": [{"sku": "PRODUCTO-UNICO"}],
             },
             format="json",
         )
@@ -184,6 +239,120 @@ class InventoryCatalogEndpointsTests(TenantTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]["barcode"], "7501234567890")
+
+    def test_category_exposes_allowed_attributes_and_validates_primary(self):
+        talla = Attribute.objects.create(name="Talla")
+        color = Attribute.objects.create(name="Color")
+        admin = self._client_as(self.admin_user)
+
+        response = admin.post(
+            "/api/v1/inventario/categories/",
+            {
+                "name": "Prendas",
+                "allowed_attributes": [talla.id, color.id],
+                "primary_attribute": talla.id,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertCountEqual(response.data["allowed_attributes"], [talla.id, color.id])
+
+        invalid = admin.post(
+            "/api/v1/inventario/categories/",
+            {
+                "name": "Inválida",
+                "allowed_attributes": [color.id],
+                "primary_attribute": talla.id,
+            },
+            format="json",
+        )
+        self.assertEqual(invalid.status_code, 400)
+        self.assertIn("primary_attribute", invalid.data)
+
+    def test_create_product_persists_complete_validated_payload(self):
+        talla = Attribute.objects.create(name="Talla")
+        mediana = AttributeValue.objects.create(attribute=talla, value="M")
+        self.category.allowed_attributes.add(talla)
+
+        response = self._client_as(self.admin_user).post(
+            "/api/v1/inventario/products/",
+            {
+                "type": "PRODUCT",
+                "name": "Polo completo",
+                "description": "Algodón",
+                "category": self.category.id,
+                "unit_of_measure": "UND",
+                "is_for_sale": False,
+                "is_active": False,
+                "variants_input": [
+                    {
+                        "sku": "POLO-COMPLETO-M",
+                        "cost": "25.5000",
+                        "price": "49.9000",
+                        "min_stock": "5.000",
+                        "attribute_value_ids": [mediana.id],
+                    }
+                ],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        product = Product.objects.get(pk=response.data["id"])
+        variant = product.variants.get()
+        self.assertEqual(product.description, "Algodón")
+        self.assertFalse(product.is_for_sale)
+        self.assertFalse(product.is_active)
+        self.assertEqual(str(variant.cost), "25.5000")
+        self.assertEqual(str(variant.price), "49.9000")
+        self.assertEqual(str(variant.min_stock), "5.000")
+        self.assertEqual(
+            variant.attribute_values.get().attribute_value_id,
+            mediana.id,
+        )
+
+    def test_create_product_rejects_invalid_variant_data(self):
+        color = Attribute.objects.create(name="Color")
+        azul = AttributeValue.objects.create(attribute=color, value="Azul")
+        response = self._client_as(self.admin_user).post(
+            "/api/v1/inventario/products/",
+            {
+                "type": "PRODUCT",
+                "name": "Producto inválido",
+                "category": self.category.id,
+                "unit_of_measure": "UND",
+                "variants_input": [
+                    {
+                        "sku": "INVALIDO-1",
+                        "cost": "-1",
+                        "attribute_value_ids": [azul.id],
+                    }
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("variants_input", response.data)
+        self.assertFalse(Product.objects.filter(name="Producto inválido").exists())
+
+        outside_category = self._client_as(self.admin_user).post(
+            "/api/v1/inventario/products/",
+            {
+                "type": "PRODUCT",
+                "name": "Producto con atributo inválido",
+                "category": self.category.id,
+                "unit_of_measure": "UND",
+                "variants_input": [
+                    {
+                        "sku": "INVALIDO-2",
+                        "attribute_value_ids": [azul.id],
+                    }
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(outside_category.status_code, 400)
+        self.assertIn("no permitidos", str(outside_category.data))
 
 
 class TenantCanceledPermissionTests(TenantTestCase):

@@ -16,18 +16,27 @@ class DashboardConsumer(AsyncJsonWebsocketConsumer):
 
     async def connect(self):
         token = self._get_token_from_query_string()
-        schema_name = await self._resolve_schema(token)
-        if schema_name is None:
+        access = await self._resolve_access(token)
+        if access is None:
             await self.close(code=4001)
             return
 
-        self.group_name = f"dashboard_{schema_name}"
-        await self.channel_layer.group_add(self.group_name, self.channel_name)
+        schema_name, is_admin, warehouse_ids = access
+        self.group_names = (
+            [f"dashboard_{schema_name}_all"]
+            if is_admin
+            else [
+                f"dashboard_{schema_name}_warehouse_{warehouse_id}"
+                for warehouse_id in warehouse_ids
+            ]
+        )
+        for group_name in self.group_names:
+            await self.channel_layer.group_add(group_name, self.channel_name)
         await self.accept()
 
     async def disconnect(self, close_code):
-        if hasattr(self, "group_name"):
-            await self.channel_layer.group_discard(self.group_name, self.channel_name)
+        for group_name in getattr(self, "group_names", []):
+            await self.channel_layer.group_discard(group_name, self.channel_name)
 
     async def dashboard_event(self, event):
         # event["type"] == "dashboard.event" -> Channels llama a este metodo
@@ -43,9 +52,9 @@ class DashboardConsumer(AsyncJsonWebsocketConsumer):
         return params.get("token")
 
     @staticmethod
-    async def _resolve_schema(token: str | None) -> str | None:
+    async def _resolve_access(token: str | None):
         from asgiref.sync import sync_to_async
-        from django_tenants.utils import get_tenant_model
+        from django_tenants.utils import get_tenant_model, schema_context
 
         if not token:
             return None
@@ -55,11 +64,32 @@ class DashboardConsumer(AsyncJsonWebsocketConsumer):
             return None
 
         schema_name = validated.get("schema_name")
-        if not schema_name:
+        user_id = validated.get("user_id")
+        if not schema_name or not user_id:
             return None
 
         tenant_model = get_tenant_model()
         exists = await sync_to_async(
             tenant_model.objects.filter(schema_name=schema_name).exists
         )()
-        return schema_name if exists else None
+        if not exists:
+            return None
+
+        def resolve_user_access():
+            from usuarios.models import User
+            from usuarios.warehouse_access import WarehouseAccessService
+
+            with schema_context(schema_name):
+                try:
+                    user = User.objects.select_related("role").get(
+                        id=user_id, is_active=True
+                    )
+                except User.DoesNotExist:
+                    return None
+                return (
+                    schema_name,
+                    WarehouseAccessService.is_admin(user),
+                    WarehouseAccessService.allowed_warehouse_ids(user),
+                )
+
+        return await sync_to_async(resolve_user_access, thread_sensitive=True)()

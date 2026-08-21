@@ -42,7 +42,8 @@ class PlatformStaffAuthTests(APITestCase):
         response = self._login()
         self.assertEqual(response.status_code, 200)
         self.assertIn("access", response.data)
-        self.assertIn("refresh", response.data)
+        self.assertNotIn("refresh", response.data)
+        self.assertTrue(response.cookies["fivuza_platform_refresh"]["httponly"])
 
     def test_login_with_wrong_password_fails(self):
         response = self.client.post(
@@ -58,35 +59,37 @@ class PlatformStaffAuthTests(APITestCase):
         response = self._login()
         self.assertEqual(response.status_code, 400)
 
-    def test_logout_requires_authentication(self):
-        response = self.client.post(
-            "/api/v1/platform/auth/logout/", {"refresh": "x"}, format="json"
-        )
-        self.assertEqual(response.status_code, 401)
+    def test_logout_is_idempotent_without_access_token(self):
+        response = self.client.post("/api/v1/platform/auth/logout/", {}, format="json")
+        self.assertEqual(response.status_code, 205)
 
     def test_refresh_then_logout_blacklists_refresh_token(self):
-        tokens = self._login().data
-        access, refresh = tokens["access"], tokens["refresh"]
+        login = self._login()
+        old_refresh = login.cookies["fivuza_platform_refresh"].value
 
         refresh_response = self.client.post(
-            "/api/v1/platform/auth/refresh/", {"refresh": refresh}, format="json"
+            "/api/v1/platform/auth/refresh/", {}, format="json"
         )
         self.assertEqual(refresh_response.status_code, 200)
+        self.assertNotIn("refresh", refresh_response.data)
+        new_refresh = refresh_response.cookies["fivuza_platform_refresh"].value
 
-        old_refresh_reuse = self.client.post(
-            "/api/v1/platform/auth/refresh/", {"refresh": refresh}, format="json"
+        old_client = APIClient(HTTP_HOST="public.localhost")
+        old_client.cookies["fivuza_platform_refresh"] = old_refresh
+        old_refresh_reuse = old_client.post(
+            "/api/v1/platform/auth/refresh/", {}, format="json"
         )
         self.assertEqual(old_refresh_reuse.status_code, 401)
 
-        new_refresh = refresh_response.data["refresh"]
-        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
         logout_response = self.client.post(
-            "/api/v1/platform/auth/logout/", {"refresh": new_refresh}, format="json"
+            "/api/v1/platform/auth/logout/", {}, format="json"
         )
         self.assertEqual(logout_response.status_code, 205)
 
-        reuse_after_logout = self.client.post(
-            "/api/v1/platform/auth/refresh/", {"refresh": new_refresh}, format="json"
+        reuse_client = APIClient(HTTP_HOST="public.localhost")
+        reuse_client.cookies["fivuza_platform_refresh"] = new_refresh
+        reuse_after_logout = reuse_client.post(
+            "/api/v1/platform/auth/refresh/", {}, format="json"
         )
         self.assertEqual(reuse_after_logout.status_code, 401)
 

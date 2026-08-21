@@ -10,7 +10,7 @@ Compara components.schemas de un schema "base" (main) contra uno "nuevo"
 Agregar un schema o una propiedad nueva NUNCA es incompatible -eso es
 crecimiento aditivo de la API, no una promesa rota.
 
-Uso: python scripts/check_openapi_diff.py schema_main.yml schema_pr.yml
+Uso: python scripts/check_openapi_diff.py schema_main.yml schema_pr.yml [allowlist.yml]
 """
 
 import sys
@@ -58,23 +58,43 @@ def find_breaking_changes(base: dict, new: dict) -> list[str]:
     return breaking
 
 
+def load_allowlist(path: str | None) -> dict[str, str]:
+    if not path:
+        return {}
+    data = _load(path) or {}
+    entries = data.get("allowed_breaking_changes", [])
+    return {
+        entry["change"]: entry.get("reason", "Sin justificacion documentada.")
+        for entry in entries
+    }
+
+
 def main() -> int:
-    if len(sys.argv) != 3:
+    if len(sys.argv) not in {3, 4}:
         print(
-            "Uso: python scripts/check_openapi_diff.py <schema_base.yml> <schema_nuevo.yml>"
+            "Uso: python scripts/check_openapi_diff.py <schema_base.yml> "
+            "<schema_nuevo.yml> [allowlist.yml]"
         )
         return 2
 
     base = _load(sys.argv[1])
     new = _load(sys.argv[2])
     breaking = find_breaking_changes(base, new)
+    allowlist = load_allowlist(sys.argv[3] if len(sys.argv) == 4 else None)
+    approved = [change for change in breaking if change in allowlist]
+    unapproved = [change for change in breaking if change not in allowlist]
 
-    if not breaking:
+    if approved:
+        print("Cambios incompatibles aprobados explicitamente:")
+        for change in approved:
+            print(f"  - {change}: {allowlist[change]}")
+
+    if not unapproved:
         print("Sin cambios incompatibles en el schema OpenAPI.")
         return 0
 
     print("Cambios incompatibles detectados en /v1/ respecto a main:")
-    for line in breaking:
+    for line in unapproved:
         print(f"  - {line}")
     print(
         "\nSi el cambio es intencional (ej. un campo verdaderamente obsoleto), "

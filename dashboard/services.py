@@ -1,3 +1,4 @@
+import hashlib
 from datetime import timedelta
 from decimal import Decimal
 
@@ -77,53 +78,96 @@ class DashboardMetricsService:
     _CACHE_PREFIX = "dashboard:metrics"
 
     @staticmethod
-    def _cache_key(warehouse_id: int | None) -> str:
+    def _cache_key(
+        warehouse_id: int | None, warehouse_ids: tuple[int, ...] | None = None
+    ) -> str:
         # Mismo patron que PermissionService._cache_key: el schema_name va
         # en la key porque connection.schema_name cambia por tenant, y la
         # cache de Redis es compartida entre todos los schemas.
-        return f"{DashboardMetricsService._CACHE_PREFIX}:{connection.schema_name}:{warehouse_id or 'all'}"
+        if warehouse_ids is not None:
+            # Mismo patron de hash estable que LoginIdentifierRateThrottle
+            # (core/throttling.py): una key por cada combinacion de almacenes
+            # visibles para el usuario, sin importar el orden en que llegaron.
+            digest = hashlib.sha256(
+                ",".join(str(w) for w in sorted(warehouse_ids)).encode()
+            ).hexdigest()
+            scope = f"scoped:{digest}"
+        else:
+            scope = warehouse_id or "all"
+        return (
+            f"{DashboardMetricsService._CACHE_PREFIX}:{connection.schema_name}:{scope}"
+        )
 
     @staticmethod
-    def get_all_metrics(*, warehouse_id: int | None = None) -> dict:
+    def get_all_metrics(
+        *, warehouse_id: int | None = None, warehouse_ids: tuple[int, ...] | None = None
+    ) -> dict:
         from django.core.cache import cache
 
-        key = DashboardMetricsService._cache_key(warehouse_id)
+        # Sprint 25 dejaba los agregados scoped (warehouse_ids) sin cachear
+        # -cada carga del dashboard de un usuario no-admin recalculaba todo
+        # desde cero. Ahora la key incluye el set de almacenes, asi que cada
+        # combinacion cachea por separado, con el mismo TTL de 60s que ya
+        # acotaba el staleness para el caso "all" (una venta no invalida esta
+        # entrada de inmediato, igual que antes).
+        key = DashboardMetricsService._cache_key(warehouse_id, warehouse_ids)
         cached = cache.get(key)
         if cached is not None:
             return cached
 
         metrics = DashboardMetricsService._compute_all_metrics(
-            warehouse_id=warehouse_id
+            warehouse_id=warehouse_id, warehouse_ids=warehouse_ids
         )
         cache.set(key, metrics, DashboardMetricsService._CACHE_TTL)
         return metrics
 
     @staticmethod
-    def _compute_all_metrics(*, warehouse_id: int | None = None) -> dict:
+    def _compute_all_metrics(
+        *, warehouse_id: int | None = None, warehouse_ids: tuple[int, ...] | None = None
+    ) -> dict:
         today = timezone.localdate()
         week_start = today - timedelta(days=6)
         month_start = today - timedelta(days=29)
 
         return {
-            "today": DashboardMetricsService.sales_today(warehouse_id=warehouse_id),
+            "today": DashboardMetricsService.sales_today(
+                warehouse_id=warehouse_id, warehouse_ids=warehouse_ids
+            ),
             "week": DashboardMetricsService.sales_range(
-                date_from=week_start, date_to=today, warehouse_id=warehouse_id
+                date_from=week_start,
+                date_to=today,
+                warehouse_id=warehouse_id,
+                warehouse_ids=warehouse_ids,
             ),
             "month": DashboardMetricsService.sales_range(
-                date_from=month_start, date_to=today, warehouse_id=warehouse_id
+                date_from=month_start,
+                date_to=today,
+                warehouse_id=warehouse_id,
+                warehouse_ids=warehouse_ids,
             ),
             "comparison_vs_previous_month": DashboardMetricsService.comparison_vs_previous_period(
-                date_from=month_start, date_to=today, warehouse_id=warehouse_id
+                date_from=month_start,
+                date_to=today,
+                warehouse_id=warehouse_id,
+                warehouse_ids=warehouse_ids,
             ),
             "top_products": DashboardMetricsService.top_products(
-                date_from=month_start, date_to=today
+                date_from=month_start,
+                date_to=today,
+                warehouse_ids=warehouse_ids,
             ),
             "gross_margin": DashboardMetricsService.gross_margin(
-                date_from=month_start, date_to=today
+                date_from=month_start,
+                date_to=today,
+                warehouse_ids=warehouse_ids,
             ),
-            "critical_stock_count": DashboardMetricsService.critical_stock_count(),
+            "critical_stock_count": DashboardMetricsService.critical_stock_count(
+                warehouse_ids=warehouse_ids
+            ),
             "payment_method_distribution": DashboardMetricsService.payment_method_distribution(
-                date_from=month_start, date_to=today
+                date_from=month_start,
+                date_to=today,
+                warehouse_ids=warehouse_ids,
             ),
         }
 
@@ -139,7 +183,9 @@ class DashboardMetricsService:
             cache.delete(DashboardMetricsService._cache_key(None))
 
     @staticmethod
-    def sales_today(*, warehouse_id: int | None = None) -> dict:
+    def sales_today(
+        *, warehouse_id: int | None = None, warehouse_ids: tuple[int, ...] | None = None
+    ) -> dict:
         from django.db.models import Count, Sum
         from django.db.models.functions import Coalesce
 
@@ -150,6 +196,8 @@ class DashboardMetricsService:
         )
         if warehouse_id:
             queryset = queryset.filter(warehouse_id=warehouse_id)
+        elif warehouse_ids is not None:
+            queryset = queryset.filter(warehouse_id__in=warehouse_ids)
         aggregate = queryset.aggregate(
             total=Coalesce(Sum("total"), Decimal("0")), count=Count("id")
         )
@@ -159,7 +207,13 @@ class DashboardMetricsService:
         }
 
     @staticmethod
-    def sales_range(*, date_from, date_to, warehouse_id: int | None = None) -> dict:
+    def sales_range(
+        *,
+        date_from,
+        date_to,
+        warehouse_id: int | None = None,
+        warehouse_ids: tuple[int, ...] | None = None,
+    ) -> dict:
         from dashboard.models import DailySalesSummary
 
         queryset = DailySalesSummary.objects.filter(
@@ -167,6 +221,8 @@ class DashboardMetricsService:
         )
         if warehouse_id:
             queryset = queryset.filter(warehouse_id=warehouse_id)
+        elif warehouse_ids is not None:
+            queryset = queryset.filter(warehouse_id__in=warehouse_ids)
         rows = list(queryset.order_by("sale_date").values("sale_date", "total_sales"))
         total = sum((row["total_sales"] for row in rows), Decimal("0"))
         return {
@@ -179,17 +235,27 @@ class DashboardMetricsService:
 
     @staticmethod
     def comparison_vs_previous_period(
-        *, date_from, date_to, warehouse_id: int | None = None
+        *,
+        date_from,
+        date_to,
+        warehouse_id: int | None = None,
+        warehouse_ids: tuple[int, ...] | None = None,
     ) -> dict:
         period_length = (date_to - date_from).days + 1
         previous_from = date_from - timedelta(days=period_length)
         previous_to = date_from - timedelta(days=1)
 
         current = DashboardMetricsService.sales_range(
-            date_from=date_from, date_to=date_to, warehouse_id=warehouse_id
+            date_from=date_from,
+            date_to=date_to,
+            warehouse_id=warehouse_id,
+            warehouse_ids=warehouse_ids,
         )
         previous = DashboardMetricsService.sales_range(
-            date_from=previous_from, date_to=previous_to, warehouse_id=warehouse_id
+            date_from=previous_from,
+            date_to=previous_to,
+            warehouse_id=warehouse_id,
+            warehouse_ids=warehouse_ids,
         )
         current_total = Decimal(current["total_sales"])
         previous_total = Decimal(previous["total_sales"])
@@ -207,18 +273,26 @@ class DashboardMetricsService:
         }
 
     @staticmethod
-    def top_products(*, date_from, date_to, limit: int = 5) -> list[dict]:
+    def top_products(
+        *,
+        date_from,
+        date_to,
+        limit: int = 5,
+        warehouse_ids: tuple[int, ...] | None = None,
+    ) -> list[dict]:
         from django.db.models import Sum
 
         from ventas.models import SaleDetail
 
+        queryset = SaleDetail.objects.filter(
+            sale__status="COMPLETED",
+            sale__created_at__date__gte=date_from,
+            sale__created_at__date__lte=date_to,
+        )
+        if warehouse_ids is not None:
+            queryset = queryset.filter(sale__warehouse_id__in=warehouse_ids)
         rows = (
-            SaleDetail.objects.filter(
-                sale__status="COMPLETED",
-                sale__created_at__date__gte=date_from,
-                sale__created_at__date__lte=date_to,
-            )
-            .values("product_name_snapshot")
+            queryset.values("product_name_snapshot")
             .annotate(quantity_sold=Sum("quantity"), revenue=Sum("subtotal"))
             .order_by("-quantity_sold")[:limit]
         )
@@ -232,7 +306,9 @@ class DashboardMetricsService:
         ]
 
     @staticmethod
-    def gross_margin(*, date_from, date_to) -> dict:
+    def gross_margin(
+        *, date_from, date_to, warehouse_ids: tuple[int, ...] | None = None
+    ) -> dict:
         """Aproximado: SaleDetail no guarda un snapshot del costo al momento
         de la venta (decision documentada -ventas e inventario estan
         desacoplados a proposito, variant_id no es una FK fisica). El margen
@@ -248,6 +324,8 @@ class DashboardMetricsService:
             sale__created_at__date__gte=date_from,
             sale__created_at__date__lte=date_to,
         ).values("variant_id", "quantity", "subtotal")
+        if warehouse_ids is not None:
+            details = details.filter(sale__warehouse_id__in=warehouse_ids)
 
         costs = dict(ProductVariant.all_objects.values_list("id", "cost"))
 
@@ -275,26 +353,31 @@ class DashboardMetricsService:
         }
 
     @staticmethod
-    def critical_stock_count() -> int:
+    def critical_stock_count(*, warehouse_ids: tuple[int, ...] | None = None) -> int:
         from dashboard.models import LowStockAlert
 
-        return LowStockAlert.objects.count()
+        queryset = LowStockAlert.objects.all()
+        if warehouse_ids is not None:
+            queryset = queryset.filter(warehouse_id__in=warehouse_ids)
+        return queryset.count()
 
     @staticmethod
-    def payment_method_distribution(*, date_from, date_to) -> list[dict]:
+    def payment_method_distribution(
+        *, date_from, date_to, warehouse_ids: tuple[int, ...] | None = None
+    ) -> list[dict]:
         from django.db.models import Sum
 
         from ventas.models import SalePayment
 
+        queryset = SalePayment.objects.filter(
+            sale__status="COMPLETED",
+            sale__created_at__date__gte=date_from,
+            sale__created_at__date__lte=date_to,
+        )
+        if warehouse_ids is not None:
+            queryset = queryset.filter(sale__warehouse_id__in=warehouse_ids)
         rows = (
-            SalePayment.objects.filter(
-                sale__status="COMPLETED",
-                sale__created_at__date__gte=date_from,
-                sale__created_at__date__lte=date_to,
-            )
-            .values("method")
-            .annotate(total=Sum("amount"))
-            .order_by("-total")
+            queryset.values("method").annotate(total=Sum("amount")).order_by("-total")
         )
         return [{"method": row["method"], "total": str(row["total"])} for row in rows]
 
@@ -317,12 +400,13 @@ class DashboardBroadcastService:
         channel_layer = get_channel_layer()
         if channel_layer is None:
             return
+        event = {
+            "type": "dashboard.event",
+            "event": "sale_completed",
+            "warehouse_id": warehouse_id,
+            "total": str(total),
+        }
+        async_to_sync(channel_layer.group_send)(f"dashboard_{schema_name}_all", event)
         async_to_sync(channel_layer.group_send)(
-            f"dashboard_{schema_name}",
-            {
-                "type": "dashboard.event",
-                "event": "sale_completed",
-                "warehouse_id": warehouse_id,
-                "total": str(total),
-            },
+            f"dashboard_{schema_name}_warehouse_{warehouse_id}", event
         )
