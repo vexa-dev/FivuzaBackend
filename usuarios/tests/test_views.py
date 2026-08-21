@@ -9,7 +9,7 @@ from rest_framework.test import APIClient
 from core.models import TenantSettings
 from core.throttling import LoginRateThrottle
 from inventario.models import Warehouse
-from usuarios.models import Permission, Role, User
+from usuarios.models import Permission, Role, User, UserWarehouse
 
 
 class TenantUserAuthTests(TenantTestCase):
@@ -137,6 +137,30 @@ class TenantUserAuthTests(TenantTestCase):
             "/api/v1/auth/refresh/", {}, format="json"
         )
         self.assertEqual(reuse_after_logout.status_code, 401)
+
+    def test_refresh_rolls_back_blacklist_when_reissue_fails(self):
+        login = self._login()
+        refresh_cookie = login.cookies["fivuza_tenant_refresh"].value
+
+        with mock.patch(
+            "usuarios.views.issue_tokens_for_tenant_user",
+            side_effect=RuntimeError("fallo transitorio"),
+        ):
+            with self.assertRaises(RuntimeError):
+                self.client.post("/api/v1/auth/refresh/", {}, format="json")
+
+        retry_client = APIClient(HTTP_HOST=self.domain.domain)
+        retry_client.cookies["fivuza_tenant_refresh"] = refresh_cookie
+        retry = retry_client.post("/api/v1/auth/refresh/", {}, format="json")
+        self.assertEqual(retry.status_code, 200)
+
+    @mock.patch.dict(LoginRateThrottle.THROTTLE_RATES, {"login_ip": "10/min"})
+    def test_logout_is_rate_limited_after_repeated_attempts(self):
+        cache.clear()
+        for _ in range(10):
+            self.client.post("/api/v1/auth/logout/", {}, format="json")
+        response = self.client.post("/api/v1/auth/logout/", {}, format="json")
+        self.assertEqual(response.status_code, 429)
 
 
 class RoleRBACEndpointsTests(TenantTestCase):
@@ -634,6 +658,88 @@ class EmployeeEndpointsTests(TenantTestCase):
             response["Content-Type"],
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
+
+
+class UserWarehouseEndpointsTests(TenantTestCase):
+    """UserWarehouseViewSet debe respetar WarehouseAccessService igual que
+    EmployeeViewSet -un manager scoped a un almacen no puede leer ni asignar
+    UserWarehouse de un almacen ajeno (PR #79, hallazgo de seguridad)."""
+
+    @classmethod
+    def get_test_schema_name(cls):
+        return "test_usuarios_user_warehouse_views"
+
+    @classmethod
+    def get_test_tenant_domain(cls):
+        return "test-usuarios-user-warehouse-views.test.com"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.password = "ClaveSegura123"
+        cls.manager_role = Role.objects.get(name="manager")
+
+        cls.warehouse_a = Warehouse.objects.get(name="Principal")
+        cls.warehouse_b = Warehouse.objects.create(name="Sucursal B")
+
+        cls.manager_user = User.objects.create(
+            email="manager-scoped@negocio.com", role=cls.manager_role
+        )
+        cls.manager_user.set_password(cls.password)
+        cls.manager_user.save()
+        UserWarehouse.objects.create(user=cls.manager_user, warehouse=cls.warehouse_a)
+
+        cls.other_user = User.objects.create(
+            email="otro@negocio.com", role=cls.manager_role
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        super().tearDownClass()
+
+    def setUp(self):
+        cache.clear()
+
+    def _client_as(self, user):
+        client = APIClient(HTTP_HOST=self.domain.domain)
+        login = client.post(
+            "/api/v1/auth/login/",
+            {"email": user.email, "password": self.password},
+            format="json",
+        )
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        return client
+
+    def test_scoped_manager_cannot_list_assignments_of_other_warehouse(self):
+        UserWarehouse.objects.create(user=self.other_user, warehouse=self.warehouse_b)
+        client = self._client_as(self.manager_user)
+
+        response = client.get(
+            f"/api/v1/usuarios/user-warehouses/?warehouse={self.warehouse_b.id}"
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data["error"]["code"], "WAREHOUSE_ACCESS_DENIED")
+
+    def test_scoped_manager_cannot_assign_user_to_other_warehouse(self):
+        client = self._client_as(self.manager_user)
+
+        response = client.post(
+            "/api/v1/usuarios/user-warehouses/",
+            {"user": self.other_user.id, "warehouse": self.warehouse_b.id},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data["error"]["code"], "WAREHOUSE_ACCESS_DENIED")
+
+    def test_scoped_manager_list_only_returns_own_warehouse_assignments(self):
+        UserWarehouse.objects.create(user=self.other_user, warehouse=self.warehouse_b)
+        client = self._client_as(self.manager_user)
+
+        response = client.get("/api/v1/usuarios/user-warehouses/")
+        self.assertEqual(response.status_code, 200)
+        warehouse_ids = {row["warehouse"] for row in response.data}
+        self.assertEqual(warehouse_ids, {self.warehouse_a.id})
 
 
 class UsersModuleTenantSuspendedGatingTests(TenantTestCase):

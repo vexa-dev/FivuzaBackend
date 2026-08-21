@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
@@ -10,6 +11,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from core.auth_cookies import (
@@ -117,8 +119,11 @@ class TenantUserRefreshView(SchemaAPIView):
             user = User.objects.select_related("role").get(
                 id=old_refresh.get("user_id"), is_active=True
             )
-            old_refresh.blacklist()
-            refresh = issue_tokens_for_tenant_user(user, schema_name)
+            if BlacklistedToken.objects.filter(token__jti=old_refresh["jti"]).exists():
+                raise TokenError("El token ya fue utilizado.")
+            with transaction.atomic():
+                old_refresh.blacklist()
+                refresh = issue_tokens_for_tenant_user(user, schema_name)
         except (TokenError, User.DoesNotExist, TypeError, ValueError):
             response = Response({"detail": "Sesión no válida."}, status=401)
             clear_refresh_cookie(response)
@@ -145,6 +150,7 @@ class TenantUserLogoutView(SchemaAPIView):
     """POST refresh token -> lo agrega a la blacklist, invalidandolo."""
 
     permission_classes = [AllowAny]
+    throttle_classes = [LoginRateThrottle]
 
     def post(self, request):
         refresh_token = get_refresh_cookie(request)
@@ -422,12 +428,15 @@ class UserWarehouseViewSet(viewsets.ModelViewSet):
     ]
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        queryset = WarehouseAccessService.scope_queryset(
+            super().get_queryset(), self.request.user
+        )
         user_id = self.request.query_params.get("user")
         warehouse_id = self.request.query_params.get("warehouse")
         if user_id:
             queryset = queryset.filter(user_id=user_id)
         if warehouse_id:
+            WarehouseAccessService.require_warehouse(self.request.user, warehouse_id)
             queryset = queryset.filter(warehouse_id=warehouse_id)
         return queryset
 

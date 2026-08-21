@@ -14,6 +14,7 @@ from django.template.loader import render_to_string
 from django.utils import timezone
 
 from inventario.models import (
+    AttributeValue,
     Category,
     InventoryMovement,
     Product,
@@ -24,6 +25,7 @@ from inventario.models import (
     VariantAttributeValue,
     Warehouse,
 )
+from usuarios.warehouse_access import WarehouseAccessDenied, WarehouseAccessService
 
 _PRESIGNED_URL_TTL_SECONDS = 300
 _ALLOWED_IMAGE_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
@@ -77,6 +79,31 @@ class ProductVariantService:
         return product
 
     @staticmethod
+    def _validate_attribute_values(product: Product, attribute_value_ids: list) -> None:
+        """Unico punto de validacion de "atributos permitidos por categoria"
+        (ProductSerializer.validate() ya lo chequeaba para la creacion inicial
+        del producto, pero POST /product-variants/ -que usa add_variant()-
+        no pasaba por ahi y podia agregar una variante con atributos fuera
+        de category.allowed_attributes)."""
+        if not attribute_value_ids:
+            return
+        allowed_ids = set(
+            product.category.allowed_attributes.values_list("id", flat=True)
+        )
+        invalid = [
+            value.attribute.name
+            for value in AttributeValue.objects.filter(
+                id__in=attribute_value_ids
+            ).select_related("attribute")
+            if value.attribute_id not in allowed_ids
+        ]
+        if invalid:
+            names = ", ".join(sorted(set(invalid)))
+            raise ValidationError(
+                f"Atributos no permitidos para la categoría: {names}."
+            )
+
+    @staticmethod
     def _create_variants(
         product: Product, variants_data: list[dict]
     ) -> list[ProductVariant]:
@@ -89,6 +116,9 @@ class ProductVariantService:
         for index, data in enumerate(variants_data):
             data = dict(data)
             attribute_value_ids = data.pop("attribute_value_ids", [])
+            ProductVariantService._validate_attribute_values(
+                product, attribute_value_ids
+            )
             is_default = data.pop("is_default", False) or (
                 not has_explicit_default and index == 0
             )
@@ -107,6 +137,7 @@ class ProductVariantService:
     def add_variant(product: Product, variant_data: dict) -> ProductVariant:
         variant_data = dict(variant_data)
         attribute_value_ids = variant_data.pop("attribute_value_ids", [])
+        ProductVariantService._validate_attribute_values(product, attribute_value_ids)
         variant = ProductVariant.objects.create(
             product=product, is_default=False, **variant_data
         )
@@ -400,6 +431,24 @@ class CatalogImportService:
             try:
                 with transaction.atomic():
                     CatalogImportService._create_row(row, user)
+            except WarehouseAccessDenied as exc:
+                # APIException no expone su mensaje via str(exc) -detail es un
+                # dict ({"error": {"message": ...}}), no un texto plano.
+                detail = exc.detail
+                message = (
+                    detail.get("error", {}).get("message")
+                    if isinstance(detail, dict)
+                    else str(detail)
+                )
+                results.append(
+                    {
+                        "row": index,
+                        "sku": row.get("sku", ""),
+                        "status": "error",
+                        "error": message or "No tienes acceso al almacén solicitado.",
+                    }
+                )
+                continue
             except Exception as exc:  # noqa: BLE001 -- una fila mala no debe frenar el resto del archivo
                 results.append(
                     {
@@ -494,6 +543,7 @@ class CatalogImportService:
         warehouse_name = (row.get("almacen") or "").strip()
         if cantidad_inicial > 0 and warehouse_name:
             warehouse = Warehouse.objects.get(name__iexact=warehouse_name)
+            WarehouseAccessService.require_warehouse(user, warehouse)
             variant = product.variants.first()
             StockService.adjust_stock(
                 variant=variant,

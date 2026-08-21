@@ -1,6 +1,6 @@
 """Autorización centralizada de acceso a almacenes dentro de un tenant."""
 
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 
 
 class WarehouseAccessDenied(PermissionDenied):
@@ -52,9 +52,13 @@ class WarehouseAccessService:
         warehouse_id = getattr(warehouse_or_id, "pk", warehouse_or_id)
         if warehouse_id is None:
             raise WarehouseAccessDenied()
+        try:
+            warehouse_id = int(warehouse_id)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError("El identificador de almacén no es válido.") from exc
         if WarehouseAccessService.is_admin(user):
             return warehouse_or_id
-        if int(warehouse_id) not in WarehouseAccessService.allowed_warehouse_ids(user):
+        if warehouse_id not in WarehouseAccessService.allowed_warehouse_ids(user):
             raise WarehouseAccessDenied()
         return warehouse_or_id
 

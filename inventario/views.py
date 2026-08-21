@@ -259,6 +259,12 @@ class ProductVariantViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(updated_at__gte=updated_since)
         return queryset
 
+    def perform_create(self, serializer):
+        try:
+            serializer.save()
+        except DjangoValidationError as exc:
+            raise ValidationError(exc.message) from exc
+
     def perform_destroy(self, instance):
         sibling_count = (
             ProductVariant.objects.filter(product_id=instance.product_id)

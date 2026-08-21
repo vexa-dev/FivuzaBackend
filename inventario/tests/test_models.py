@@ -23,7 +23,7 @@ from inventario.services import (
     PurchaseService,
     StockService,
 )
-from usuarios.models import AuditLog, Role, User
+from usuarios.models import AuditLog, Role, User, UserWarehouse
 
 
 class ProductVariantServiceTests(TenantTestCase):
@@ -648,6 +648,29 @@ class CatalogImportServiceTests(TenantTestCase):
         )
         self.assertEqual(report["errors"], 1)
         self.assertIn("almacen", report["rows"][0]["error"])
+
+    def test_row_with_warehouse_outside_user_scope_is_rejected(self):
+        # "Sucursal B" no seedeado por defecto (a diferencia de "Principal") -se
+        # crea aca para tener un almacen fuera del scope del manager.
+        other_warehouse = Warehouse.objects.create(name="Sucursal B")
+        manager_role = Role.objects.create(name="manager", is_system_default=True)
+        scoped_user = User.objects.create(
+            email="manager-import@negocio.com", role=manager_role
+        )
+        UserWarehouse.objects.create(user=scoped_user, warehouse=other_warehouse)
+
+        csv_content = (
+            f"{self._HEADER}\n"
+            "Producto ajeno,Ropa,SKU-FUERA-SCOPE,,5,10,0,10,Principal\n"
+        )
+        report = CatalogImportService.import_csv(
+            file_content=csv_content, user=scoped_user
+        )
+
+        self.assertEqual(report["created"], 0)
+        self.assertEqual(report["errors"], 1)
+        self.assertTrue(report["rows"][0]["error"])
+        self.assertFalse(ProductVariant.objects.filter(sku="SKU-FUERA-SCOPE").exists())
 
     def test_missing_columns_raises(self):
         with self.assertRaises(ValidationError):

@@ -1,4 +1,5 @@
 from django_tenants.test.cases import TenantTestCase
+from rest_framework.exceptions import ValidationError
 
 from core.models import TenantSettings
 from inventario.models import Warehouse
@@ -68,3 +69,11 @@ class WarehouseAccessServiceTests(TenantTestCase):
         with self.assertRaises(WarehouseAccessDenied) as context:
             WarehouseAccessService.require_warehouse(self.restricted, self.secondary.id)
         self.assertEqual(context.exception.default_code, "WAREHOUSE_ACCESS_DENIED")
+
+    def test_non_numeric_warehouse_id_raises_validation_error_not_admin(self):
+        with self.assertRaises(ValidationError):
+            WarehouseAccessService.require_warehouse(self.admin, "no-es-numero")
+
+    def test_non_numeric_warehouse_id_raises_validation_error_scoped_user(self):
+        with self.assertRaises(ValidationError):
+            WarehouseAccessService.require_warehouse(self.restricted, "no-es-numero")

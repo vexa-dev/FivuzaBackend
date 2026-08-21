@@ -9,6 +9,7 @@ from inventario.models import (
     AttributeValue,
     Category,
     Product,
+    ProductVariant,
     Supplier,
     Warehouse,
 )
@@ -126,6 +127,53 @@ class InventoryCatalogEndpointsTests(TenantTestCase):
         )
         self.assertEqual(response.status_code, 201)
         self.assertEqual(len(response.data["variants"]), 2)
+
+    def test_add_variant_rejects_attribute_outside_category_allowed_list(self):
+        """add_variant() (POST /product-variants/, a diferencia de POST
+        /products/) no pasaba antes por la validacion de allowed_attributes
+        de la categoria -este endpoint es el que quedaba sin cubrir."""
+        talla = Attribute.objects.create(name="Talla")
+        color = Attribute.objects.create(name="Color")
+        mediana = AttributeValue.objects.create(attribute=talla, value="M")
+        azul = AttributeValue.objects.create(attribute=color, value="Azul")
+        self.category.allowed_attributes.add(talla)
+
+        admin = self._client_as(self.admin_user)
+        product_response = admin.post(
+            "/api/v1/inventario/products/",
+            {
+                "type": "PRODUCT",
+                "name": "Polo",
+                "category": self.category.id,
+                "unit_of_measure": "UND",
+                "variants_input": [{"sku": "POLO-BASE"}],
+            },
+            format="json",
+        )
+        product_id = product_response.data["id"]
+
+        response = admin.post(
+            "/api/v1/inventario/product-variants/",
+            {
+                "product": product_id,
+                "sku": "POLO-AZUL",
+                "attribute_value_ids": [azul.id],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(ProductVariant.objects.filter(sku="POLO-AZUL").exists())
+
+        valid = admin.post(
+            "/api/v1/inventario/product-variants/",
+            {
+                "product": product_id,
+                "sku": "POLO-M",
+                "attribute_value_ids": [mediana.id],
+            },
+            format="json",
+        )
+        self.assertEqual(valid.status_code, 201)
 
     def test_cannot_delete_the_only_variant_of_a_product(self):
         admin = self._client_as(self.admin_user)

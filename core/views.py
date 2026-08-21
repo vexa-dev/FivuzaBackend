@@ -2,7 +2,7 @@ import os
 from datetime import timedelta
 
 import redis
-from django.db import connection
+from django.db import connection, transaction
 from django.db.utils import OperationalError
 from django.shortcuts import get_object_or_404
 from rest_framework import mixins, status, viewsets
@@ -12,6 +12,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from core.auth_cookies import (
@@ -134,8 +135,11 @@ class PlatformStaffRefreshView(SchemaAPIView):
             staff = PlatformStaff.objects.get(
                 id=old_refresh.get("user_id"), is_active=True
             )
-            old_refresh.blacklist()
-            refresh = issue_tokens_for_platform_staff(staff)
+            if BlacklistedToken.objects.filter(token__jti=old_refresh["jti"]).exists():
+                raise TokenError("El token ya fue utilizado.")
+            with transaction.atomic():
+                old_refresh.blacklist()
+                refresh = issue_tokens_for_platform_staff(staff)
         except (TokenError, PlatformStaff.DoesNotExist, TypeError, ValueError):
             response = Response({"detail": "Sesión no válida."}, status=401)
             clear_refresh_cookie(response, platform=True)
@@ -159,6 +163,7 @@ class PlatformStaffLogoutView(SchemaAPIView):
     """POST refresh token -> lo agrega a la blacklist, invalidandolo."""
 
     permission_classes = [AllowAny]
+    throttle_classes = [LoginRateThrottle]
 
     def post(self, request):
         refresh_token = get_refresh_cookie(request, platform=True)

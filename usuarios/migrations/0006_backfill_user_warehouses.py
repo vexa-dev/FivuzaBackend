@@ -27,6 +27,7 @@ def backfill_user_warehouses(apps, schema_editor):
             for warehouse_id in warehouse_ids
         ],
         ignore_conflicts=True,
+        batch_size=500,
     )
 
 

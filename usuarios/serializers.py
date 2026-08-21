@@ -254,6 +254,9 @@ class UserWarehouseSerializer(serializers.ModelSerializer):
     def validate_warehouse(self, warehouse):
         if not warehouse.is_active:
             raise serializers.ValidationError("El almacén está inactivo.")
+        WarehouseAccessService.require_warehouse(
+            self.context["request"].user, warehouse
+        )
         return warehouse
 
 

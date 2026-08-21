@@ -1,3 +1,4 @@
+import hashlib
 from datetime import timedelta
 from decimal import Decimal
 
@@ -77,11 +78,25 @@ class DashboardMetricsService:
     _CACHE_PREFIX = "dashboard:metrics"
 
     @staticmethod
-    def _cache_key(warehouse_id: int | None) -> str:
+    def _cache_key(
+        warehouse_id: int | None, warehouse_ids: tuple[int, ...] | None = None
+    ) -> str:
         # Mismo patron que PermissionService._cache_key: el schema_name va
         # en la key porque connection.schema_name cambia por tenant, y la
         # cache de Redis es compartida entre todos los schemas.
-        return f"{DashboardMetricsService._CACHE_PREFIX}:{connection.schema_name}:{warehouse_id or 'all'}"
+        if warehouse_ids is not None:
+            # Mismo patron de hash estable que LoginIdentifierRateThrottle
+            # (core/throttling.py): una key por cada combinacion de almacenes
+            # visibles para el usuario, sin importar el orden en que llegaron.
+            digest = hashlib.sha256(
+                ",".join(str(w) for w in sorted(warehouse_ids)).encode()
+            ).hexdigest()
+            scope = f"scoped:{digest}"
+        else:
+            scope = warehouse_id or "all"
+        return (
+            f"{DashboardMetricsService._CACHE_PREFIX}:{connection.schema_name}:{scope}"
+        )
 
     @staticmethod
     def get_all_metrics(
@@ -89,19 +104,21 @@ class DashboardMetricsService:
     ) -> dict:
         from django.core.cache import cache
 
-        # Los agregados de subconjuntos dependen del perfil del usuario. No se
-        # cachean para evitar servir una combinación obsoleta tras una venta.
-        key = DashboardMetricsService._cache_key(warehouse_id)
-        if warehouse_ids is None:
-            cached = cache.get(key)
-            if cached is not None:
-                return cached
+        # Sprint 25 dejaba los agregados scoped (warehouse_ids) sin cachear
+        # -cada carga del dashboard de un usuario no-admin recalculaba todo
+        # desde cero. Ahora la key incluye el set de almacenes, asi que cada
+        # combinacion cachea por separado, con el mismo TTL de 60s que ya
+        # acotaba el staleness para el caso "all" (una venta no invalida esta
+        # entrada de inmediato, igual que antes).
+        key = DashboardMetricsService._cache_key(warehouse_id, warehouse_ids)
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
 
         metrics = DashboardMetricsService._compute_all_metrics(
             warehouse_id=warehouse_id, warehouse_ids=warehouse_ids
         )
-        if warehouse_ids is None:
-            cache.set(key, metrics, DashboardMetricsService._CACHE_TTL)
+        cache.set(key, metrics, DashboardMetricsService._CACHE_TTL)
         return metrics
 
     @staticmethod
