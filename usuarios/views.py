@@ -72,7 +72,7 @@ from usuarios.services import (
     RoleService,
     TenantDataExportService,
 )
-from usuarios.warehouse_access import WarehouseAccessService
+from core.warehouse_access import WarehouseAccessService
 
 _HR_PERMISSIONS = [
     IsAuthenticated,

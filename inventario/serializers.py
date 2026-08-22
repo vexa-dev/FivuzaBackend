@@ -22,7 +22,7 @@ from inventario.models import (
     Warehouse,
 )
 from inventario.services import MediaService, ProductVariantService, StockService
-from usuarios.warehouse_access import WarehouseAccessService
+from core.warehouse_access import WarehouseAccessService
 
 
 class WarehouseSerializer(serializers.ModelSerializer):

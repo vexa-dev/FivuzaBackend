@@ -3,7 +3,7 @@ from decimal import Decimal
 from rest_framework import serializers
 
 from inventario.models import ProductVariant, Warehouse
-from usuarios.warehouse_access import WarehouseAccessService
+from core.warehouse_access import WarehouseAccessService
 from ventas.models import (
     CashMovement,
     CashRegister,

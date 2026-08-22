@@ -12,7 +12,7 @@ from core.permissions import RequiresFeature, TenantNotCanceled, TenantNotSuspen
 from core.openapi import SchemaAPIView
 from inventario.models import Warehouse
 from usuarios.permissions import HasModulePermission
-from usuarios.warehouse_access import WarehouseAccessService
+from core.warehouse_access import WarehouseAccessService
 from ventas.models import (
     CashMovement,
     CashRegister,

@@ -54,7 +54,7 @@ from inventario.serializers import (
     WarehouseSerializer,
 )
 from usuarios.permissions import HasModulePermission
-from usuarios.warehouse_access import WarehouseAccessService
+from core.warehouse_access import WarehouseAccessService
 
 _BASE_PERMISSIONS = [
     IsAuthenticated,

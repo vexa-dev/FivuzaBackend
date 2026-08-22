@@ -77,7 +77,7 @@ class DashboardConsumer(AsyncJsonWebsocketConsumer):
 
         def resolve_user_access():
             from usuarios.models import User
-            from usuarios.warehouse_access import WarehouseAccessService
+            from core.warehouse_access import WarehouseAccessService
 
             with schema_context(schema_name):
                 try:

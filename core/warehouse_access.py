@@ -1,4 +1,12 @@
-"""Autorización centralizada de acceso a almacenes dentro de un tenant."""
+"""Autorización centralizada de acceso a almacenes dentro de un tenant.
+
+Vive en core (no en usuarios) porque lo consumen inventario, ventas,
+dashboard y usuarios por igual -Convenciones §2.1/Esquema Backend §2.2:
+usuarios/inventario/ventas no se importan entre sí, pero sí pueden importar
+utilidades de core. Sigue el mismo estilo de import diferido que ya usa
+TenantProvisioningService y el resto de core/services.py para tocar modelos
+de apps de negocio sin acoplar el import a nivel de módulo.
+"""
 
 from rest_framework.exceptions import PermissionDenied, ValidationError
 

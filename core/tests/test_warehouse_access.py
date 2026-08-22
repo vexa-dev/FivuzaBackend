@@ -4,7 +4,7 @@ from rest_framework.exceptions import ValidationError
 from core.models import TenantSettings
 from inventario.models import Warehouse
 from usuarios.models import Role, User, UserWarehouse
-from usuarios.warehouse_access import WarehouseAccessDenied, WarehouseAccessService
+from core.warehouse_access import WarehouseAccessDenied, WarehouseAccessService
 
 
 class WarehouseAccessServiceTests(TenantTestCase):
