@@ -63,6 +63,8 @@ jobs:
       REDIS_URL: redis://localhost:6379/0
       CELERY_BROKER_URL: redis://localhost:6379/0
       CORS_ALLOWED_ORIGINS: http://localhost:5173
+      API_V1_PAGINATION_ENABLED: "True"
+      API_STANDARD_ERRORS_ENABLED: "True"
     steps:
     - uses: actions/checkout@v7
     - name: Set up Python
