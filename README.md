@@ -2,9 +2,10 @@
 
 > Contrato vigente: API `/api/v1`, OpenAPI en `/api/schema`, `/api/docs` y
 > `/api/redoc`; refresh en cookie HttpOnly y access solo en memoria. El acceso
-> operativo se limita mediante `WarehouseAccessService`. Los flags
-> `API_V1_PAGINATION_ENABLED` y `API_STANDARD_ERRORS_ENABLED` permiten el
-> despliegue coordinado sin romper clientes existentes.
+> operativo se limita mediante `WarehouseAccessService` (`core/warehouse_access.py`).
+> `API_V1_PAGINATION_ENABLED` y `API_STANDARD_ERRORS_ENABLED` ya están activados
+> por defecto (paginación estándar de DRF y `{"error": {code, message, details}}`
+> en todas las respuestas de error) -el frontend oficial ya los soporta.
 
 [![Backend CI](https://github.com/vexa-dev/FivuzaBackend/actions/workflows/ci.yml/badge.svg)](https://github.com/vexa-dev/FivuzaBackend/actions/workflows/ci.yml)
 

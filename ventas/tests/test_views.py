@@ -261,8 +261,9 @@ class CashSessionEndpointsTests(TenantTestCase):
         response = client.get(
             f"/api/v1/ventas/cash-movements/?cash_session={session_a.id}"
         )
-        self.assertEqual(len(response.data), 1)
-        self.assertEqual(response.data[0]["amount"], "1.0000")
+        results = response.data["results"]
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["amount"], "1.0000")
 
     def test_sessions_filtered_by_user_and_date_range(self):
         client = self._client_as(self.admin_user)
@@ -300,7 +301,9 @@ class CashSessionEndpointsTests(TenantTestCase):
             },
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual([row["id"] for row in response.data], [session_mine.id])
+        self.assertEqual(
+            [row["id"] for row in response.data["results"]], [session_mine.id]
+        )
 
     def test_session_retrieve_includes_movements(self):
         client = self._client_as(self.admin_user)
@@ -448,7 +451,10 @@ class CashSessionEndpointsTests(TenantTestCase):
                 "/api/v1/ventas/cash-sessions/"
             )
             self.assertEqual(response.status_code, 403)
-            self.assertEqual(response.data["code"], "MODULE_DISABLED")
+            self.assertEqual(response.data["error"]["code"], "PERMISSION_DENIED")
+            self.assertEqual(
+                response.data["error"]["details"]["code"], "MODULE_DISABLED"
+            )
         finally:
             settings.cash_module_enabled = True
             settings.save(update_fields=["cash_module_enabled"])
@@ -524,16 +530,16 @@ class SalesCatalogEndpointsTests(TenantTestCase):
         self.assertEqual(response.status_code, 201)
 
         by_document = client.get("/api/v1/ventas/customers/?search=12345678")
-        self.assertEqual(len(by_document.data), 1)
+        self.assertEqual(len(by_document.data["results"]), 1)
 
         by_name = client.get("/api/v1/ventas/customers/?search=Perez")
-        self.assertEqual(len(by_name.data), 1)
+        self.assertEqual(len(by_name.data["results"]), 1)
 
         by_phone = client.get("/api/v1/ventas/customers/?search=987654")
-        self.assertEqual(len(by_phone.data), 1)
+        self.assertEqual(len(by_phone.data["results"]), 1)
 
         no_match = client.get("/api/v1/ventas/customers/?search=nadie")
-        self.assertEqual(len(no_match.data), 0)
+        self.assertEqual(len(no_match.data["results"]), 0)
 
     def test_auditor_without_sales_manage_cannot_create_customer(self):
         client = self._client_as(self.auditor_user)
@@ -573,7 +579,9 @@ class SalesCatalogEndpointsTests(TenantTestCase):
         self.assertEqual(delete_response.status_code, 204)
 
         list_response = client.get("/api/v1/ventas/customers/")
-        self.assertNotIn(customer_id, [row["id"] for row in list_response.data])
+        self.assertNotIn(
+            customer_id, [row["id"] for row in list_response.data["results"]]
+        )
 
     def test_promotion_crud_with_targets(self):
         client = self._client_as(self.admin_user)
@@ -804,15 +812,14 @@ class SaleEndpointsTests(TenantTestCase):
 
         response = client.get(f"/api/v1/ventas/sales/?customer={self.customer.id}")
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(len(response.data) >= 1)
-        self.assertTrue(
-            all(row["customer"] == self.customer.id for row in response.data)
-        )
+        results = response.data["results"]
+        self.assertTrue(len(results) >= 1)
+        self.assertTrue(all(row["customer"] == self.customer.id for row in results))
 
         response_other = client.get(
             f"/api/v1/ventas/sales/?customer={other_customer.id}"
         )
-        self.assertEqual(response_other.data, [])
+        self.assertEqual(response_other.data["results"], [])
 
     def test_pos_catalog_returns_variant_with_stock_and_price(self):
         client = self._client_as(self.seller_user)
@@ -1073,7 +1080,9 @@ class SaleVoidAndReturnTests(TenantTestCase):
         movements = client.get(
             f"/api/v1/ventas/cash-movements/?cash_session={session_id}"
         )
-        devolucion = next(m for m in movements.data if m["concept"] == "DEVOLUCION")
+        devolucion = next(
+            m for m in movements.data["results"] if m["concept"] == "DEVOLUCION"
+        )
         self.assertEqual(devolucion["type"], "OUT")
         self.assertEqual(devolucion["amount"], "40.0000")
 
@@ -1184,7 +1193,9 @@ class SaleVoidAndReturnTests(TenantTestCase):
         movements = client.get(
             f"/api/v1/ventas/cash-movements/?cash_session={session_id}"
         )
-        devolucion = next(m for m in movements.data if m["concept"] == "DEVOLUCION")
+        devolucion = next(
+            m for m in movements.data["results"] if m["concept"] == "DEVOLUCION"
+        )
         self.assertEqual(devolucion["amount"], "20.0000")
 
     def test_cannot_return_more_than_sold(self):
@@ -2153,7 +2164,7 @@ class ReservationEndpointsTests(TenantTestCase):
 
         listing = client.get("/api/v1/ventas/reservations/?status=ACTIVE")
         self.assertEqual(listing.status_code, 200)
-        self.assertEqual(len(listing.data), 1)
+        self.assertEqual(len(listing.data["results"]), 1)
 
     def test_reservation_exceeding_stock_returns_409(self):
         client = self._client()

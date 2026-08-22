@@ -104,7 +104,7 @@ class InventoryCatalogEndpointsTests(TenantTestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 400)
-        self.assertIn("variants_input", response.data)
+        self.assertIn("variants_input", response.data["error"]["details"])
 
     def test_create_product_with_variant_matrix(self):
         settings = TenantSettings.objects.get(tenant=self.tenant)
@@ -204,7 +204,8 @@ class InventoryCatalogEndpointsTests(TenantTestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 403)
-        self.assertEqual(response.data["code"], "MODULE_DISABLED")
+        self.assertEqual(response.data["error"]["code"], "PERMISSION_DENIED")
+        self.assertEqual(response.data["error"]["details"]["code"], "MODULE_DISABLED")
 
     def test_multi_warehouse_flag_allows_second_warehouse(self):
         settings = TenantSettings.objects.get(tenant=self.tenant)
@@ -237,8 +238,9 @@ class InventoryCatalogEndpointsTests(TenantTestCase):
             "/api/v1/inventario/product-variants/?barcode=7501234567890"
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(response.data), 1)
-        self.assertEqual(response.data[0]["barcode"], "7501234567890")
+        results = response.data["results"]
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["barcode"], "7501234567890")
 
     def test_category_exposes_allowed_attributes_and_validates_primary(self):
         talla = Attribute.objects.create(name="Talla")
@@ -267,7 +269,7 @@ class InventoryCatalogEndpointsTests(TenantTestCase):
             format="json",
         )
         self.assertEqual(invalid.status_code, 400)
-        self.assertIn("primary_attribute", invalid.data)
+        self.assertIn("primary_attribute", invalid.data["error"]["details"])
 
     def test_create_product_persists_complete_validated_payload(self):
         talla = Attribute.objects.create(name="Talla")
@@ -332,7 +334,7 @@ class InventoryCatalogEndpointsTests(TenantTestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 400)
-        self.assertIn("variants_input", response.data)
+        self.assertIn("variants_input", response.data["error"]["details"])
         self.assertFalse(Product.objects.filter(name="Producto inválido").exists())
 
         outside_category = self._client_as(self.admin_user).post(
@@ -495,7 +497,8 @@ class PurchaseOrderEndpointsTests(TenantTestCase):
             "/api/v1/inventario/purchase-orders/"
         )
         self.assertEqual(response.status_code, 403)
-        self.assertEqual(response.data["code"], "MODULE_DISABLED")
+        self.assertEqual(response.data["error"]["code"], "PERMISSION_DENIED")
+        self.assertEqual(response.data["error"]["details"]["code"], "MODULE_DISABLED")
 
         settings.purchases_enabled = True
         settings.save(update_fields=["purchases_enabled"])
@@ -545,7 +548,7 @@ class PurchaseOrderEndpointsTests(TenantTestCase):
         stock_response = admin.get(
             f"/api/v1/inventario/stock/?variant={variant.id}&warehouse={self.warehouse.id}"
         )
-        self.assertEqual(stock_response.data[0]["quantity"], "5.000")
+        self.assertEqual(stock_response.data["results"][0]["quantity"], "5.000")
 
 
 class CatalogImportEndpointsTests(TenantTestCase):
@@ -715,15 +718,16 @@ class InventoryMovementOversellFilterTests(TenantTestCase):
             "/api/v1/inventario/inventory-movements/?oversell_only=true"
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(response.data), 1)
-        self.assertTrue(response.data[0]["oversell_flag"])
+        results = response.data["results"]
+        self.assertEqual(len(results), 1)
+        self.assertTrue(results[0]["oversell_flag"])
 
     def test_without_filter_returns_all_movements(self):
         response = self._client_as(self.admin_user).get(
             "/api/v1/inventario/inventory-movements/"
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(response.data), 2)
+        self.assertEqual(len(response.data["results"]), 2)
 
 
 class InventoryReportsEndpointsTests(TenantTestCase):
@@ -889,7 +893,8 @@ class StockTransferEndpointTests(TenantTestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 403)
-        self.assertEqual(response.data["code"], "MODULE_DISABLED")
+        self.assertEqual(response.data["error"]["code"], "PERMISSION_DENIED")
+        self.assertEqual(response.data["error"]["details"]["code"], "MODULE_DISABLED")
 
     def test_transfer_moves_stock_and_returns_both_movements(self):
         origin = Warehouse.objects.create(name="Principal")
@@ -1005,8 +1010,9 @@ class VolumePricingTierEndpointTests(TenantTestCase):
             f"/api/v1/inventario/volume-pricing-tiers/?variant={self.variant.id}"
         )
         self.assertEqual(listing.status_code, 200)
-        self.assertEqual(len(listing.data), 1)
-        self.assertEqual(listing.data[0]["min_quantity"], "12.000")
+        results = listing.data["results"]
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["min_quantity"], "12.000")
 
     def test_duplicate_min_quantity_for_same_variant_is_rejected(self):
         client = self._client()

@@ -77,7 +77,7 @@ class DashboardMetricsEndpointsTests(TenantTestCase):
         self.assertEqual(create.data["user"], self.user.id)
 
         listing = client.get("/api/v1/dashboard/widgets/")
-        self.assertEqual(len(listing.data), 1)
+        self.assertEqual(len(listing.data["results"]), 1)
 
 
 class DashboardConsumerTests(TenantTestCase):

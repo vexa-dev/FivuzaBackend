@@ -498,7 +498,8 @@ class EmployeeEndpointsTests(TenantTestCase):
 
         response = self._client_as(self.admin_user).get("/api/v1/usuarios/employees/")
         self.assertEqual(response.status_code, 403)
-        self.assertEqual(response.data["code"], "MODULE_DISABLED")
+        self.assertEqual(response.data["error"]["code"], "PERMISSION_DENIED")
+        self.assertEqual(response.data["error"]["details"]["code"], "MODULE_DISABLED")
 
     def test_seller_cannot_access_employees(self):
         response = self._client_as(self.seller_user).get("/api/v1/usuarios/employees/")
@@ -738,7 +739,7 @@ class UserWarehouseEndpointsTests(TenantTestCase):
 
         response = client.get("/api/v1/usuarios/user-warehouses/")
         self.assertEqual(response.status_code, 200)
-        warehouse_ids = {row["warehouse"] for row in response.data}
+        warehouse_ids = {row["warehouse"] for row in response.data["results"]}
         self.assertEqual(warehouse_ids, {self.warehouse_a.id})
 
 

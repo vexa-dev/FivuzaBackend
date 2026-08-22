@@ -165,7 +165,7 @@ class DataExportEndpointsTests(TenantTestCase):
 
         listing = client.get("/api/v1/usuarios/data-exports/")
         self.assertEqual(listing.status_code, 200)
-        self.assertEqual(len(listing.data), 1)
+        self.assertEqual(len(listing.data["results"]), 1)
 
     def test_seller_without_data_export_permission_is_rejected(self):
         client = self._client_as(self.seller_user)

@@ -1007,15 +1007,17 @@ class SubscriptionPaymentConfirmViewTests(APITestCase):
         response = self._client_as(self.billing_staff).get(
             f"/api/v1/core/subscription-payments/?subscription={self.subscription.id}"
         )
-        self.assertEqual(len(response.data), 1)
-        self.assertEqual(response.data[0]["id"], self.payment.id)
+        results = response.data["results"]
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["id"], self.payment.id)
 
     def test_subscriptions_filtered_by_tenant(self):
         response = self._client_as(self.billing_staff).get(
             f"/api/v1/core/subscriptions/?tenant={self.tenant.id}"
         )
-        self.assertEqual(len(response.data), 1)
-        self.assertEqual(response.data[0]["id"], self.subscription.id)
+        results = response.data["results"]
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["id"], self.subscription.id)
 
 
 class TenantSuspensionPaymentCycleTests(APITestCase):

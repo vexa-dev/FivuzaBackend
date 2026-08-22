@@ -115,14 +115,14 @@ class MultiTenantIsolationTests(TenantTestCase):
     def test_user_a_product_list_never_includes_tenant_b_products(self):
         client_a = self._login(self.domain.domain, self.user_a.email)
         response = client_a.get("/api/v1/inventario/products/")
-        names = [row["name"] for row in response.data]
+        names = [row["name"] for row in response.data["results"]]
         self.assertIn("Producto A", names)
         self.assertNotIn("Producto B", names)
 
     def test_user_b_product_list_never_includes_tenant_a_products(self):
         client_b = self._login(self.domain_b.domain, self.user_b.email)
         response = client_b.get("/api/v1/inventario/products/")
-        names = [row["name"] for row in response.data]
+        names = [row["name"] for row in response.data["results"]]
         self.assertIn("Producto B", names)
         self.assertNotIn("Producto A", names)
 
