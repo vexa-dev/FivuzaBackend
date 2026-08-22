@@ -25,7 +25,7 @@ from inventario.models import (
     VariantAttributeValue,
     Warehouse,
 )
-from usuarios.warehouse_access import WarehouseAccessDenied, WarehouseAccessService
+from core.warehouse_access import WarehouseAccessDenied, WarehouseAccessService
 
 _PRESIGNED_URL_TTL_SECONDS = 300
 _ALLOWED_IMAGE_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}

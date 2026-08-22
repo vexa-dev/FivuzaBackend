@@ -25,7 +25,7 @@ from usuarios.models import (
     UserPermission,
     UserWarehouse,
 )
-from usuarios.warehouse_access import WarehouseAccessService
+from core.warehouse_access import WarehouseAccessService
 
 
 def issue_tokens_for_tenant_user(user: User, schema_name: str) -> RefreshToken:

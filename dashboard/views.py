@@ -7,7 +7,7 @@ from core.openapi import SchemaAPIView
 from dashboard.models import DashboardWidget
 from dashboard.serializers import DashboardWidgetSerializer
 from dashboard.services import DashboardMetricsService
-from usuarios.warehouse_access import WarehouseAccessService
+from core.warehouse_access import WarehouseAccessService
 
 _DASHBOARD_PERMISSIONS = [IsAuthenticated, TenantNotSuspended, TenantNotCanceled]
 
