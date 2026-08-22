@@ -157,7 +157,7 @@ class TenantImpersonationTests(APITestCase):
         )
         response = tenant_client.get("/api/v1/inventario/categories/")
         self.assertEqual(response.status_code, 401)
-        self.assertIn("termino", str(response.data["detail"]))
+        self.assertIn("termino", str(response.data["error"]["message"]))
 
     def test_impersonated_user_can_end_own_session_from_erp(self):
         start = self._client_as_staff(self.super_admin).post(

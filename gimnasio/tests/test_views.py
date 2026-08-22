@@ -65,7 +65,8 @@ class MembershipEndpointsTests(TenantTestCase):
 
         response = self._client().get("/api/v1/gimnasio/memberships/")
         self.assertEqual(response.status_code, 403)
-        self.assertEqual(response.data["code"], "MODULE_DISABLED")
+        self.assertEqual(response.data["error"]["code"], "PERMISSION_DENIED")
+        self.assertEqual(response.data["error"]["details"]["code"], "MODULE_DISABLED")
 
     def test_create_and_list_membership_plan(self):
         client = self._client()
@@ -83,7 +84,7 @@ class MembershipEndpointsTests(TenantTestCase):
 
         listing = client.get("/api/v1/gimnasio/membership-plans/")
         self.assertEqual(listing.status_code, 200)
-        self.assertGreaterEqual(len(listing.data), 2)
+        self.assertGreaterEqual(len(listing.data["results"]), 2)
 
     def test_create_membership_computes_end_date(self):
         client = self._client()
@@ -172,4 +173,4 @@ class MembershipEndpointsTests(TenantTestCase):
             f"/api/v1/gimnasio/memberships/?customer={self.customer.id}&status=ACTIVE"
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(response.data), 1)
+        self.assertEqual(len(response.data["results"]), 1)

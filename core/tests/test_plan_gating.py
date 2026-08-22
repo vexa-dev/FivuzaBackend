@@ -79,7 +79,8 @@ class PlanBasedModuleGatingTests(TestCase):
         response = client.get("/api/v1/ventas/sales/")
 
         self.assertEqual(response.status_code, 403)
-        self.assertEqual(response.data["code"], "MODULE_DISABLED")
+        self.assertEqual(response.data["error"]["code"], "PERMISSION_DENIED")
+        self.assertEqual(response.data["error"]["details"]["code"], "MODULE_DISABLED")
 
     def test_plan_2_allows_sales_module(self):
         self._tenant_with_plan(
