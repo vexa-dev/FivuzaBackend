@@ -1,0 +1,21 @@
+# Nunca meter secretos ni historial en la imagen
+.env
+.env.*
+!.env.example
+.git
+.github
+
+# Artefactos locales
+__pycache__
+*.pyc
+.ruff_cache
+.pytest_cache
+celerybeat-schedule
+*.log
+
+# Herramientas del equipo
+.claude
+.agents
+skills-lock.json
+.venv
+venv

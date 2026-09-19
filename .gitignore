@@ -21,10 +21,13 @@ venv/
 ENV/
 env/
 
-# Docker
-.dockerignore
 
 # IDEs
 .vscode/
 .idea/
 *.swp
+
+# Herramientas locales de asistentes
+.claude/
+.agents/
+skills-lock.json
