@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+from django.db import connection, transaction
 from django.utils import timezone
 from django_tenants.utils import get_public_schema_name
 
@@ -247,8 +248,22 @@ class TenantProvisioningService:
 
         from django_tenants.utils import schema_context
 
-        with schema_context(tenant.schema_name):
+        with schema_context(tenant.schema_name), transaction.atomic():
+            TenantProvisioningService._lock_provisioning(tenant.schema_name)
             TenantProvisioningService._seed_default_roles()
+
+    @staticmethod
+    def _lock_provisioning(schema_name: str) -> None:
+        """Serializa la siembra de un mismo tenant. La tarea de Celery
+        (post_schema_sync) y otros llamadores (migraciones de datos,
+        seed_e2e) pueden sembrar a la vez; como Role.name no es unico,
+        dos get_or_create en paralelo duplicaban los roles por defecto.
+        El lock vive hasta el fin de la transaccion."""
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                [f"fivuza-provision:{schema_name}"],
+            )
 
     @staticmethod
     def _seed_default_roles() -> None:
@@ -286,7 +301,8 @@ class TenantProvisioningService:
 
         from django_tenants.utils import schema_context
 
-        with schema_context(tenant.schema_name):
+        with schema_context(tenant.schema_name), transaction.atomic():
+            TenantProvisioningService._lock_provisioning(tenant.schema_name)
             from inventario.models import Warehouse
             from ventas.models import CashRegister
 
