@@ -1,0 +1,18 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "Dockerfile",
+    "watchPatterns": ["**/*.py", "requirements.txt", "Dockerfile", "**/templates/**"]
+  },
+  "deploy": {
+    "preDeployCommand": [
+      "python manage.py migrate_schemas --shared && python manage.py migrate_schemas && python manage.py bootstrap_platform"
+    ],
+    "startCommand": "sh -c 'daphne -b 0.0.0.0 -p ${PORT:-8000} config.asgi:application'",
+    "healthcheckPath": "/healthz",
+    "healthcheckTimeout": 120,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 5
+  }
+}

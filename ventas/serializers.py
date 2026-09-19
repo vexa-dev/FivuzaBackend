@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from inventario.models import ProductVariant, Warehouse
@@ -47,6 +48,12 @@ class CashRegisterSerializer(serializers.ModelSerializer):
 
 
 class CashSessionSerializer(serializers.ModelSerializer):
+    # Esperado "a la fecha" de una caja abierta, con la misma formula del
+    # cierre real (apertura + ventas en efectivo + ingresos - egresos). El
+    # arqueo del frontend lo muestra como referencia antes de contar: antes
+    # lo estimaba en el navegador sin las ventas en efectivo.
+    expected_amount_so_far = serializers.SerializerMethodField()
+
     class Meta:
         model = CashSession
         fields = [
@@ -56,6 +63,7 @@ class CashSessionSerializer(serializers.ModelSerializer):
             "opening_amount",
             "opening_at",
             "expected_closing_amount",
+            "expected_amount_so_far",
             "counted_closing_amount",
             "difference",
             "status",
@@ -71,6 +79,15 @@ class CashSessionSerializer(serializers.ModelSerializer):
             "status",
             "closing_at",
         ]
+
+    @extend_schema_field(
+        serializers.DecimalField(max_digits=14, decimal_places=4, allow_null=True)
+    )
+    def get_expected_amount_so_far(self, session):
+        if session.status != "OPEN":
+            return None
+        expected = CashSessionService._calculate_expected_closing_amount(session)
+        return str(expected)
 
 
 class CashMovementSerializer(serializers.ModelSerializer):

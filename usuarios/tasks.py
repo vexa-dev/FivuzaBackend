@@ -13,14 +13,16 @@ puede quedar indefinidamente en un bucket.
 
 import logging
 
-import boto3
 from celery import shared_task
 from django.conf import settings
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
 from django.utils import timezone
 from django.utils.html import strip_tags
-from django_tenants.utils import get_public_schema_name, schema_context
+from django_tenants.utils import schema_context
+
+from core import storage
+from core.tenant_tasks import run_per_tenant
 
 logger = logging.getLogger(__name__)
 
@@ -67,10 +69,7 @@ def generate_data_export(*, export_id: int, schema_name: str) -> None:
                 format=export.format
             )
             key = f"tenant-exports/{schema_name}/{export.id}.{extension}"
-            client = boto3.client("s3", region_name=settings.AWS_S3_REGION)
-            client.put_object(
-                Bucket=settings.AWS_STORAGE_BUCKET_NAME, Key=key, Body=content
-            )
+            storage.put_object(key, content)
         except Exception as exc:
             export.status = "FAILED"
             export.error_message = str(exc)[:255]
@@ -97,11 +96,11 @@ def generate_data_export(*, export_id: int, schema_name: str) -> None:
 def expire_data_exports() -> None:
     """Tarea periodica (Sprint 33): borra de S3 los respaldos vencidos y
     marca la fila como EXPIRED, en todos los tenants."""
-    from core.models import Tenant
 
-    for tenant in Tenant.objects.exclude(schema_name=get_public_schema_name()):
-        with schema_context(tenant.schema_name):
-            _expire_data_exports_in_current_schema()
+    def _run(tenant):
+        _expire_data_exports_in_current_schema()
+
+    run_per_tenant("expire_data_exports", _run)
 
 
 def _expire_data_exports_in_current_schema() -> None:
@@ -113,7 +112,7 @@ def _expire_data_exports_in_current_schema() -> None:
     if not expired.exists():
         return
 
-    client = boto3.client("s3", region_name=settings.AWS_S3_REGION)
+    client = storage.get_s3_client()
     for export in expired:
         try:
             client.delete_object(

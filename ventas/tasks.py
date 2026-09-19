@@ -14,7 +14,9 @@ from django.conf import settings
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
 from django.utils.html import strip_tags
-from django_tenants.utils import get_tenant_model, schema_context
+from django_tenants.utils import schema_context
+
+from core.tenant_tasks import run_per_tenant
 
 logger = logging.getLogger(__name__)
 
@@ -68,13 +70,13 @@ def expire_overdue_reservations() -> None:
     alert_low_stock_variants (iterar todos los tenants con schema_context)."""
     from ventas.services import ReservationService
 
-    tenant_model = get_tenant_model()
-    for tenant in tenant_model.objects.exclude(schema_name="public"):
-        with schema_context(tenant.schema_name):
-            expired = ReservationService.expire_overdue_reservations()
-            if expired:
-                logger.info(
-                    "Reservas vencidas liberadas en %s: %s.",
-                    tenant.schema_name,
-                    expired,
-                )
+    def _run(tenant):
+        expired = ReservationService.expire_overdue_reservations()
+        if expired:
+            logger.info(
+                "Reservas vencidas liberadas en %s: %s.",
+                tenant.schema_name,
+                expired,
+            )
+
+    run_per_tenant("expire_overdue_reservations", _run)

@@ -2,14 +2,13 @@ import uuid
 from datetime import timedelta
 from decimal import Decimal
 
-import boto3
-from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import Q, Sum
 from django.template.loader import render_to_string
 from django.utils import timezone
 from rest_framework.exceptions import APIException, ValidationError
 
+from core import storage
 from core.warehouse_access import WarehouseAccessService
 from inventario.models import ProductVariant, Stock
 from inventario.services import StockService
@@ -158,11 +157,8 @@ class CashSessionService:
 
     @staticmethod
     def _calculate_expected_closing_amount(session: CashSession):
-        # Ventas al contado (SalePayment.method=CASH) todavia no se pueden
-        # crear -SaleService llega en un sprint posterior- pero la relacion
-        # Sale.cash_session ya existe en el modelo (BDD v5), asi que se
-        # incluye desde ya: el dia que el POS exista, el arqueo ya calcula
-        # bien sin tocar este metodo.
+        # Ventas en efectivo de la sesion. Una venta anulada no se resta
+        # aqui: void_sale() registra su propio egreso de caja.
         from ventas.models import SalePayment
 
         cash_sales = (
@@ -218,21 +214,13 @@ class CashMovementReceiptService:
         extension = content_type.split("/")[-1]
         key = f"cash-movement-receipts/{uuid.uuid4()}.{extension}"
 
-        client = boto3.client("s3", region_name=settings.AWS_S3_REGION)
-        upload_url = client.generate_presigned_url(
-            "put_object",
-            Params={
-                "Bucket": settings.AWS_STORAGE_BUCKET_NAME,
-                "Key": key,
-                "ContentType": content_type,
-            },
-            ExpiresIn=_PRESIGNED_URL_TTL_SECONDS,
+        upload_url = storage.presigned_upload_url(
+            key, content_type, _PRESIGNED_URL_TTL_SECONDS
         )
-        receipt_url = (
-            f"https://{settings.AWS_STORAGE_BUCKET_NAME}.s3."
-            f"{settings.AWS_S3_REGION}.amazonaws.com/{key}"
-        )
-        return {"upload_url": upload_url, "receipt_url": receipt_url}
+        return {
+            "upload_url": upload_url,
+            "receipt_url": storage.public_object_url(key),
+        }
 
 
 class PromotionService:

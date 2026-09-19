@@ -21,3 +21,84 @@ class SentryTenantTagMiddleware:
         if tenant is not None:
             sentry_sdk.set_tag("tenant", tenant.schema_name)
         return self.get_response(request)
+
+
+class SchemaRouteGuardMiddleware:
+    """Separa las rutas del panel interno (esquema public) de las del ERP
+    (esquemas de tenant) aunque compartan un solo URLconf -asi el OpenAPI
+    sigue describiendo toda la API en un solo schema.
+
+    - En el dominio public solo existen las rutas de plataforma: una ruta de
+      negocio (ej. /api/v1/inventario/...) ahi fallaba con 500 porque sus
+      tablas no existen en el esquema public.
+    - En el dominio de un tenant no se exponen el panel interno ni el admin
+      de Django (defensa en profundidad; ademas ya exigen IsPlatformStaff).
+
+    Responde 404 con el contrato de error estandar. Debe ir despues de
+    TenantMainMiddleware."""
+
+    _SHARED_PREFIXES = ("/api/v1/health/", "/api/v1/core/legal/", "/static/")
+    _PUBLIC_ONLY_PREFIXES = (
+        "/api/v1/core/",
+        "/api/v1/platform/",
+        "/api/schema",
+        "/api/docs",
+        "/api/redoc",
+        "/admin/",
+    )
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        from django.http import JsonResponse
+        from django_tenants.utils import get_public_schema_name
+
+        tenant = getattr(request, "tenant", None)
+        path = request.path
+        if tenant is None or path.startswith(self._SHARED_PREFIXES):
+            return self.get_response(request)
+
+        is_public = tenant.schema_name == get_public_schema_name()
+        is_platform_path = path.startswith(self._PUBLIC_ONLY_PREFIXES)
+        if is_public != is_platform_path:
+            return JsonResponse(
+                {
+                    "error": {
+                        "code": "NOT_FOUND",
+                        "message": "Recurso no encontrado.",
+                        "details": {},
+                    }
+                },
+                status=404,
+            )
+        return self.get_response(request)
+
+
+class InfraHealthCheckMiddleware:
+    """GET /healthz para el healthcheck de la plataforma de despliegue
+    (Railway). Va PRIMERO en MIDDLEWARE: responde antes de
+    TenantMainMiddleware, porque el healthcheck llega con un Host interno
+    (ej. healthcheck.railway.app) que no es el dominio de ningun tenant y
+    fallaria con 404/DisallowedHost. Reutiliza los mismos chequeos reales de
+    PostgreSQL y Redis que /api/v1/health/."""
+
+    PATH = "/healthz"
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if request.path != self.PATH or request.method != "GET":
+            return self.get_response(request)
+
+        from django.http import JsonResponse
+
+        from core.views import _check_database, _check_redis
+
+        checks = {"database": _check_database(), "redis": _check_redis()}
+        healthy = all(checks.values())
+        return JsonResponse(
+            {"status": "healthy" if healthy else "unhealthy", "checks": checks},
+            status=200 if healthy else 503,
+        )
