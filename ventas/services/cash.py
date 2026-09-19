@@ -1,0 +1,207 @@
+import uuid
+
+from django.db.models import Sum
+from django.utils import timezone
+from rest_framework.exceptions import APIException
+
+from core import storage
+from ventas.models import (
+    CashMovement,
+    CashRegister,
+    CashSession,
+    SalePayment,
+)
+
+
+# Comprobantes de movimientos de caja: mismo patron de URL prefirmada de S3
+# que inventario.services.MediaService, pero self-contenido aqui -un
+# CashMovement no existe todavia cuando se pide la URL (a diferencia de una
+# ProductVariant, que ya tiene id antes de subir su imagen), asi que la key
+# se genera con un uuid propio en vez de depender de un pk existente.
+_PRESIGNED_URL_TTL_SECONDS = 300
+
+
+_ALLOWED_RECEIPT_CONTENT_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "application/pdf",
+}
+
+
+class CashSessionAlreadyOpenError(APIException):
+    status_code = 409
+    default_code = "CASH_SESSION_ALREADY_OPEN"
+    default_detail = {
+        "error": {
+            "code": "CASH_SESSION_ALREADY_OPEN",
+            "message": "Esta caja ya tiene una sesion abierta.",
+        }
+    }
+
+
+class CashSessionNotOpenError(APIException):
+    status_code = 409
+    default_code = "CASH_SESSION_NOT_OPEN"
+    default_detail = {
+        "error": {
+            "code": "CASH_SESSION_NOT_OPEN",
+            "message": "Esta sesion de caja ya esta cerrada.",
+        }
+    }
+
+
+class CashSessionService:
+    """Apertura/cierre de caja con arqueo (Especificacion de API §4.4;
+    Esquema Backend §7.2). Una caja fisica (CashRegister) no puede tener dos
+    sesiones abiertas a la vez -es la regla que hace que "que caja esta
+    usando cada cajero ahora mismo" sea una pregunta con una sola respuesta."""
+
+    @staticmethod
+    def open_session(
+        *, cash_register: CashRegister, user, opening_amount
+    ) -> CashSession:
+        if CashSession.objects.filter(
+            cash_register=cash_register, status="OPEN"
+        ).exists():
+            raise CashSessionAlreadyOpenError()
+
+        return CashSession.objects.create(
+            cash_register=cash_register,
+            user=user,
+            opening_amount=opening_amount,
+            opening_at=timezone.now(),
+            status="OPEN",
+        )
+
+    @staticmethod
+    def close_session(
+        *,
+        session: CashSession,
+        counted_closing_amount,
+        user,
+        tenant=None,
+        notes: str | None = None,
+    ) -> CashSession:
+        if session.status != "OPEN":
+            raise CashSessionNotOpenError()
+
+        expected = CashSessionService._calculate_expected_closing_amount(session)
+        session.expected_closing_amount = expected
+        session.counted_closing_amount = counted_closing_amount
+        session.difference = counted_closing_amount - expected
+        session.status = "CLOSED"
+        session.closing_at = timezone.now()
+        if notes:
+            session.notes = notes
+        session.save(
+            update_fields=[
+                "expected_closing_amount",
+                "counted_closing_amount",
+                "difference",
+                "status",
+                "closing_at",
+                "notes",
+            ]
+        )
+
+        from usuarios.services import AuditLogService
+
+        AuditLogService.log_action(
+            user=user,
+            action="CASH_SESSION_CLOSED",
+            entity="CashSession",
+            entity_id=session.id,
+            details={
+                "expected_closing_amount": str(expected),
+                "counted_closing_amount": str(counted_closing_amount),
+                "difference": str(session.difference),
+            },
+        )
+
+        if tenant is not None:
+            CashSessionService._maybe_alert_on_difference(
+                session=session, tenant=tenant
+            )
+
+        return session
+
+    @staticmethod
+    def _maybe_alert_on_difference(*, session: CashSession, tenant) -> None:
+        from core.models import TenantSettings
+
+        threshold = TenantSettings.objects.get(
+            tenant=tenant
+        ).cash_difference_alert_threshold
+        if abs(session.difference) <= threshold:
+            return
+
+        from ventas.tasks import send_cash_difference_alert
+
+        send_cash_difference_alert.delay(tenant.schema_name, session.id)
+
+    @staticmethod
+    def _calculate_expected_closing_amount(session: CashSession):
+        # Ventas en efectivo de la sesion. Una venta anulada no se resta
+        # aqui: void_sale() registra su propio egreso de caja.
+
+        cash_sales = (
+            SalePayment.objects.filter(
+                method="CASH", sale__cash_session=session
+            ).aggregate(total=Sum("amount"))["total"]
+            or 0
+        )
+        movements_in = (
+            session.movements.filter(type="IN").aggregate(total=Sum("amount"))["total"]
+            or 0
+        )
+        movements_out = (
+            session.movements.filter(type="OUT").aggregate(total=Sum("amount"))["total"]
+            or 0
+        )
+        return session.opening_amount + cash_sales + movements_in - movements_out
+
+    @staticmethod
+    def add_movement(
+        *,
+        session: CashSession,
+        type: str,
+        concept: str,
+        amount,
+        user,
+        reason: str = "",
+        receipt_url: str | None = None,
+    ) -> CashMovement:
+        if session.status != "OPEN":
+            raise CashSessionNotOpenError()
+
+        return CashMovement.objects.create(
+            cash_session=session,
+            type=type,
+            concept=concept,
+            amount=amount,
+            user=user,
+            reason=reason,
+            receipt_url=receipt_url,
+        )
+
+
+class CashMovementReceiptService:
+    """URLs prefirmadas de S3 para el comprobante de un movimiento de caja
+    (Convenciones §5.1) -mismo patron que inventario.services.MediaService."""
+
+    @staticmethod
+    def build_receipt_upload_url(content_type: str) -> dict:
+        if content_type not in _ALLOWED_RECEIPT_CONTENT_TYPES:
+            raise ValueError(f"Tipo de archivo no permitido: {content_type}")
+
+        extension = content_type.split("/")[-1]
+        key = f"cash-movement-receipts/{uuid.uuid4()}.{extension}"
+
+        upload_url = storage.presigned_upload_url(
+            key, content_type, _PRESIGNED_URL_TTL_SECONDS
+        )
+        return {
+            "upload_url": upload_url,
+            "receipt_url": storage.public_object_url(key),
+        }

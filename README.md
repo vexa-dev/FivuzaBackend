@@ -152,6 +152,9 @@ docker compose exec web python manage.py makemigrations
 # Sembrar/actualizar los planes comerciales
 docker compose exec web python manage.py seed_plans
 
+# Recrear el tenant de las pruebas E2E (e2e.localhost; solo con DEBUG=True)
+docker compose exec web python manage.py seed_e2e
+
 # Shell y logs
 docker compose exec web python manage.py shell
 docker compose logs web -f
