@@ -145,6 +145,11 @@ class CashSessionEndpointsTests(TenantTestCase):
             format="json",
         )
 
+        # Antes de cerrar, la caja abierta ya informa el esperado a la fecha
+        # (misma formula que el cierre), para el arqueo del frontend.
+        detail = client.get(f"/api/v1/ventas/cash-sessions/{session_id}/")
+        self.assertEqual(detail.data["expected_amount_so_far"], "55.0000")
+
         response = client.post(
             f"/api/v1/ventas/cash-sessions/{session_id}/close/",
             {"counted_closing_amount": "54.00"},
@@ -152,6 +157,7 @@ class CashSessionEndpointsTests(TenantTestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["status"], "CLOSED")
+        self.assertIsNone(response.data["expected_amount_so_far"])
         # 50 + 10 - 5 = 55 esperado; contado 54 -> diferencia -1
         self.assertEqual(response.data["expected_closing_amount"], "55.0000")
         self.assertEqual(response.data["difference"], "-1.0000")

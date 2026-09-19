@@ -158,11 +158,8 @@ class CashSessionService:
 
     @staticmethod
     def _calculate_expected_closing_amount(session: CashSession):
-        # Ventas al contado (SalePayment.method=CASH) todavia no se pueden
-        # crear -SaleService llega en un sprint posterior- pero la relacion
-        # Sale.cash_session ya existe en el modelo (BDD v5), asi que se
-        # incluye desde ya: el dia que el POS exista, el arqueo ya calcula
-        # bien sin tocar este metodo.
+        # Ventas en efectivo de la sesion. Una venta anulada no se resta
+        # aqui: void_sale() registra su propio egreso de caja.
         from ventas.models import SalePayment
 
         cash_sales = (
