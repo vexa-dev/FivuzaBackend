@@ -1,6 +1,7 @@
 from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVectorField
 from django.db import models
+from django.utils import timezone
 
 from inventario.models import Category, ProductVariant, Warehouse
 from usuarios.models import User
@@ -230,6 +231,10 @@ class Sale(models.Model):
         ],
     )
     created_at = models.DateTimeField(auto_now_add=True)
+    # Momento real de la venta. Coincide con created_at en una venta online,
+    # pero en una venta hecha sin conexion es la hora del dispositivo POS, no
+    # la de sincronizacion -es la fecha que usan reportes, dashboard y ticket.
+    occurred_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
         db_table = "sales"
@@ -241,6 +246,9 @@ class Sale(models.Model):
                 fields=["status", "created_at"], name="ix_sales_status_created"
             ),
             models.Index(fields=["payment_status"], name="ix_sales_payment_status"),
+            models.Index(
+                fields=["status", "occurred_at"], name="ix_sales_status_occurred"
+            ),
         ]
         constraints = [
             models.CheckConstraint(

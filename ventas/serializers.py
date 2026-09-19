@@ -312,6 +312,7 @@ class SaleSerializer(serializers.ModelSerializer):
             "details",
             "payments",
             "created_at",
+            "occurred_at",
         ]
 
 
@@ -380,23 +381,22 @@ class SaleSyncItemSerializer(serializers.Serializer):
     """Una venta dentro del lote de /ventas/sales/sync/ (Sprint 20). A
     diferencia de SaleCreateSerializer, client_side_uuid es obligatorio -es
     la clave de deduplicacion, sin el no hay forma de saber si esta venta
-    ya se sincronizo en un intento anterior."""
+    ya se sincronizo en un intento anterior.
+
+    customer_id/cash_session_id son enteros simples, no
+    PrimaryKeyRelatedField: si uno no existe (o el usuario no tiene acceso
+    al almacen de la caja), solo esa venta debe quedar FAILED -validarlo
+    aqui rechazaba el lote completo con 400 y trababa la cola offline. La
+    resolucion vive en SaleSyncService.sync_batch()."""
 
     client_side_uuid = serializers.CharField()
-    customer_id = serializers.PrimaryKeyRelatedField(
-        source="customer", queryset=Customer.objects.all()
-    )
-    cash_session_id = serializers.PrimaryKeyRelatedField(
-        source="cash_session", queryset=CashSession.objects.all()
-    )
+    customer_id = serializers.IntegerField()
+    cash_session_id = serializers.IntegerField()
+    # Hora del dispositivo POS al momento de vender (opcional para clientes
+    # anteriores a este campo: si falta, se usa la hora de sincronizacion).
+    occurred_at = serializers.DateTimeField(required=False)
     lines = SaleLineInputSerializer(many=True)
     payments = SalePaymentInputSerializer(many=True)
-
-    def validate_cash_session_id(self, session):
-        WarehouseAccessService.require_warehouse(
-            self.context["request"].user, session.cash_register.warehouse_id
-        )
-        return session
 
     def validate_lines(self, value):
         if not value:
@@ -411,16 +411,22 @@ class SaleSyncItemSerializer(serializers.Serializer):
 
 class SaleSyncSerializer(serializers.Serializer):
     """No es un ModelSerializer -delega toda la validacion de negocio en
-    SaleSyncService.sync_batch(). La validacion de forma (client_side_uuid
-    presente, customer/cash_session existen, lines/payments no vacios) si
-    la hace DRF antes de llegar al servicio, mismo criterio que
-    SaleCreateSerializer."""
+    SaleSyncService.sync_batch(). DRF solo valida la forma (client_side_uuid
+    presente, lines/payments no vacios, tamano del lote); la existencia de
+    cliente/caja y el acceso al almacen se resuelven por venta en el
+    servicio."""
+
+    MAX_BATCH_SIZE = 500
 
     sales = SaleSyncItemSerializer(many=True)
 
     def validate_sales(self, value):
         if not value:
             raise serializers.ValidationError("El lote no puede venir vacio.")
+        if len(value) > self.MAX_BATCH_SIZE:
+            raise serializers.ValidationError(
+                f"El lote admite como maximo {self.MAX_BATCH_SIZE} ventas."
+            )
         return value
 
     def create(self, validated_data):

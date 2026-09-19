@@ -2,6 +2,7 @@
 # de gimnasio (Sprint 31, Ficha de Producto §5.1).
 from datetime import date, timedelta
 
+from django.utils import timezone
 from django.core.cache import cache
 from django_tenants.test.cases import TenantTestCase
 from rest_framework.test import APIClient
@@ -81,7 +82,7 @@ class AccessAndReportsEndpointsTests(TenantTestCase):
         membership = MembershipService.create_membership(
             customer=self.customer,
             plan=self.plan,
-            start_date=date.today(),
+            start_date=timezone.localdate(),
             user=self.admin_user,
         )
         response = client.get(
@@ -95,7 +96,7 @@ class AccessAndReportsEndpointsTests(TenantTestCase):
         membership = MembershipService.create_membership(
             customer=self.customer,
             plan=self.plan,
-            start_date=date.today(),
+            start_date=timezone.localdate(),
             user=self.admin_user,
         )
         MembershipService.freeze_membership(membership=membership, user=self.admin_user)
@@ -111,7 +112,7 @@ class AccessAndReportsEndpointsTests(TenantTestCase):
         membership = MembershipService.create_membership(
             customer=self.customer,
             plan=self.plan,
-            start_date=date.today(),
+            start_date=timezone.localdate(),
             user=self.admin_user,
         )
         response = client.get(f"/api/v1/gimnasio/memberships/{membership.id}/qr/")
@@ -123,7 +124,7 @@ class AccessAndReportsEndpointsTests(TenantTestCase):
         membership = MembershipService.create_membership(
             customer=self.customer,
             plan=self.plan,
-            start_date=date.today(),
+            start_date=timezone.localdate(),
             user=self.admin_user,
         )
         token = AccessCheckService.qr_token(membership)
@@ -139,7 +140,7 @@ class AccessAndReportsEndpointsTests(TenantTestCase):
         membership = MembershipService.create_membership(
             customer=self.customer,
             plan=self.plan,
-            start_date=date.today(),
+            start_date=timezone.localdate(),
             user=self.admin_user,
         )
         response = client.post(
@@ -162,10 +163,10 @@ class AccessAndReportsEndpointsTests(TenantTestCase):
         membership = MembershipService.create_membership(
             customer=self.customer,
             plan=self.plan,
-            start_date=date.today(),
+            start_date=timezone.localdate(),
             user=self.admin_user,
         )
-        membership.end_date = date.today() - timedelta(days=1)
+        membership.end_date = timezone.localdate() - timedelta(days=1)
         membership.save(update_fields=["end_date"])
         response = client.post(
             "/api/v1/gimnasio/check-in/",
@@ -214,7 +215,7 @@ class AccessAndReportsEndpointsTests(TenantTestCase):
         MembershipService.create_membership(
             customer=self.customer,
             plan=self.plan,
-            start_date=date.today() - timedelta(days=25),
+            start_date=timezone.localdate() - timedelta(days=25),
             user=self.admin_user,
         )
         response = client.get("/api/v1/gimnasio/reports/memberships-expiring/?days=7")
@@ -227,7 +228,7 @@ class AccessAndReportsEndpointsTests(TenantTestCase):
         membership = MembershipService.create_membership(
             customer=self.customer,
             plan=self.plan,
-            start_date=date.today(),
+            start_date=timezone.localdate(),
             user=self.admin_user,
         )
         MembershipService.renew_membership(
@@ -238,7 +239,7 @@ class AccessAndReportsEndpointsTests(TenantTestCase):
         )
         response = client.get(
             f"/api/v1/gimnasio/reports/revenue-by-plan/"
-            f"?date_from={date.today().isoformat()}&date_to={date.today().isoformat()}"
+            f"?date_from={timezone.localdate().isoformat()}&date_to={timezone.localdate().isoformat()}"
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data), 1)

@@ -419,7 +419,7 @@ class SaleViewSet(
     # extra propias.
     queryset = (
         Sale.objects.all()
-        .order_by("-created_at")
+        .order_by("-occurred_at", "-id")
         .prefetch_related("details", "payments")
     )
     serializer_class = SaleSerializer
@@ -452,10 +452,10 @@ class SaleViewSet(
             queryset = queryset.filter(cash_session__cash_register_id=cash_register_id)
         date_from = params.get("date_from")
         if date_from:
-            queryset = queryset.filter(created_at__date__gte=date_from)
+            queryset = queryset.filter(occurred_at__date__gte=date_from)
         date_to = params.get("date_to")
         if date_to:
-            queryset = queryset.filter(created_at__date__lte=date_to)
+            queryset = queryset.filter(occurred_at__date__lte=date_to)
         return queryset
 
     def create(self, request, *args, **kwargs):
@@ -727,8 +727,8 @@ class SalesReportView(SchemaAPIView):
 
         queryset = Sale.objects.select_related("customer", "user").filter(
             status="COMPLETED",
-            created_at__date__gte=date_from,
-            created_at__date__lte=date_to,
+            occurred_at__date__gte=date_from,
+            occurred_at__date__lte=date_to,
         )
         queryset = WarehouseAccessService.scope_queryset(queryset, request.user)
         warehouse_id = request.query_params.get("warehouse")
@@ -739,7 +739,7 @@ class SalesReportView(SchemaAPIView):
         rows = [
             {
                 "invoice_number": sale.invoice_number,
-                "date": sale.created_at.date().isoformat(),
+                "date": timezone.localdate(sale.occurred_at).isoformat(),
                 "seller": sale.user.email,
                 "customer": sale.customer.name,
                 "subtotal": str(sale.subtotal),
@@ -747,7 +747,7 @@ class SalesReportView(SchemaAPIView):
                 "total": str(sale.total),
                 "payment_status": sale.payment_status,
             }
-            for sale in queryset.order_by("created_at")
+            for sale in queryset.order_by("occurred_at", "id")
         ]
 
         export_format = request.query_params.get("export")

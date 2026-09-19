@@ -5,12 +5,13 @@ y audit_logs, y la alerta periódica de variantes por debajo de su min_stock.
 """
 
 import logging
-from datetime import date, timedelta
+from datetime import timedelta
 
 from celery import shared_task
 from django_tenants.utils import get_tenant_model, schema_context
 
 from core.partitioning import ensure_monthly_partition
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,9 @@ def create_next_month_partitions() -> None:
     siguiente para inventory_movements y audit_logs en todos los tenants,
     para que el 1ro de cada mes ya exista una partición donde escribir.
     Se corre a fin de mes, con margen, no el mismo día 1 (TRD §5.4)."""
-    next_month = (date.today().replace(day=28) + timedelta(days=4)).replace(day=1)
+    next_month = (timezone.localdate().replace(day=28) + timedelta(days=4)).replace(
+        day=1
+    )
 
     tenant_model = get_tenant_model()
     for tenant in tenant_model.objects.exclude(schema_name="public"):

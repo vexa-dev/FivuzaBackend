@@ -1,7 +1,7 @@
 # Pruebas de endpoints: permisos (HAS_GYM_MODULE + GYM_MANAGE), CRUD y
 # acciones de ciclo de vida de una membresia.
-from datetime import date
 
+from django.utils import timezone
 from django.core.cache import cache
 from django_tenants.test.cases import TenantTestCase
 from rest_framework.test import APIClient
@@ -108,7 +108,7 @@ class MembershipEndpointsTests(TenantTestCase):
             {
                 "customer_id": self.customer.id,
                 "plan_id": self.plan.id,
-                "start_date": date.today().isoformat(),
+                "start_date": timezone.localdate().isoformat(),
             },
             format="json",
         )
@@ -147,7 +147,7 @@ class MembershipEndpointsTests(TenantTestCase):
             {
                 "customer_id": self.customer.id,
                 "plan_id": self.plan.id,
-                "start_date": date.today().isoformat(),
+                "start_date": timezone.localdate().isoformat(),
             },
             format="json",
         )
@@ -165,7 +165,7 @@ class MembershipEndpointsTests(TenantTestCase):
             {
                 "customer_id": self.customer.id,
                 "plan_id": self.plan.id,
-                "start_date": date.today().isoformat(),
+                "start_date": timezone.localdate().isoformat(),
             },
             format="json",
         )

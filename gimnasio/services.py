@@ -7,6 +7,7 @@ from django.db import transaction
 from rest_framework.exceptions import APIException
 
 from gimnasio.models import ClassBooking, Membership, MembershipGroup, MembershipPayment
+from django.utils import timezone
 
 
 def _add_months(base: date, months: int) -> date:
@@ -103,7 +104,9 @@ class MembershipService:
         # end_date (no se "pierde" el tiempo que le queda); si ya vencio,
         # se suma desde hoy.
         base = (
-            membership.end_date if membership.end_date >= date.today() else date.today()
+            membership.end_date
+            if membership.end_date >= timezone.localdate()
+            else timezone.localdate()
         )
         membership.end_date = _add_period(base, membership.plan.periodicity)
         membership.status = "ACTIVE"
@@ -123,7 +126,7 @@ class MembershipService:
         if membership.status != "ACTIVE":
             raise MembershipNotActiveError()
         membership.status = "FROZEN"
-        membership.frozen_since = date.today()
+        membership.frozen_since = timezone.localdate()
         membership.save(update_fields=["status", "frozen_since"])
         return membership
 
@@ -131,7 +134,7 @@ class MembershipService:
     def unfreeze_membership(*, membership: Membership, user) -> Membership:
         if membership.status != "FROZEN":
             raise MembershipNotFrozenError()
-        frozen_days = (date.today() - membership.frozen_since).days
+        frozen_days = (timezone.localdate() - membership.frozen_since).days
         membership.end_date = membership.end_date + timedelta(days=frozen_days)
         membership.status = "ACTIVE"
         membership.frozen_since = None
@@ -151,14 +154,14 @@ class MembershipService:
         """Usado por la tarea periodica de Celery (gimnasio.tasks) -una
         membresia FROZEN nunca vence mientras esta congelada, solo se
         filtran las ACTIVE."""
-        at = at or date.today()
+        at = at or timezone.localdate()
         return Membership.objects.filter(status="ACTIVE", end_date__lt=at).update(
             status="EXPIRED"
         )
 
     @staticmethod
     def get_expiring_soon(*, days: int = 7, at: date | None = None):
-        at = at or date.today()
+        at = at or timezone.localdate()
         threshold = at + timedelta(days=days)
         return (
             Membership.objects.filter(
@@ -306,7 +309,7 @@ class AccessCheckService:
 
     @staticmethod
     def check_access(membership: Membership, *, at: date | None = None) -> dict:
-        at = at or date.today()
+        at = at or timezone.localdate()
         if membership.status == "ACTIVE" and membership.end_date >= at:
             return {"allowed": True, "reason": None}
         if membership.status == "ACTIVE" and membership.end_date < at:

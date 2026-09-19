@@ -1,7 +1,8 @@
 # Pruebas de AccessCheckService: acceso permitido/denegado segun estado
 # de la membresia, y la credencial QR (Sprint 31, Ficha de Producto §5.1).
-from datetime import date, timedelta
+from datetime import timedelta
 
+from django.utils import timezone
 from django_tenants.test.cases import TenantTestCase
 
 from core.models import TenantSettings
@@ -45,7 +46,7 @@ class AccessCheckServiceTests(TenantTestCase):
         membership = MembershipService.create_membership(
             customer=self.customer,
             plan=self.plan,
-            start_date=date.today(),
+            start_date=timezone.localdate(),
             user=self.user,
         )
         for field, value in overrides.items():
@@ -60,7 +61,7 @@ class AccessCheckServiceTests(TenantTestCase):
         self.assertEqual(result, {"allowed": True, "reason": None})
 
     def test_active_membership_past_end_date_is_denied_as_expired(self):
-        membership = self._membership(end_date=date.today() - timedelta(days=1))
+        membership = self._membership(end_date=timezone.localdate() - timedelta(days=1))
         result = AccessCheckService.check_access(membership)
         self.assertEqual(result, {"allowed": False, "reason": "MEMBERSHIP_EXPIRED"})
 

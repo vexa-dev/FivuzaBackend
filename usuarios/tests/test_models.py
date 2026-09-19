@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta
 from datetime import timezone as dt_timezone
 from decimal import Decimal
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from django.core import mail
 from django.core.exceptions import ValidationError
@@ -415,8 +416,41 @@ class AttendanceServiceTests(TenantTestCase):
         )
 
     def _monday(self, hour, minute):
-        # 2026-08-03 es lunes -fecha arbitraria, solo importa el dia de la semana.
-        return datetime(2026, 8, 3, hour, minute, tzinfo=dt_timezone.utc)
+        # 2026-08-03 es lunes -fecha arbitraria, solo importa el dia de la
+        # semana. Hora local del negocio (TIME_ZONE), igual que start_time.
+        return datetime(2026, 8, 3, hour, minute, tzinfo=ZoneInfo("America/Lima"))
+
+    def test_clock_in_compares_in_local_time_not_utc(self):
+        # 07:55 en Lima son 12:55 UTC: comparar en UTC contra un horario que
+        # empieza a las 08:00 lo marcaba LATE.
+        EmployeeSchedule.objects.create(
+            employee=self.employee,
+            day_of_week="MONDAY",
+            start_time="08:00",
+            end_time="16:00",
+        )
+        utc_now = self._monday(7, 55).astimezone(dt_timezone.utc)
+        with patch("usuarios.services.timezone.now", return_value=utc_now):
+            attendance = AttendanceService.clock_in(
+                employee=self.employee, warehouse=self.warehouse, user=self.user
+            )
+        self.assertEqual(attendance.status, "ON_TIME")
+
+    def test_night_clock_in_uses_local_weekday(self):
+        # Lunes 20:30 en Lima ya es martes 01:30 UTC: debe usarse el horario
+        # del lunes, no el del martes.
+        EmployeeSchedule.objects.create(
+            employee=self.employee,
+            day_of_week="MONDAY",
+            start_time="20:00",
+            end_time="23:59",
+        )
+        utc_now = self._monday(20, 30).astimezone(dt_timezone.utc)
+        with patch("usuarios.services.timezone.now", return_value=utc_now):
+            attendance = AttendanceService.clock_in(
+                employee=self.employee, warehouse=self.warehouse, user=self.user
+            )
+        self.assertEqual(attendance.status, "LATE")
 
     def test_clock_in_on_time_within_schedule(self):
         EmployeeSchedule.objects.create(
@@ -483,7 +517,7 @@ class AttendanceServiceTests(TenantTestCase):
         # Entra 22:00 lunes, sale 06:00 martes -turno nocturno que cruza
         # medianoche (Sprint 22, Definicion de Hecho).
         check_in_at = self._monday(22, 0)
-        check_out_at = datetime(2026, 8, 4, 6, 0, tzinfo=dt_timezone.utc)
+        check_out_at = datetime(2026, 8, 4, 6, 0, tzinfo=ZoneInfo("America/Lima"))
         with patch("usuarios.services.timezone.now", return_value=check_in_at):
             attendance = AttendanceService.clock_in(
                 employee=self.employee, warehouse=self.warehouse, user=self.user

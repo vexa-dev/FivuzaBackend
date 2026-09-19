@@ -192,7 +192,7 @@ class DashboardMetricsService:
         from ventas.models import Sale
 
         queryset = Sale.objects.filter(
-            status="COMPLETED", created_at__date=timezone.localdate()
+            status="COMPLETED", occurred_at__date=timezone.localdate()
         )
         if warehouse_id:
             queryset = queryset.filter(warehouse_id=warehouse_id)
@@ -286,8 +286,8 @@ class DashboardMetricsService:
 
         queryset = SaleDetail.objects.filter(
             sale__status="COMPLETED",
-            sale__created_at__date__gte=date_from,
-            sale__created_at__date__lte=date_to,
+            sale__occurred_at__date__gte=date_from,
+            sale__occurred_at__date__lte=date_to,
         )
         if warehouse_ids is not None:
             queryset = queryset.filter(sale__warehouse_id__in=warehouse_ids)
@@ -321,8 +321,8 @@ class DashboardMetricsService:
 
         details = SaleDetail.objects.filter(
             sale__status="COMPLETED",
-            sale__created_at__date__gte=date_from,
-            sale__created_at__date__lte=date_to,
+            sale__occurred_at__date__gte=date_from,
+            sale__occurred_at__date__lte=date_to,
         ).values("variant_id", "quantity", "subtotal")
         if warehouse_ids is not None:
             details = details.filter(sale__warehouse_id__in=warehouse_ids)
@@ -371,8 +371,8 @@ class DashboardMetricsService:
 
         queryset = SalePayment.objects.filter(
             sale__status="COMPLETED",
-            sale__created_at__date__gte=date_from,
-            sale__created_at__date__lte=date_to,
+            sale__occurred_at__date__gte=date_from,
+            sale__occurred_at__date__lte=date_to,
         )
         if warehouse_ids is not None:
             queryset = queryset.filter(sale__warehouse_id__in=warehouse_ids)
