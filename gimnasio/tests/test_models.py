@@ -1,6 +1,7 @@
 # Pruebas de MembershipService: ciclo de vida completo de una membresia.
 from datetime import date, timedelta
 
+from django.utils import timezone
 from django_tenants.test.cases import TenantTestCase
 
 from core.models import TenantSettings
@@ -103,7 +104,10 @@ class MembershipServiceTests(TenantTestCase):
     def test_renew_membership_with_payment_records_it(self):
         plan = self._create_plan(periodicity="MONTHLY")
         membership = MembershipService.create_membership(
-            customer=self.customer, plan=plan, start_date=date.today(), user=self.user
+            customer=self.customer,
+            plan=plan,
+            start_date=timezone.localdate(),
+            user=self.user,
         )
         MembershipService.renew_membership(
             membership=membership,
@@ -117,7 +121,10 @@ class MembershipServiceTests(TenantTestCase):
     def test_renew_cancelled_membership_raises(self):
         plan = self._create_plan()
         membership = MembershipService.create_membership(
-            customer=self.customer, plan=plan, start_date=date.today(), user=self.user
+            customer=self.customer,
+            plan=plan,
+            start_date=timezone.localdate(),
+            user=self.user,
         )
         MembershipService.cancel_membership(membership=membership, user=self.user)
         with self.assertRaises(MembershipNotRenewableError):
@@ -126,7 +133,10 @@ class MembershipServiceTests(TenantTestCase):
     def test_freeze_then_unfreeze_extends_end_date_by_frozen_days(self):
         plan = self._create_plan(periodicity="MONTHLY")
         membership = MembershipService.create_membership(
-            customer=self.customer, plan=plan, start_date=date.today(), user=self.user
+            customer=self.customer,
+            plan=plan,
+            start_date=timezone.localdate(),
+            user=self.user,
         )
         original_end = membership.end_date
 
@@ -137,7 +147,7 @@ class MembershipServiceTests(TenantTestCase):
 
         # Simula que la pausa duro 10 dias, retrocediendo frozen_since a mano
         # (en un test real no se puede avanzar el reloj del sistema).
-        membership.frozen_since = date.today() - timedelta(days=10)
+        membership.frozen_since = timezone.localdate() - timedelta(days=10)
         membership.save(update_fields=["frozen_since"])
 
         membership = MembershipService.unfreeze_membership(
@@ -150,7 +160,10 @@ class MembershipServiceTests(TenantTestCase):
     def test_freeze_non_active_membership_raises(self):
         plan = self._create_plan()
         membership = MembershipService.create_membership(
-            customer=self.customer, plan=plan, start_date=date.today(), user=self.user
+            customer=self.customer,
+            plan=plan,
+            start_date=timezone.localdate(),
+            user=self.user,
         )
         MembershipService.cancel_membership(membership=membership, user=self.user)
         with self.assertRaises(MembershipNotActiveError):
@@ -159,7 +172,10 @@ class MembershipServiceTests(TenantTestCase):
     def test_unfreeze_non_frozen_membership_raises(self):
         plan = self._create_plan()
         membership = MembershipService.create_membership(
-            customer=self.customer, plan=plan, start_date=date.today(), user=self.user
+            customer=self.customer,
+            plan=plan,
+            start_date=timezone.localdate(),
+            user=self.user,
         )
         with self.assertRaises(MembershipNotFrozenError):
             MembershipService.unfreeze_membership(membership=membership, user=self.user)
@@ -167,7 +183,10 @@ class MembershipServiceTests(TenantTestCase):
     def test_cancel_already_cancelled_membership_raises(self):
         plan = self._create_plan()
         membership = MembershipService.create_membership(
-            customer=self.customer, plan=plan, start_date=date.today(), user=self.user
+            customer=self.customer,
+            plan=plan,
+            start_date=timezone.localdate(),
+            user=self.user,
         )
         MembershipService.cancel_membership(membership=membership, user=self.user)
         with self.assertRaises(MembershipAlreadyCancelledError):
@@ -178,7 +197,7 @@ class MembershipServiceTests(TenantTestCase):
         membership = MembershipService.create_membership(
             customer=self.customer,
             plan=plan,
-            start_date=date.today() - timedelta(days=40),
+            start_date=timezone.localdate() - timedelta(days=40),
             user=self.user,
         )
         expired_count = MembershipService.expire_overdue_memberships()
@@ -191,7 +210,7 @@ class MembershipServiceTests(TenantTestCase):
         membership = MembershipService.create_membership(
             customer=self.customer,
             plan=plan,
-            start_date=date.today() - timedelta(days=40),
+            start_date=timezone.localdate() - timedelta(days=40),
             user=self.user,
         )
         MembershipService.freeze_membership(membership=membership, user=self.user)
@@ -207,11 +226,14 @@ class MembershipServiceTests(TenantTestCase):
         soon = MembershipService.create_membership(
             customer=self.customer,
             plan=plan,
-            start_date=date.today() - timedelta(days=25),
+            start_date=timezone.localdate() - timedelta(days=25),
             user=self.user,
         )
         far = MembershipService.create_membership(
-            customer=self.customer, plan=plan, start_date=date.today(), user=self.user
+            customer=self.customer,
+            plan=plan,
+            start_date=timezone.localdate(),
+            user=self.user,
         )
         self.assertEqual(Membership.objects.count(), 2)
 

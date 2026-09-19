@@ -304,6 +304,11 @@ class AttendanceService:
 
     @staticmethod
     def _determine_status(employee: Employee, check_in_at) -> str:
+        # EmployeeSchedule.start_time es hora local del negocio; check_in_at
+        # es un datetime aware en UTC. Sin convertir, una entrada a las 07:55
+        # en Lima (12:55 UTC) quedaba como LATE y despues de las 19:00 se
+        # tomaba el dia de la semana siguiente.
+        check_in_at = timezone.localtime(check_in_at)
         day_of_week = _DAY_OF_WEEK_BY_PYTHON_WEEKDAY[check_in_at.weekday()]
         schedule = EmployeeSchedule.objects.filter(
             employee=employee, day_of_week=day_of_week, is_active=True
@@ -696,7 +701,7 @@ class TenantDataExportService:
 
     @staticmethod
     def request_export(*, user: User, format: str) -> DataExport:
-        today = timezone.now().date()
+        today = timezone.localdate()
         already_requested_today = DataExport.objects.filter(
             requested_at__date=today
         ).exclude(status="FAILED")

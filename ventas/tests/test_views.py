@@ -1782,6 +1782,72 @@ class SaleSyncTests(TenantTestCase):
         )
         self.assertEqual(response.status_code, 403)
 
+    def test_sync_fails_only_the_sale_with_missing_references(self):
+        # Antes un customer_id inexistente rechazaba el lote entero con 400;
+        # ahora solo esa venta queda FAILED y las demas se crean.
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session()
+        orphan = self._sale_payload("uuid-orphan", session_id)
+        orphan["customer_id"] = 999999
+        no_session = self._sale_payload("uuid-no-session", 999999)
+
+        response = client.post(
+            "/api/v1/ventas/sales/sync/",
+            {
+                "sales": [
+                    self._sale_payload("uuid-ok-1", session_id),
+                    orphan,
+                    no_session,
+                    self._sale_payload("uuid-ok-2", session_id),
+                ]
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        rows = {row["client_side_uuid"]: row for row in response.data["synced"]}
+        self.assertEqual(rows["uuid-ok-1"]["status"], "CREATED")
+        self.assertEqual(rows["uuid-ok-2"]["status"], "CREATED")
+        self.assertEqual(rows["uuid-orphan"]["status"], "FAILED")
+        self.assertEqual(
+            rows["uuid-orphan"]["error"]["error"]["code"], "CUSTOMER_NOT_FOUND"
+        )
+        self.assertEqual(
+            rows["uuid-no-session"]["error"]["error"]["code"],
+            "CASH_SESSION_NOT_FOUND",
+        )
+
+    def test_sync_keeps_original_sale_time(self):
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session()
+        sold_at = timezone.now() - timedelta(hours=3)
+        payload = self._sale_payload("uuid-occurred", session_id)
+        payload["occurred_at"] = sold_at.isoformat()
+
+        client.post("/api/v1/ventas/sales/sync/", {"sales": [payload]}, format="json")
+
+        sale = Sale.objects.get(client_side_uuid="uuid-occurred")
+        self.assertEqual(sale.occurred_at, sold_at)
+        self.assertGreater(sale.created_at, sale.occurred_at)
+
+    def test_sync_ignores_occurred_at_far_in_the_future(self):
+        client = self._client_as(self.admin_user)
+        session_id = self._open_session()
+        payload = self._sale_payload("uuid-future", session_id)
+        payload["occurred_at"] = (timezone.now() + timedelta(days=2)).isoformat()
+
+        client.post("/api/v1/ventas/sales/sync/", {"sales": [payload]}, format="json")
+
+        sale = Sale.objects.get(client_side_uuid="uuid-future")
+        self.assertLessEqual(sale.occurred_at, timezone.now())
+
+    def test_sync_rejects_batch_over_limit(self):
+        response = self._client_as(self.admin_user).post(
+            "/api/v1/ventas/sales/sync/",
+            {"sales": [self._sale_payload(f"uuid-big-{i}", 1) for i in range(501)]},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+
     def test_sync_rejects_empty_batch(self):
         response = self._client_as(self.admin_user).post(
             "/api/v1/ventas/sales/sync/", {"sales": []}, format="json"

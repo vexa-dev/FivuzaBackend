@@ -308,9 +308,12 @@ AUTH_PASSWORD_VALIDATORS = [
 # Internationalization
 # https://docs.djangoproject.com/en/6.0/topics/i18n/
 
-LANGUAGE_CODE = "en-us"
+LANGUAGE_CODE = "es-pe"
 
-TIME_ZONE = "UTC"
+# Hora local del negocio: los horarios de RR. HH., el "dia" del dashboard y
+# los crontab de Celery se interpretan en esta zona. La BD sigue guardando
+# UTC (USE_TZ=True).
+TIME_ZONE = "America/Lima"
 
 USE_I18N = True
 

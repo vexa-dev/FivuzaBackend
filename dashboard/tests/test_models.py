@@ -121,7 +121,9 @@ class DashboardMetricsServiceTests(TenantTestCase):
             client_side_uuid=str(uuid.uuid4()),
             sync_status="SYNCED",
         )
-        Sale.objects.filter(pk=sale.pk).update(created_at=created_at)
+        Sale.objects.filter(pk=sale.pk).update(
+            created_at=created_at, occurred_at=created_at
+        )
         sale.refresh_from_db()
         SaleDetail.objects.create(
             sale=sale,
@@ -145,12 +147,28 @@ class DashboardMetricsServiceTests(TenantTestCase):
         self.assertEqual(result["total_sales"], "50.0000")
         self.assertEqual(result["total_transactions"], 1)
 
+    def test_daily_summary_groups_by_local_business_day(self):
+        # 21:00 del 10 de agosto en Lima son las 02:00 UTC del 11: la vista
+        # agrupaba por DATE(created_at) en UTC y la venta caia en el dia 11.
+        from django.db import connection
+        from zoneinfo import ZoneInfo
+
+        sold_at = datetime(2026, 8, 10, 21, 0, tzinfo=ZoneInfo("America/Lima"))
+        self._make_sale(quantity=1, unit_price=Decimal("25.00"), created_at=sold_at)
+        with connection.cursor() as cursor:
+            cursor.execute("REFRESH MATERIALIZED VIEW mv_daily_sales_summary;")
+
+        result = DashboardMetricsService.sales_range(
+            date_from=date(2026, 8, 10), date_to=date(2026, 8, 11)
+        )
+        self.assertEqual(result["by_day"], [{"date": "2026-08-10", "total": "25.0000"}])
+
     def test_top_products_orders_by_quantity_sold(self):
         today = datetime.now(dt_timezone.utc)
         self._make_sale(quantity=3, unit_price=Decimal("25.00"), created_at=today)
 
         top = DashboardMetricsService.top_products(
-            date_from=date.today(), date_to=date.today()
+            date_from=timezone.localdate(), date_to=timezone.localdate()
         )
         self.assertEqual(top[0]["product_name"], "Producto A")
         self.assertEqual(top[0]["quantity_sold"], "3.000")
@@ -160,7 +178,7 @@ class DashboardMetricsServiceTests(TenantTestCase):
         self._make_sale(quantity=2, unit_price=Decimal("25.00"), created_at=today)
 
         margin = DashboardMetricsService.gross_margin(
-            date_from=date.today(), date_to=date.today()
+            date_from=timezone.localdate(), date_to=timezone.localdate()
         )
         # Ingreso 50.00, costo 2 x 10.00 = 20.00 -> margen 30.00
         self.assertEqual(margin["total_revenue"], "50.0000")
@@ -172,6 +190,6 @@ class DashboardMetricsServiceTests(TenantTestCase):
         self._make_sale(quantity=1, unit_price=Decimal("25.00"), created_at=today)
 
         distribution = DashboardMetricsService.payment_method_distribution(
-            date_from=date.today(), date_to=date.today()
+            date_from=timezone.localdate(), date_to=timezone.localdate()
         )
         self.assertEqual(distribution, [{"method": "CASH", "total": "25.0000"}])

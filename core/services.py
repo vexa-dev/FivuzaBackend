@@ -1,7 +1,7 @@
 import json
 import random
 import uuid
-from datetime import date, timedelta
+from datetime import timedelta
 from decimal import Decimal
 
 from django.db.models import Count
@@ -1134,7 +1134,8 @@ class DemoTenantService:
                     warehouse=warehouse,
                     salary_type="MONTHLY",
                     salary_amount=round(random.uniform(1200, 3500), 2),
-                    hire_date=date.today() - timedelta(days=random.randint(30, 900)),
+                    hire_date=timezone.localdate()
+                    - timedelta(days=random.randint(30, 900)),
                 )
                 for i in range(employee_count)
             ]

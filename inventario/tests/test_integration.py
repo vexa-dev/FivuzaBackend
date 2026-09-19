@@ -1,6 +1,5 @@
 # Pruebas de flujo completo a través de la capa de servicios (ej. crear una venta
 # de punta a punta), no solo de una unidad aislada.
-from datetime import date
 from decimal import Decimal
 
 from django.utils import timezone
@@ -118,7 +117,7 @@ class PurchaseThenSaleIntegrationTests(TenantTestCase):
         stock = Stock.objects.get(variant=self.variant, warehouse=self.warehouse)
         self.assertEqual(stock.quantity, Decimal("15.000"))
 
-        today = date.today()
+        today = timezone.localdate()
         margin = DashboardMetricsService.gross_margin(date_from=today, date_to=today)
         # Ingreso: 5 x 50.00 = 250.00. Costo: 5 x 30.00 (el de la compra,
         # no el 0.00 con el que nacio la variante) = 150.00.
@@ -143,7 +142,7 @@ class PurchaseThenSaleIntegrationTests(TenantTestCase):
             payments=[{"method": "CASH", "amount": Decimal("100.00")}],
         )
 
-        today = date.today()
+        today = timezone.localdate()
         margin_before = DashboardMetricsService.gross_margin(
             date_from=today, date_to=today
         )

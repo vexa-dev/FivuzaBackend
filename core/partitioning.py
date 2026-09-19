@@ -11,9 +11,8 @@ models.py (nunca introspecciona la base de datos real) -ejecutar SQL
 crudo aqui no genera drift para makemigrations.
 """
 
-from datetime import date
-
 from django.db import connection
+from django.utils import timezone
 
 
 def ensure_default_partition(table_name: str) -> None:
@@ -36,7 +35,7 @@ def bootstrap_initial_partitions(table_name: str, months_ahead: int = 2) -> None
     convierte la tabla en particionada, y el mismo calculo de meses lo
     reutiliza la tarea Celery Beat mensual (Esquema Backend §9) para no
     quedarse sin particion donde escribir al cambiar de mes."""
-    today = date.today()
+    today = timezone.localdate()
     year, month = today.year, today.month
     for _ in range(months_ahead + 1):
         ensure_monthly_partition(table_name, year, month)
