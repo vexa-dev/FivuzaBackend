@@ -1,73 +1,61 @@
 # Pruebas de SchemaRouteGuardMiddleware y run_per_tenant (endurecimiento
 # para produccion).
+import json
+from types import SimpleNamespace
 from unittest import mock
 
+from django.http import HttpResponse
+from django.test import RequestFactory, SimpleTestCase
 from django_tenants.test.cases import TenantTestCase
-from django_tenants.utils import get_public_schema_name, schema_context
-from rest_framework.test import APIClient
 
-from core.models import Domain, Tenant, TenantSettings
+from core.middleware import SchemaRouteGuardMiddleware
+from core.models import TenantSettings
 from core.tenant_tasks import run_per_tenant
 
 
-class SchemaRouteGuardTests(TenantTestCase):
-    @classmethod
-    def get_test_schema_name(cls):
-        return "test_route_guard"
+class SchemaRouteGuardTests(SimpleTestCase):
+    """Unitarios del middleware: se simula request.tenant en vez de crear
+    tenants reales (crear/borrar el tenant public en la suite contamina a
+    las demas clases de prueba)."""
 
-    @classmethod
-    def get_test_tenant_domain(cls):
-        return "test-route-guard.test.com"
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.middleware = SchemaRouteGuardMiddleware(
+            lambda request: HttpResponse("vista")
+        )
 
-    @classmethod
-    def setUpClass(cls):
-        super().setUpClass()
-        # django-tenants solo permite crear tenants desde el esquema public;
-        # TenantTestCase deja la conexion en el esquema del tenant de prueba.
-        with schema_context(get_public_schema_name()):
-            public_tenant, cls._created_public = Tenant.objects.get_or_create(
-                schema_name="public", defaults={"company_name": "Servicio Publico"}
-            )
-            cls.public_domain, _ = Domain.objects.get_or_create(
-                domain="public.localhost",
-                defaults={"tenant": public_tenant, "is_primary": True},
-            )
-
-    @classmethod
-    def tearDownClass(cls):
-        TenantSettings.objects.filter(tenant=cls.tenant).delete()
-        with schema_context(get_public_schema_name()):
-            cls.public_domain.delete()
-            if cls._created_public:
-                Tenant.objects.filter(schema_name="public").delete()
-        super().tearDownClass()
+    def _get(self, path, schema_name):
+        request = self.factory.get(path)
+        request.tenant = SimpleNamespace(schema_name=schema_name)
+        return self.middleware(request)
 
     def test_business_route_on_public_domain_is_404_not_500(self):
-        response = APIClient(HTTP_HOST="public.localhost").get(
-            "/api/v1/inventario/categories/"
-        )
+        response = self._get("/api/v1/inventario/categories/", "public")
         self.assertEqual(response.status_code, 404)
-        self.assertEqual(response.json()["error"]["code"], "NOT_FOUND")
+        self.assertEqual(json.loads(response.content)["error"]["code"], "NOT_FOUND")
 
-    def test_platform_route_on_tenant_domain_is_404(self):
-        response = APIClient(HTTP_HOST=self.domain.domain).post(
+    def test_platform_and_admin_routes_on_tenant_domain_are_404(self):
+        for path in (
             "/api/v1/platform/auth/login/",
-            {"email": "x@fivuza.com", "password": "x"},
-            format="json",
-        )
-        self.assertEqual(response.status_code, 404)
+            "/api/v1/core/tenants/",
+            "/admin/",
+        ):
+            self.assertEqual(self._get(path, "negocio").status_code, 404, path)
 
     def test_shared_routes_answer_on_both_domains(self):
-        for host in ("public.localhost", self.domain.domain):
-            response = APIClient(HTTP_HOST=host).get("/api/v1/core/legal/terms/")
-            self.assertNotEqual(response.status_code, 404, host)
+        for schema in ("public", "negocio"):
+            for path in ("/api/v1/health/", "/api/v1/core/legal/terms/"):
+                self.assertEqual(
+                    self._get(path, schema).status_code, 200, (schema, path)
+                )
 
-    def test_business_route_on_tenant_domain_reaches_the_view(self):
-        response = APIClient(HTTP_HOST=self.domain.domain).get(
-            "/api/v1/inventario/categories/"
+    def test_matching_routes_reach_the_view(self):
+        self.assertEqual(
+            self._get("/api/v1/inventario/categories/", "negocio").status_code, 200
         )
-        # Sin token: la vista responde 401, no el 404 del middleware.
-        self.assertEqual(response.status_code, 401)
+        self.assertEqual(
+            self._get("/api/v1/platform/auth/login/", "public").status_code, 200
+        )
 
 
 class RunPerTenantTests(TenantTestCase):
