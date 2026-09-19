@@ -6,8 +6,6 @@ import zipfile
 from datetime import timedelta
 from decimal import Decimal
 
-import boto3
-from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
@@ -15,6 +13,7 @@ from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework.exceptions import APIException
 
+from core import storage
 from usuarios.models import (
     AuditLog,
     DataExport,
@@ -830,9 +829,6 @@ class TenantDataExportService:
         if export.expires_at is not None and export.expires_at < timezone.now():
             raise DataExportExpiredError()
 
-        client = boto3.client("s3", region_name=settings.AWS_S3_REGION)
-        return client.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": settings.AWS_STORAGE_BUCKET_NAME, "Key": export.file_key},
-            ExpiresIn=_DOWNLOAD_URL_TTL_SECONDS,
+        return storage.presigned_download_url(
+            export.file_key, _DOWNLOAD_URL_TTL_SECONDS
         )

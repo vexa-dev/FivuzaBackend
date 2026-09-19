@@ -7,7 +7,8 @@ from django.conf import settings
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
 from django.utils.html import strip_tags
-from django_tenants.utils import get_tenant_model, schema_context
+
+from core.tenant_tasks import run_per_tenant
 
 logger = logging.getLogger(__name__)
 
@@ -19,14 +20,12 @@ def expire_overdue_memberships() -> None:
     expire_overdue_reservations."""
     from gimnasio.services import MembershipService
 
-    tenant_model = get_tenant_model()
-    for tenant in tenant_model.objects.exclude(schema_name="public"):
-        with schema_context(tenant.schema_name):
-            expired = MembershipService.expire_overdue_memberships()
-            if expired:
-                logger.info(
-                    "Membresias vencidas en %s: %s.", tenant.schema_name, expired
-                )
+    def _run(tenant):
+        expired = MembershipService.expire_overdue_memberships()
+        if expired:
+            logger.info("Membresias vencidas en %s: %s.", tenant.schema_name, expired)
+
+    run_per_tenant("expire_overdue_memberships", _run)
 
 
 @shared_task
@@ -40,38 +39,38 @@ def alert_expiring_memberships() -> None:
     from gimnasio.services import MembershipService
     from usuarios.models import User
 
-    tenant_model = get_tenant_model()
-    for tenant in tenant_model.objects.exclude(schema_name="public"):
-        with schema_context(tenant.schema_name):
-            expiring = list(MembershipService.get_expiring_soon(days=7))
-            if not expiring:
-                continue
+    def _run(tenant):
+        expiring = list(MembershipService.get_expiring_soon(days=7))
+        if not expiring:
+            return
 
-            recipients = list(
-                User.objects.filter(role__name="admin", is_active=True).values_list(
-                    "email", flat=True
-                )
+        recipients = list(
+            User.objects.filter(role__name="admin", is_active=True).values_list(
+                "email", flat=True
             )
-            if not recipients:
-                continue
+        )
+        if not recipients:
+            return
 
-            html_body = render_to_string(
-                "gimnasio/emails/expiring_memberships.html",
-                {
-                    "memberships": [
-                        {
-                            "customer_name": m.customer.name,
-                            "plan_name": m.plan.name,
-                            "end_date": m.end_date,
-                        }
-                        for m in expiring
-                    ]
-                },
-            )
-            send_mail(
-                subject=f"Membresías por vencer en los próximos 7 días ({len(expiring)})",
-                message=strip_tags(html_body),
-                html_message=html_body,
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=recipients,
-            )
+        html_body = render_to_string(
+            "gimnasio/emails/expiring_memberships.html",
+            {
+                "memberships": [
+                    {
+                        "customer_name": m.customer.name,
+                        "plan_name": m.plan.name,
+                        "end_date": m.end_date,
+                    }
+                    for m in expiring
+                ]
+            },
+        )
+        send_mail(
+            subject=f"Membresías por vencer en los próximos 7 días ({len(expiring)})",
+            message=strip_tags(html_body),
+            html_message=html_body,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=recipients,
+        )
+
+    run_per_tenant("alert_expiring_memberships", _run)

@@ -3,16 +3,15 @@ import io
 import uuid
 from decimal import Decimal, InvalidOperation
 
-import boto3
 from barcode import Code128
 from barcode.writer import ImageWriter, SVGWriter
-from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Sum
 from django.template.loader import render_to_string
 from django.utils import timezone
 
+from core import storage
 from inventario.models import (
     AttributeValue,
     Category,
@@ -45,21 +44,10 @@ class MediaService:
         extension = content_type.split("/")[-1]
         key = f"product-variants/{variant_id}/{uuid.uuid4()}.{extension}"
 
-        client = boto3.client("s3", region_name=settings.AWS_S3_REGION)
-        upload_url = client.generate_presigned_url(
-            "put_object",
-            Params={
-                "Bucket": settings.AWS_STORAGE_BUCKET_NAME,
-                "Key": key,
-                "ContentType": content_type,
-            },
-            ExpiresIn=_PRESIGNED_URL_TTL_SECONDS,
+        upload_url = storage.presigned_upload_url(
+            key, content_type, _PRESIGNED_URL_TTL_SECONDS
         )
-        image_url = (
-            f"https://{settings.AWS_STORAGE_BUCKET_NAME}.s3."
-            f"{settings.AWS_S3_REGION}.amazonaws.com/{key}"
-        )
-        return {"upload_url": upload_url, "image_url": image_url}
+        return {"upload_url": upload_url, "image_url": storage.public_object_url(key)}
 
 
 class ProductVariantService:

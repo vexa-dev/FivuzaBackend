@@ -17,6 +17,7 @@ import sys
 import dj_database_url
 import sentry_sdk
 from celery.schedules import crontab
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -32,10 +33,6 @@ load_dotenv(BASE_DIR / ".env")
 # Antes quedaba hardcodeada e ignoraba la variable de entorno -mismo problema
 # que tenia ALLOWED_HOSTS. El valor "django-insecure-..." solo se usa como
 # fallback de desarrollo si SECRET_KEY no esta definida en el entorno.
-SECRET_KEY = os.getenv(
-    "SECRET_KEY", "django-insecure-3nzrr(nes&b(0ks&5q+klr17*7px)aoj1lo38s+833)3m9-y5n"
-)
-
 # SECURITY WARNING: don't run with debug turned on in production!
 # Antes quedaba hardcodeado en True -si alguien olvidaba tocar este archivo
 # antes de desplegar a produccion, DEBUG=True quedaba expuesto (stack traces
@@ -43,6 +40,19 @@ SECRET_KEY = os.getenv(
 # seguro (False) si la variable no esta definida; .env de desarrollo la fija
 # en True explicitamente.
 DEBUG = os.getenv("DEBUG", "False") == "True"
+
+# Deteccion unica de "estamos corriendo la suite": el resto del archivo usa
+# TESTING en vez de repetir el chequeo de sys.argv.
+TESTING = len(sys.argv) > 1 and sys.argv[1] == "test"
+
+SECRET_KEY = os.getenv("SECRET_KEY", "")
+if not SECRET_KEY:
+    if DEBUG or TESTING:
+        SECRET_KEY = "django-insecure-solo-desarrollo-no-usar-en-produccion"
+    else:
+        # Antes habia un fallback fijo en el repo que tambien valia en
+        # produccion: cualquiera con acceso al codigo podia firmar tokens.
+        raise ImproperlyConfigured("SECRET_KEY es obligatoria con DEBUG=False.")
 AUTH_COOKIE_SECURE = (
     os.getenv("AUTH_COOKIE_SECURE", "False" if DEBUG else "True").lower() == "true"
 )
@@ -112,11 +122,14 @@ TENANT_DOMAIN_MODEL = "core.Domain"
 
 MIDDLEWARE = [
     "django_tenants.middleware.main.TenantMainMiddleware",
+    "core.middleware.SchemaRouteGuardMiddleware",
     # Sprint 11 (Especificacion de API §4.26): despues de TenantMainMiddleware
     # a proposito -necesita request.tenant ya resuelto.
     "core.middleware.SentryTenantTagMiddleware",
     "corsheaders.middleware.CorsMiddleware",  # antes de CommonMiddleware (requisito de django-cors-headers)
     "django.middleware.security.SecurityMiddleware",
+    # Sirve /static/ (admin de Django, Swagger) sin un servidor aparte.
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -150,11 +163,20 @@ WSGI_APPLICATION = "config.wsgi.application"
 
 DATABASES = {
     "default": dj_database_url.config(
-        default=os.getenv("DATABASE_URL"), engine="django_tenants.postgresql_backend"
+        default=os.getenv("DATABASE_URL"),
+        engine="django_tenants.postgresql_backend",
+        conn_max_age=int(os.getenv("DB_CONN_MAX_AGE", "60")),
+        conn_health_checks=True,
     )
 }
 
 DATABASE_ROUTERS = ("django_tenants.routers.TenantSyncRouter",)
+
+# Limites de peticiones: desactivados en la suite (el cache de throttling no
+# se resetea entre tests como la BD) o explicitamente con THROTTLE_ENABLED.
+THROTTLE_ENABLED = (
+    os.getenv("THROTTLE_ENABLED", "False" if TESTING else "True") == "True"
+)
 
 REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
@@ -177,16 +199,16 @@ REST_FRAMEWORK = {
     # completa acumula cientos de logins contra el mismo rate -por eso el
     # limite real solo aplica fuera de "manage.py test".
     "DEFAULT_THROTTLE_RATES": {
-        "login_ip": "1000000/min" if "test" in sys.argv else "5/min",
-        "login_identifier": "1000000/min" if "test" in sys.argv else "5/min",
-        "business_write": "1000000/min" if "test" in sys.argv else "100/min",
+        "login_ip": "5/min" if THROTTLE_ENABLED else "1000000/min",
+        "login_identifier": "5/min" if THROTTLE_ENABLED else "1000000/min",
+        "business_write": "100/min" if THROTTLE_ENABLED else "1000000/min",
     },
 }
 
-API_V1_PAGINATION_ENABLED = os.getenv("API_V1_PAGINATION_ENABLED", "False") == "True"
-API_STANDARD_ERRORS_ENABLED = (
-    os.getenv("API_STANDARD_ERRORS_ENABLED", "False") == "True"
-)
+# Contrato vigente de /api/v1 (paginacion DRF y {"error": {...}}): activo por
+# defecto; solo se apaga explicitamente para un cliente viejo.
+API_V1_PAGINATION_ENABLED = os.getenv("API_V1_PAGINATION_ENABLED", "True") == "True"
+API_STANDARD_ERRORS_ENABLED = os.getenv("API_STANDARD_ERRORS_ENABLED", "True") == "True"
 DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 
 SPECTACULAR_SETTINGS = {
@@ -264,6 +286,11 @@ CACHES = {
 # IAM de la tarea ECS en produccion (TRD §5.1); no hay que duplicarlas.
 AWS_STORAGE_BUCKET_NAME = os.getenv("AWS_STORAGE_BUCKET_NAME", "")
 AWS_S3_REGION = os.getenv("AWS_S3_REGION", "us-east-1")
+# Bucket S3-compatible (Railway): endpoint propio y URLs estilo path. Vacio =
+# AWS S3 estandar. Ver core/storage.py.
+AWS_S3_ENDPOINT_URL = os.getenv("AWS_S3_ENDPOINT_URL", "")
+AWS_S3_ADDRESSING_STYLE = os.getenv("AWS_S3_ADDRESSING_STYLE", "virtual")
+MEDIA_PUBLIC_BASE_URL = os.getenv("MEDIA_PUBLIC_BASE_URL", "")
 
 # Correo transaccional (Sprint 5, hueco #2). En dev/test, EMAIL_BACKEND
 # imprime el correo a consola en vez de enviarlo de verdad -no requiere
@@ -333,7 +360,7 @@ CELERY_TIMEZONE = TIME_ZONE
 # Redis -si no, mail.outbox (backend de correo en memoria) nunca ve el
 # envio, porque ocurriria en un worker de Celery aparte que ademas no
 # existe durante los tests.
-CELERY_TASK_ALWAYS_EAGER = "test" in sys.argv
+CELERY_TASK_ALWAYS_EAGER = TESTING
 CELERY_BEAT_SCHEDULE = {
     # Dia 28 (nunca dia 1: hay que tener la particion del mes siguiente
     # lista ANTES de que empiece, con margen) a las 2am.
@@ -414,3 +441,53 @@ CHANNEL_LAYERS = {
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = "static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {
+        "BACKEND": (
+            "django.contrib.staticfiles.storage.StaticFilesStorage"
+            if DEBUG or TESTING
+            else "whitenoise.storage.CompressedManifestStaticFilesStorage"
+        )
+    },
+}
+
+
+# Produccion detras de un proxy (Railway + nginx del frontend): el TLS
+# termina antes de Django, que se entera del esquema por X-Forwarded-Proto.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+USE_X_FORWARDED_HOST = True
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+if not DEBUG:
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    # La redireccion a HTTPS la hace el borde (Railway); aqui queda apagable
+    # para que el healthcheck interno por HTTP no reciba un 301.
+    SECURE_SSL_REDIRECT = os.getenv("SECURE_SSL_REDIRECT", "False") == "True"
+    SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "31536000"))
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+
+
+# Logs a stdout (Railway los recolecta); nivel configurable por entorno.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "plain": {"format": "%(asctime)s %(levelname)s %(name)s %(message)s"},
+    },
+    "handlers": {
+        "console": {"class": "logging.StreamHandler", "formatter": "plain"},
+    },
+    "root": {
+        "handlers": ["console"],
+        # En la suite, solo advertencias: los INFO de Celery tapan el resultado.
+        "level": os.getenv("LOG_LEVEL", "WARNING" if TESTING else "INFO"),
+    },
+    "loggers": {"django.db.backends": {"level": "WARNING"}},
+}

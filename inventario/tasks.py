@@ -8,10 +8,14 @@ import logging
 from datetime import timedelta
 
 from celery import shared_task
-from django_tenants.utils import get_tenant_model, schema_context
+from django.utils import timezone
 
 from core.partitioning import ensure_monthly_partition
-from django.utils import timezone
+from core.tenant_tasks import run_per_tenant
+
+# Meses por adelantado: si Beat no corre un dia 28 (deploy, caida), el mes
+# siguiente igual tiene particion creada desde el ciclo anterior.
+_PARTITION_MONTHS_AHEAD = 2
 
 logger = logging.getLogger(__name__)
 
@@ -22,17 +26,18 @@ def create_next_month_partitions() -> None:
     siguiente para inventory_movements y audit_logs en todos los tenants,
     para que el 1ro de cada mes ya exista una partición donde escribir.
     Se corre a fin de mes, con margen, no el mismo día 1 (TRD §5.4)."""
-    next_month = (timezone.localdate().replace(day=28) + timedelta(days=4)).replace(
-        day=1
-    )
+    months = []
+    month = timezone.localdate().replace(day=1)
+    for _ in range(_PARTITION_MONTHS_AHEAD):
+        month = (month.replace(day=28) + timedelta(days=4)).replace(day=1)
+        months.append(month)
 
-    tenant_model = get_tenant_model()
-    for tenant in tenant_model.objects.exclude(schema_name="public"):
-        with schema_context(tenant.schema_name):
-            ensure_monthly_partition(
-                "inventory_movements", next_month.year, next_month.month
-            )
-            ensure_monthly_partition("audit_logs", next_month.year, next_month.month)
+    def _run(tenant):
+        for month in months:
+            ensure_monthly_partition("inventory_movements", month.year, month.month)
+            ensure_monthly_partition("audit_logs", month.year, month.month)
+
+    run_per_tenant("create_next_month_partitions", _run)
 
 
 @shared_task
@@ -44,13 +49,13 @@ def alert_low_stock_variants() -> None:
     real, este task cambia el log de abajo por esa llamada."""
     from inventario.selectors import get_low_stock_variants
 
-    tenant_model = get_tenant_model()
-    for tenant in tenant_model.objects.exclude(schema_name="public"):
-        with schema_context(tenant.schema_name):
-            low_stock_count = get_low_stock_variants().count()
-            if low_stock_count:
-                logger.info(
-                    "Stock bajo en %s: %s variante(s) por debajo de su mínimo.",
-                    tenant.schema_name,
-                    low_stock_count,
-                )
+    def _run(tenant):
+        low_stock_count = get_low_stock_variants().count()
+        if low_stock_count:
+            logger.info(
+                "Stock bajo en %s: %s variante(s) por debajo de su mínimo.",
+                tenant.schema_name,
+                low_stock_count,
+            )
+
+    run_per_tenant("alert_low_stock_variants", _run)
