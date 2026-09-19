@@ -73,3 +73,32 @@ class SchemaRouteGuardMiddleware:
                 status=404,
             )
         return self.get_response(request)
+
+
+class InfraHealthCheckMiddleware:
+    """GET /healthz para el healthcheck de la plataforma de despliegue
+    (Railway). Va PRIMERO en MIDDLEWARE: responde antes de
+    TenantMainMiddleware, porque el healthcheck llega con un Host interno
+    (ej. healthcheck.railway.app) que no es el dominio de ningun tenant y
+    fallaria con 404/DisallowedHost. Reutiliza los mismos chequeos reales de
+    PostgreSQL y Redis que /api/v1/health/."""
+
+    PATH = "/healthz"
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if request.path != self.PATH or request.method != "GET":
+            return self.get_response(request)
+
+        from django.http import JsonResponse
+
+        from core.views import _check_database, _check_redis
+
+        checks = {"database": _check_database(), "redis": _check_redis()}
+        healthy = all(checks.values())
+        return JsonResponse(
+            {"status": "healthy" if healthy else "unhealthy", "checks": checks},
+            status=200 if healthy else 503,
+        )

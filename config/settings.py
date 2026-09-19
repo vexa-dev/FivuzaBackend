@@ -121,6 +121,8 @@ TENANT_MODEL = "core.Tenant"
 TENANT_DOMAIN_MODEL = "core.Domain"
 
 MIDDLEWARE = [
+    # Antes que todo: el healthcheck de Railway no trae el Host de un tenant.
+    "core.middleware.InfraHealthCheckMiddleware",
     "django_tenants.middleware.main.TenantMainMiddleware",
     "core.middleware.SchemaRouteGuardMiddleware",
     # Sprint 11 (Especificacion de API §4.26): despues de TenantMainMiddleware
