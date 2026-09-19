@@ -484,6 +484,10 @@ LOGGING = {
     "handlers": {
         "console": {"class": "logging.StreamHandler", "formatter": "plain"},
     },
-    "root": {"handlers": ["console"], "level": os.getenv("LOG_LEVEL", "INFO")},
+    "root": {
+        "handlers": ["console"],
+        # En la suite, solo advertencias: los INFO de Celery tapan el resultado.
+        "level": os.getenv("LOG_LEVEL", "WARNING" if TESTING else "INFO"),
+    },
     "loggers": {"django.db.backends": {"level": "WARNING"}},
 }
