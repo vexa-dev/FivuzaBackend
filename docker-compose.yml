@@ -1,3 +1,22 @@
+# Entorno de DESARROLLO local. Produccion corre en Railway (ver railway/).
+x-backend: &backend
+  build:
+    context: .
+    args:
+      REQUIREMENTS: requirements-dev.txt
+  volumes:
+    - .:/app
+  environment: &backend-env
+    DJANGO_SETTINGS_MODULE: config.settings
+    DATABASE_URL: postgres://fivuza:password@db:5432/fivuza_db
+    REDIS_URL: redis://redis:6379/0
+    CELERY_BROKER_URL: redis://redis:6379/0
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
 services:
   db:
     image: postgres:15-alpine
@@ -9,57 +28,38 @@ services:
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fivuza -d fivuza_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   web:
-    build: .
+    <<: *backend
     command: daphne -b 0.0.0.0 -p 8000 config.asgi:application
-    volumes:
-      - .:/app
     ports:
       - "8000:8000"
-    environment:
-      - DJANGO_SETTINGS_MODULE=config.settings
-      - DATABASE_URL=postgres://fivuza:password@db:5432/fivuza_db
-      - REDIS_URL=redis://redis:6379/0
-    depends_on:
-      - db
-      - redis
 
   celery_worker:
-    build: .
+    <<: *backend
     command: celery -A config worker -l info
-    volumes:
-      - .:/app
-    environment:
-      - DJANGO_SETTINGS_MODULE=config.settings
-      - DATABASE_URL=postgres://fivuza:password@db:5432/fivuza_db
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-    depends_on:
-      - db
-      - redis
 
   celery_beat:
-    build: .
-    command: celery -A config beat -l info
-    volumes:
-      - .:/app
-    environment:
-      - DJANGO_SETTINGS_MODULE=config.settings
-      - DATABASE_URL=postgres://fivuza:password@db:5432/fivuza_db
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-    depends_on:
-      - db
-      - redis
+    <<: *backend
+    command: celery -A config beat -l info --schedule /tmp/celerybeat-schedule
 
   frontend:
-    build: 
+    build:
       context: ../FivuzaFrontend
       dockerfile: Dockerfile
       target: build
@@ -70,7 +70,12 @@ services:
     ports:
       - "5173:5173"
     environment:
-      - CHOKIDAR_USEPOLLING=true
+      CHOKIDAR_USEPOLLING: "true"
+      # El proxy de Vite reenvia /api y /ws al backend (mismo origen, igual
+      # que nginx en produccion).
+      VITE_DEV_API_TARGET: http://web:8000
+    depends_on:
+      - web
 
 volumes:
   postgres_data:

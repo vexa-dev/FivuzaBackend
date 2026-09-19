@@ -34,7 +34,7 @@ class TenantDataExportServiceTests(TenantTestCase):
         TenantSettings.objects.filter(tenant=cls.tenant).delete()
         super().tearDownClass()
 
-    @mock.patch("usuarios.tasks.boto3.client")
+    @mock.patch("core.storage.boto3.client")
     def test_request_export_completes_and_uploads_to_s3(self, mock_boto_client):
         export = TenantDataExportService.request_export(user=self.user, format="ZIP")
         export.refresh_from_db()
@@ -44,13 +44,13 @@ class TenantDataExportServiceTests(TenantTestCase):
         self.assertIsNotNone(export.expires_at)
         mock_boto_client.return_value.put_object.assert_called_once()
 
-    @mock.patch("usuarios.tasks.boto3.client")
+    @mock.patch("core.storage.boto3.client")
     def test_request_export_xlsx_format(self, mock_boto_client):
         export = TenantDataExportService.request_export(user=self.user, format="XLSX")
         export.refresh_from_db()
         self.assertTrue(export.file_key.endswith(".xlsx"))
 
-    @mock.patch("usuarios.tasks.boto3.client")
+    @mock.patch("core.storage.boto3.client")
     def test_second_export_same_day_is_rejected(self, mock_boto_client):
         TenantDataExportService.request_export(user=self.user, format="ZIP")
         with self.assertRaises(DataExportLimitExceededError):
@@ -66,7 +66,7 @@ class TenantDataExportServiceTests(TenantTestCase):
             users_csv = archive.read("users.csv").decode()
         self.assertNotIn("password", users_csv.lower())
 
-    @mock.patch("usuarios.services.boto3.client")
+    @mock.patch("core.storage.boto3.client")
     def test_get_download_url_generates_presigned_url_for_completed_export(
         self, mock_boto_client
     ):
@@ -155,7 +155,7 @@ class DataExportEndpointsTests(TenantTestCase):
         client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
         return client
 
-    @mock.patch("usuarios.tasks.boto3.client")
+    @mock.patch("core.storage.boto3.client")
     def test_admin_can_request_and_list_exports(self, mock_boto_client):
         client = self._client_as(self.admin_user)
         response = client.post(
@@ -174,8 +174,8 @@ class DataExportEndpointsTests(TenantTestCase):
         )
         self.assertEqual(response.status_code, 403)
 
-    @mock.patch("usuarios.services.boto3.client")
-    @mock.patch("usuarios.tasks.boto3.client")
+    @mock.patch("core.storage.boto3.client")
+    @mock.patch("core.storage.boto3.client")
     def test_download_endpoint_returns_presigned_url(
         self, mock_task_boto, mock_service_boto
     ):
