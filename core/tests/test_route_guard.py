@@ -3,6 +3,7 @@
 from unittest import mock
 
 from django_tenants.test.cases import TenantTestCase
+from django_tenants.utils import get_public_schema_name, schema_context
 from rest_framework.test import APIClient
 
 from core.models import Domain, Tenant, TenantSettings
@@ -21,17 +22,24 @@ class SchemaRouteGuardTests(TenantTestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        public_tenant, _ = Tenant.objects.get_or_create(
-            schema_name="public", defaults={"company_name": "Servicio Publico"}
-        )
-        Domain.objects.get_or_create(
-            domain="public.localhost",
-            defaults={"tenant": public_tenant, "is_primary": True},
-        )
+        # django-tenants solo permite crear tenants desde el esquema public;
+        # TenantTestCase deja la conexion en el esquema del tenant de prueba.
+        with schema_context(get_public_schema_name()):
+            public_tenant, cls._created_public = Tenant.objects.get_or_create(
+                schema_name="public", defaults={"company_name": "Servicio Publico"}
+            )
+            cls.public_domain, _ = Domain.objects.get_or_create(
+                domain="public.localhost",
+                defaults={"tenant": public_tenant, "is_primary": True},
+            )
 
     @classmethod
     def tearDownClass(cls):
         TenantSettings.objects.filter(tenant=cls.tenant).delete()
+        with schema_context(get_public_schema_name()):
+            cls.public_domain.delete()
+            if cls._created_public:
+                Tenant.objects.filter(schema_name="public").delete()
         super().tearDownClass()
 
     def test_business_route_on_public_domain_is_404_not_500(self):
