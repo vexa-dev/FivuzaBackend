@@ -308,7 +308,9 @@ AUTH_PASSWORD_VALIDATORS = [
 # Internationalization
 # https://docs.djangoproject.com/en/6.0/topics/i18n/
 
-LANGUAGE_CODE = "es-pe"
+# Se mantiene en-us a proposito: con "es-pe" Django localiza los decimales con
+# coma y el ticket termico mostraria "S/. 40,00".
+LANGUAGE_CODE = "en-us"
 
 # Hora local del negocio: los horarios de RR. HH., el "dia" del dashboard y
 # los crontab de Celery se interpretan en esta zona. La BD sigue guardando

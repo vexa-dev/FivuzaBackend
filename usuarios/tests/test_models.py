@@ -517,7 +517,7 @@ class AttendanceServiceTests(TenantTestCase):
         # Entra 22:00 lunes, sale 06:00 martes -turno nocturno que cruza
         # medianoche (Sprint 22, Definicion de Hecho).
         check_in_at = self._monday(22, 0)
-        check_out_at = datetime(2026, 8, 4, 6, 0, tzinfo=dt_timezone.utc)
+        check_out_at = datetime(2026, 8, 4, 6, 0, tzinfo=ZoneInfo("America/Lima"))
         with patch("usuarios.services.timezone.now", return_value=check_in_at):
             attendance = AttendanceService.clock_in(
                 employee=self.employee, warehouse=self.warehouse, user=self.user
