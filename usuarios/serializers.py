@@ -25,6 +25,7 @@ from usuarios.models import (
     UserPermission,
     UserWarehouse,
 )
+from core.models import TenantSettings
 from core.warehouse_access import WarehouseAccessService
 
 
@@ -96,7 +97,9 @@ class TenantUserTokenObtainSerializer(serializers.Serializer):
                 # El frontend usa esto para mostrar/ocultar secciones segun
                 # permiso, nunca segun el NOMBRE del rol -los roles son
                 # personalizables (Convenciones), un nombre fijo no alcanza.
-                "permissions": sorted(PermissionService.get_permission_codes(user)),
+                "permissions": sorted(
+                    PermissionService.get_effective_permission_codes(user)
+                ),
             },
         }
 
@@ -444,3 +447,22 @@ class DataExportSerializer(serializers.ModelSerializer):
 
 class DataExportRequestSerializer(serializers.Serializer):
     format = serializers.ChoiceField(choices=["ZIP", "XLSX"])
+
+
+class TenantOperationalSettingsSerializer(serializers.ModelSerializer):
+    """Bloque A.0: la cara que el propio negocio ve de TenantSettings.
+
+    Deliberadamente NO hereda ni reusa core.TenantSettingsSerializer: ese
+    expone los modulos contratados y el umbral de alerta, que decide Fivuza,
+    no el tenant. Aqui solo viven los interruptores que el dueño opera desde
+    la pantalla Configuracion del ERP.
+    """
+
+    class Meta:
+        model = TenantSettings
+        fields = [
+            "cashier_can_open_session",
+            "cashier_can_close_session",
+            "updated_at",
+        ]
+        read_only_fields = ["updated_at"]

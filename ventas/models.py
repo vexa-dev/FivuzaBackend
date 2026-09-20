@@ -13,6 +13,16 @@ class CashRegister(models.Model):
     )
     name = models.CharField(max_length=100)
     is_active = models.BooleanField(default=True)
+    # Bloque A.2: caja asignada a una persona. SET_NULL y no PROTECT porque
+    # dar de baja a un cajero no debe bloquear la caja fisica -la caja queda
+    # libre y vuelve a la regla "quien abre el turno es su dueño".
+    assigned_user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="assigned_cash_registers",
+    )
 
     class Meta:
         db_table = "cash_registers"

@@ -157,9 +157,20 @@ class TenantProvisioningService:
         ("USERS_VIEW_AUDIT", "USERS"),
         ("HR_MANAGE", "HR"),
         ("INVENTORY_VIEW", "INVENTORY"),
+        # Bloque A.5: ver el catalogo y ver cuanto cuesta son dos cosas
+        # distintas -el cajero necesita lo primero para vender y no debe
+        # tener lo segundo.
+        ("INVENTORY_VIEW_COST", "INVENTORY"),
         ("INVENTORY_MANAGE", "INVENTORY"),
         ("PURCHASES_MANAGE", "PURCHASES"),
         ("CASH_MANAGE", "CASH"),
+        # Bloque A.1: abrir y cerrar se separan de CASH_MANAGE porque son
+        # decisiones distintas del negocio ("mi cajero abre su caja pero no
+        # la cierra"). CASH_MANAGE los sigue implicando (compatibilidad hacia
+        # atras: ningun tenant en marcha pierde acceso) -ver
+        # PermissionService._resolve_codes.
+        ("CASH_OPEN", "CASH"),
+        ("CASH_CLOSE", "CASH"),
         ("SALES_MANAGE", "SALES"),
         # Sprint 18: separados de SALES_MANAGE a proposito (Plan de
         # Implementacion, Sprint 18: "un cajero puede vender sin poder anular
@@ -175,6 +186,10 @@ class TenantProvisioningService:
         # respaldo completo del negocio es mas sensible que administrar
         # usuarios, y solo admin lo recibe por defecto (ni siquiera manager).
         ("DATA_EXPORT", "COMPLIANCE"),
+        # Bloque A.0: hasta ahora los interruptores operativos solo se tocaban
+        # desde el panel interno de Fivuza (TenantSettingsViewSet, IsPlatformStaff).
+        # Este permiso habilita el endpoint propio del tenant.
+        ("SETTINGS_MANAGE", "SETTINGS"),
     ]
     _ROLE_PERMISSIONS = {
         "admin": [
@@ -183,23 +198,33 @@ class TenantProvisioningService:
             "USERS_VIEW_AUDIT",
             "HR_MANAGE",
             "INVENTORY_VIEW",
+            "INVENTORY_VIEW_COST",
             "INVENTORY_MANAGE",
             "PURCHASES_MANAGE",
             "CASH_MANAGE",
+            "CASH_OPEN",
+            "CASH_CLOSE",
             "SALES_MANAGE",
             "SALES_VOID",
             "SALES_RETURN",
             "GYM_MANAGE",
             "DATA_EXPORT",
+            "SETTINGS_MANAGE",
         ],
+        # SETTINGS_MANAGE queda fuera a proposito (Bloque A.0): decidir si el
+        # cajero puede abrir o cerrar caja es una decision del dueño, no de
+        # quien supervisa el turno -mismo criterio que DATA_EXPORT.
         "manager": [
             "USERS_MANAGE",
             "USERS_VIEW_AUDIT",
             "HR_MANAGE",
             "INVENTORY_VIEW",
+            "INVENTORY_VIEW_COST",
             "INVENTORY_MANAGE",
             "PURCHASES_MANAGE",
             "CASH_MANAGE",
+            "CASH_OPEN",
+            "CASH_CLOSE",
             "SALES_MANAGE",
             "SALES_VOID",
             "SALES_RETURN",

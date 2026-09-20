@@ -158,6 +158,10 @@ class SaleService:
     ) -> Sale:
         if cash_session.status != "OPEN":
             raise NoCashSessionError()
+        # Bloque A.2: vender en la caja de otro le descuadra el arqueo a esa
+        # persona. Se valida en el servicio y no solo en la vista para que
+        # el sync offline pase por la misma regla.
+        CashSessionService.assert_can_sell(session=cash_session, user=user)
 
         at = at or timezone.now()
         warehouse = cash_session.cash_register.warehouse

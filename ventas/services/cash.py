@@ -1,4 +1,5 @@
 import uuid
+from decimal import Decimal
 
 from django.db.models import Sum
 from django.utils import timezone
@@ -51,16 +52,75 @@ class CashSessionNotOpenError(APIException):
     }
 
 
+class CashSessionNotOwnedError(APIException):
+    status_code = 403
+    default_code = "CASH_SESSION_NOT_OWNED"
+    default_detail = {
+        "error": {
+            "code": "CASH_SESSION_NOT_OWNED",
+            "message": "Esta caja no es tuya. Pide a quien la abrio, o a un supervisor, que la opere.",
+        }
+    }
+
+
 class CashSessionService:
     """Apertura/cierre de caja con arqueo (Especificacion de API §4.4;
     Esquema Backend §7.2). Una caja fisica (CashRegister) no puede tener dos
     sesiones abiertas a la vez -es la regla que hace que "que caja esta
-    usando cada cajero ahora mismo" sea una pregunta con una sola respuesta."""
+    usando cada cajero ahora mismo" sea una pregunta con una sola respuesta.
+
+    Bloque A.2 agrega la otra mitad de esa pregunta: de quien es la caja.
+    - Si CashRegister.assigned_user esta puesto, la caja es de esa persona:
+      solo ella (o quien tenga CASH_CLOSE) abre, vende y cierra en ella.
+    - Si no lo esta, quien abre el turno es el dueño de esa sesion: solo esa
+      persona vende y cierra.
+    - Quien tenga CASH_CLOSE siempre puede cerrar, para el caso real de "el
+      cajero se fue sin cerrar".
+    """
+
+    @staticmethod
+    def _has_cash_close(user) -> bool:
+        from usuarios.services import PermissionService
+
+        return PermissionService.check_effective_permission(user, "CASH_CLOSE")
+
+    @staticmethod
+    def assert_can_open(*, cash_register: CashRegister, user) -> None:
+        assigned_id = cash_register.assigned_user_id
+        if assigned_id is None or assigned_id == user.id:
+            return
+        if CashSessionService._has_cash_close(user):
+            return
+        raise CashSessionNotOwnedError()
+
+    @staticmethod
+    def assert_can_sell(*, session: CashSession, user) -> None:
+        """La venta es el caso estricto: ni siquiera un supervisor vende en
+        la caja de otro sin que la caja este asignada a el -meter ventas
+        ajenas en un turno es exactamente lo que descuadra el arqueo."""
+        assigned_id = session.cash_register.assigned_user_id
+        if assigned_id is not None:
+            if assigned_id == user.id or CashSessionService._has_cash_close(user):
+                return
+            raise CashSessionNotOwnedError()
+        if session.user_id != user.id:
+            raise CashSessionNotOwnedError()
+
+    @staticmethod
+    def assert_can_close(*, session: CashSession, user) -> None:
+        assigned_id = session.cash_register.assigned_user_id
+        owner_id = assigned_id if assigned_id is not None else session.user_id
+        if owner_id == user.id:
+            return
+        if CashSessionService._has_cash_close(user):
+            return
+        raise CashSessionNotOwnedError()
 
     @staticmethod
     def open_session(
         *, cash_register: CashRegister, user, opening_amount
     ) -> CashSession:
+        CashSessionService.assert_can_open(cash_register=cash_register, user=user)
         if CashSession.objects.filter(
             cash_register=cash_register, status="OPEN"
         ).exists():
@@ -83,6 +143,7 @@ class CashSessionService:
         tenant=None,
         notes: str | None = None,
     ) -> CashSession:
+        CashSessionService.assert_can_close(session=session, user=user)
         if session.status != "OPEN":
             raise CashSessionNotOpenError()
 
@@ -160,6 +221,31 @@ class CashSessionService:
             or 0
         )
         return session.opening_amount + cash_sales + movements_in - movements_out
+
+    @staticmethod
+    def payment_totals_by_method(session: CashSession) -> dict[str, str]:
+        """Bloque A.4: cuanto entro por cada medio de pago en el turno.
+
+        El esperado del arqueo solo cuenta efectivo (es lo unico que hay en
+        el cajon), pero el cierre necesita mostrar tambien lo cobrado por
+        tarjeta, Yape, fiado y saldo -el pendiente "desglose por metodo de
+        pago" que el modulo de Caja arrastra desde el Sprint 12. Las ventas
+        anuladas no se excluyen aqui: el efectivo devuelto ya sale como
+        movimiento OUT de DEVOLUCION, y para el resto de medios el negocio
+        quiere ver lo que efectivamente paso por el turno.
+        """
+        totals = {
+            method: Decimal("0")
+            for method, _ in SalePayment._meta.get_field("method").choices
+        }
+        rows = (
+            SalePayment.objects.filter(sale__cash_session=session)
+            .values("method")
+            .annotate(total=Sum("amount"))
+        )
+        for row in rows:
+            totals[row["method"]] = row["total"] or Decimal("0")
+        return {method: str(total) for method, total in totals.items()}
 
     @staticmethod
     def add_movement(

@@ -7,6 +7,7 @@ from core.openapi import SchemaAPIView
 from dashboard.models import DashboardWidget
 from dashboard.serializers import DashboardWidgetSerializer
 from dashboard.services import DashboardMetricsService
+from inventario.permissions import viewer_sees_cost
 from core.warehouse_access import WarehouseAccessService
 
 _DASHBOARD_PERMISSIONS = [IsAuthenticated, TenantNotSuspended, TenantNotCanceled]
@@ -46,8 +47,14 @@ class DashboardMetricsView(SchemaAPIView):
         elif not WarehouseAccessService.is_admin(request.user):
             warehouse_ids = WarehouseAccessService.allowed_warehouse_ids(request.user)
 
-        return Response(
-            DashboardMetricsService.get_all_metrics(
-                warehouse_id=warehouse_id, warehouse_ids=warehouse_ids
-            )
+        metrics = DashboardMetricsService.get_all_metrics(
+            warehouse_id=warehouse_id, warehouse_ids=warehouse_ids
         )
+        # Bloque A.5: el margen bruto es costo del negocio. Se filtra sobre
+        # una copia -get_all_metrics() devuelve el mismo diccionario que
+        # quedo cacheado, mutarlo se lo borraria tambien al admin.
+        if not viewer_sees_cost(request):
+            metrics = {
+                key: value for key, value in metrics.items() if key != "gross_margin"
+            }
+        return Response(metrics)

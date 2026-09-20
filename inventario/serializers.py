@@ -3,6 +3,8 @@ from decimal import Decimal
 from django.db import transaction
 from rest_framework import serializers
 
+from inventario.permissions import viewer_sees_cost
+
 from inventario.models import (
     Attribute,
     AttributeValue,
@@ -134,6 +136,15 @@ class ProductVariantSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["is_default", "updated_at"]
+
+    def to_representation(self, variant):
+        data = super().to_representation(variant)
+        # Bloque A.5: el cajero vende con el catalogo, no con el margen del
+        # negocio. Se quita del payload -no se envia confiando en que la UI
+        # lo esconda.
+        if not viewer_sees_cost(self.context.get("request")):
+            data.pop("cost", None)
+        return data
 
     def create(self, validated_data):
         attribute_value_ids = [

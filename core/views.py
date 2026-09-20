@@ -639,10 +639,11 @@ class SubscriptionPaymentConfirmView(SchemaAPIView):
 
 
 class TenantSettingsViewSet(AuditLoggedViewSetMixin, viewsets.ModelViewSet):
-    """Solo platform_staff por ahora. La Especificacion de API tambien permite
-    'admin del propio tenant para toggles operativos', pero eso depende de
-    PermissionService (usuarios), que llega recien en Sprint 2 -queda
-    pendiente para entonces, no se improvisa aqui."""
+    """Vista de plataforma: expone TODOS los campos, incluidos los que solo
+    Fivuza decide (modulos contratados, umbral de alerta). El admin del
+    propio tenant edita unicamente los interruptores operativos, por su
+    endpoint aparte -TenantOperationalSettingsView (usuarios/views.py),
+    Bloque A.0."""
 
     queryset = TenantSettings.objects.all()
     serializer_class = TenantSettingsSerializer

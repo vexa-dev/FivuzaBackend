@@ -32,6 +32,18 @@ from usuarios.models import (
 
 _PERMISSION_CACHE_TTL = 300
 _PERMISSION_CACHE_PREFIX = "usuarios:permissions"
+_CASHIER_SWITCHES_CACHE_PREFIX = "usuarios:cashier-switches"
+# Bloque A.1: CASH_MANAGE es el permiso historico y unico de caja. Los
+# tenants en marcha lo tienen concedido a sus roles, asi que seguir exigiendo
+# solo CASH_OPEN/CASH_CLOSE los dejaria sin poder abrir ni cerrar de un dia
+# para otro -CASH_MANAGE los implica siempre.
+_IMPLIED_PERMISSIONS = {"CASH_MANAGE": {"CASH_OPEN", "CASH_CLOSE"}}
+# Interruptor de TenantSettings -> permiso que concede a quien ya vende
+# (SALES_MANAGE), aunque su rol no lo liste (Bloque A.0/A.1).
+_CASHIER_SWITCH_PERMISSIONS = {
+    "cashier_can_open_session": "CASH_OPEN",
+    "cashier_can_close_session": "CASH_CLOSE",
+}
 _RESET_TOKEN_TTL_MINUTES = 30
 
 
@@ -68,6 +80,10 @@ class PermissionService:
                 role_codes.add(override.permission.code)
             else:
                 role_codes.discard(override.permission.code)
+
+        for code, implied in _IMPLIED_PERMISSIONS.items():
+            if code in role_codes:
+                role_codes |= implied
         return role_codes
 
     @staticmethod
@@ -81,12 +97,63 @@ class PermissionService:
         return codes
 
     @staticmethod
+    def get_effective_permission_codes(user) -> set[str]:
+        """Permisos propios del usuario mas los que le concede un interruptor
+        del negocio (Bloque A.0/A.1). Es lo que se evalua para dejar pasar
+        una request y lo que el frontend recibe como `permissions` -de ahi
+        que la UI siga usando `hasPermission` sin saber de interruptores.
+
+        Se separa de get_permission_codes() a proposito: el arqueo a ciegas
+        (A.3) necesita distinguir a quien cierra caja por permiso propio de
+        quien solo lo hace porque el dueño prendio el interruptor.
+        """
+        codes = set(PermissionService.get_permission_codes(user))
+        if "SALES_MANAGE" not in codes:
+            return codes
+        return codes | PermissionService._cashier_switch_codes()
+
+    @staticmethod
+    def _cashier_switch_codes() -> set[str]:
+        """Interruptores del tenant actual, cacheados por esquema: se
+        consultan en cada request con permisos y viven en el esquema public
+        (TenantSettings), fuera del alcance de la conexion del tenant."""
+        key = f"{_CASHIER_SWITCHES_CACHE_PREFIX}:{connection.schema_name}"
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+
+        from core.models import TenantSettings
+
+        settings_row = TenantSettings.objects.filter(
+            tenant__schema_name=connection.schema_name
+        ).first()
+        codes = set()
+        if settings_row is not None:
+            for field, code in _CASHIER_SWITCH_PERMISSIONS.items():
+                if getattr(settings_row, field):
+                    codes.add(code)
+        cache.set(key, codes, _PERMISSION_CACHE_TTL)
+        return codes
+
+    @staticmethod
     def check_permission(user, permission_code: str) -> bool:
+        """Permiso propio, sin contar los interruptores del negocio."""
         return permission_code in PermissionService.get_permission_codes(user)
+
+    @staticmethod
+    def check_effective_permission(user, permission_code: str) -> bool:
+        return permission_code in PermissionService.get_effective_permission_codes(user)
 
     @staticmethod
     def invalidate_user_cache(user_id: int) -> None:
         cache.delete(PermissionService._cache_key(user_id))
+
+    @staticmethod
+    def invalidate_cashier_switches_cache() -> None:
+        """Se llama al guardar los interruptores (A.0/A.1.5): sin esto, un
+        cajero seguiria abriendo caja hasta 5 minutos despues de que el dueño
+        apague el interruptor."""
+        cache.delete(f"{_CASHIER_SWITCHES_CACHE_PREFIX}:{connection.schema_name}")
 
     @staticmethod
     def invalidate_role_cache(role_id: int) -> None:

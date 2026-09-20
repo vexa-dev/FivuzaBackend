@@ -12,6 +12,7 @@ from core.permissions import RequiresFeature, TenantNotCanceled, TenantNotSuspen
 from core.openapi import SchemaAPIView
 from inventario.models import Warehouse
 from usuarios.permissions import HasModulePermission
+from usuarios.services import PermissionService
 from core.warehouse_access import WarehouseAccessService
 from ventas.models import (
     CashMovement,
@@ -78,6 +79,25 @@ _CASH_WRITE_PERMISSIONS = [
     TenantNotCanceled,
     RequiresFeature("HAS_CASH_MODULE"),
     HasModulePermission("CASH_MANAGE"),
+]
+# Bloque A.1: abrir y cerrar dejan de depender de CASH_MANAGE y pasan a sus
+# propios permisos. Quien tiene CASH_MANAGE los sigue teniendo implicitos
+# (PermissionService._resolve_codes), asi que ningun tenant en marcha pierde
+# acceso; lo que cambia es que ahora el dueño puede conceder solo uno de los
+# dos, por rol o con el interruptor de TenantSettings.
+_CASH_OPEN_PERMISSIONS = [
+    IsAuthenticated,
+    TenantNotSuspended,
+    TenantNotCanceled,
+    RequiresFeature("HAS_CASH_MODULE"),
+    HasModulePermission("CASH_OPEN"),
+]
+_CASH_CLOSE_PERMISSIONS = [
+    IsAuthenticated,
+    TenantNotSuspended,
+    TenantNotCanceled,
+    RequiresFeature("HAS_CASH_MODULE"),
+    HasModulePermission("CASH_CLOSE"),
 ]
 
 # Mismo esquema lectura/escritura que Caja (Sprint 12): lectura abierta a
@@ -152,6 +172,14 @@ class CashSessionViewSet(
             self.request.user,
             lookup="cash_register__warehouse_id",
         )
+        # Bloque A.2: quien no controla la caja solo ve las sesiones que
+        # puede operar -las suyas y las de las cajas que tiene asignadas.
+        # Sin esto el selector del POS sigue ofreciendo la caja del companero.
+        user = self.request.user
+        if not PermissionService.check_effective_permission(user, "CASH_CLOSE"):
+            queryset = queryset.filter(
+                Q(user=user) | Q(cash_register__assigned_user=user)
+            )
         params = self.request.query_params
         cash_register_id = params.get("cash_register")
         if cash_register_id:
@@ -215,7 +243,7 @@ class CashSessionOpenView(SchemaAPIView):
     serializer_class = CashSessionOpenSerializer
     """POST -> abre una sesion de caja (Especificacion de API §4.4)."""
 
-    permission_classes = _CASH_WRITE_PERMISSIONS
+    permission_classes = _CASH_OPEN_PERMISSIONS
 
     def post(self, request):
         serializer = CashSessionOpenSerializer(
@@ -224,7 +252,8 @@ class CashSessionOpenView(SchemaAPIView):
         serializer.is_valid(raise_exception=True)
         session = serializer.save()
         return Response(
-            CashSessionSerializer(session).data, status=status.HTTP_201_CREATED
+            CashSessionSerializer(session, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
         )
 
 
@@ -234,7 +263,7 @@ class CashSessionCloseView(SchemaAPIView):
     §4.4): calcula expected_closing_amount y guarda la diferencia contra lo
     contado."""
 
-    permission_classes = _CASH_WRITE_PERMISSIONS
+    permission_classes = _CASH_CLOSE_PERMISSIONS
 
     def post(self, request, pk):
         session = get_object_or_404(CashSession, pk=pk)
@@ -246,7 +275,9 @@ class CashSessionCloseView(SchemaAPIView):
         )
         serializer.is_valid(raise_exception=True)
         session = serializer.save()
-        return Response(CashSessionSerializer(session).data)
+        return Response(
+            CashSessionSerializer(session, context={"request": request}).data
+        )
 
 
 class CustomerViewSet(viewsets.ModelViewSet):

@@ -38,7 +38,7 @@ from ventas.services import (
 class CashRegisterSerializer(serializers.ModelSerializer):
     class Meta:
         model = CashRegister
-        fields = ["id", "warehouse", "name", "is_active"]
+        fields = ["id", "warehouse", "name", "is_active", "assigned_user"]
 
     def validate_warehouse(self, warehouse):
         WarehouseAccessService.require_warehouse(
@@ -49,9 +49,14 @@ class CashRegisterSerializer(serializers.ModelSerializer):
 
 class CashSessionSerializer(serializers.ModelSerializer):
     # Esperado "a la fecha" de una caja abierta, con la misma formula del
-    # cierre real (apertura + ventas en efectivo + ingresos - egresos). El
-    # arqueo del frontend lo muestra como referencia antes de contar: antes
-    # lo estimaba en el navegador sin las ventas en efectivo.
+    # cierre real (apertura + ventas en efectivo + ingresos - egresos).
+    #
+    # Bloque A.3 (arqueo a ciegas): solo lo recibe quien tiene CASH_CLOSE
+    # por permiso propio. Para el cajero -incluido aquel a quien el dueño le
+    # concedio el cierre con el interruptor- viaja en null: contar el
+    # efectivo sabiendo cuanto "deberia" haber no es un control, es un
+    # formulario con la respuesta impresa al lado. El backend no envia el
+    # dato; no se confia en que la UI lo esconda.
     expected_amount_so_far = serializers.SerializerMethodField()
 
     class Meta:
@@ -80,6 +85,21 @@ class CashSessionSerializer(serializers.ModelSerializer):
             "closing_at",
         ]
 
+    # Campos del arqueo que solo ve quien controla la caja (Bloque A.3).
+    _CONTROL_FIELDS = (
+        "expected_amount_so_far",
+        "expected_closing_amount",
+        "difference",
+    )
+
+    def to_representation(self, session):
+        data = super().to_representation(session)
+        if not self._viewer_closes_cash():
+            for field in self._CONTROL_FIELDS:
+                if field in data:
+                    data[field] = None
+        return data
+
     @extend_schema_field(
         serializers.DecimalField(max_digits=14, decimal_places=4, allow_null=True)
     )
@@ -88,6 +108,18 @@ class CashSessionSerializer(serializers.ModelSerializer):
             return None
         expected = CashSessionService._calculate_expected_closing_amount(session)
         return str(expected)
+
+    def _viewer_closes_cash(self) -> bool:
+        """Permiso propio, no el efectivo: el interruptor del negocio deja
+        al cajero cerrar su caja, pero no lo convierte en quien controla el
+        arqueo (Bloque A.3)."""
+        from usuarios.services import PermissionService
+
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user is None or not hasattr(user, "role_id"):
+            return False
+        return PermissionService.check_permission(user, "CASH_CLOSE")
 
 
 class CashMovementSerializer(serializers.ModelSerializer):
@@ -134,9 +166,19 @@ class CashSessionDetailSerializer(CashSessionSerializer):
     §2.3), sin requerir una segunda llamada a /cash-movements/?cash_session=."""
 
     movements = CashMovementSerializer(many=True, read_only=True)
+    # Bloque A.4: totales por metodo de pago del turno. A diferencia del
+    # esperado del arqueo, esto SI lo ve el cajero -no le dice cuanto
+    # efectivo deberia tener en el cajon, le dice que cobro por cada medio.
+    payment_totals = serializers.SerializerMethodField()
 
     class Meta(CashSessionSerializer.Meta):
-        fields = CashSessionSerializer.Meta.fields + ["movements"]
+        fields = CashSessionSerializer.Meta.fields + ["movements", "payment_totals"]
+
+    @extend_schema_field(
+        serializers.DictField(child=serializers.CharField(), allow_null=False)
+    )
+    def get_payment_totals(self, session):
+        return CashSessionService.payment_totals_by_method(session)
 
 
 class CashMovementReceiptUploadURLSerializer(serializers.Serializer):

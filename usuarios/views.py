@@ -19,6 +19,7 @@ from core.auth_cookies import (
     get_refresh_cookie,
     set_refresh_cookie,
 )
+from core.models import TenantSettings
 from core.openapi import SchemaAPIView
 from core.permissions import RequiresFeature, TenantNotCanceled, TenantNotSuspended
 from core.throttling import LoginIdentifierRateThrottle, LoginRateThrottle
@@ -55,6 +56,7 @@ from usuarios.serializers import (
     RolePermissionSerializer,
     RolePermissionsHistorySerializer,
     RoleSerializer,
+    TenantOperationalSettingsSerializer,
     TenantUserTokenObtainSerializer,
     UserPermissionSerializer,
     UserSerializer,
@@ -138,7 +140,9 @@ class TenantUserRefreshView(SchemaAPIView):
                     "warehouse_ids": list(
                         WarehouseAccessService.allowed_warehouse_ids(user)
                     ),
-                    "permissions": sorted(PermissionService.get_permission_codes(user)),
+                    "permissions": sorted(
+                        PermissionService.get_effective_permission_codes(user)
+                    ),
                 },
             }
         )
@@ -310,6 +314,61 @@ class OwnDataExportView(SchemaAPIView):
 
     def get(self, request):
         return Response(PersonalDataService.export_own_data(request.user))
+
+
+class TenantOperationalSettingsView(SchemaAPIView):
+    """GET/PATCH de los interruptores operativos del propio negocio (Bloque
+    A.0). Hasta ahora TenantSettings solo se editaba desde el panel interno
+    de Fivuza (core.TenantSettingsViewSet, IsPlatformStaff), pese a que la
+    Especificacion de API siempre contemplo que el admin del tenant manejara
+    sus propios interruptores.
+
+    Es un singleton (una fila por tenant), no un recurso listable: por eso
+    APIView y no ViewSet, mismo criterio que el resto de endpoints que no
+    son un CRUD (Convenciones §4.1).
+    """
+
+    serializer_class = TenantOperationalSettingsSerializer
+    permission_classes = [
+        IsAuthenticated,
+        TenantNotSuspended,
+        TenantNotCanceled,
+        HasModulePermission("SETTINGS_MANAGE"),
+    ]
+
+    def _get_settings(self, request):
+        return get_object_or_404(TenantSettings, tenant=request.tenant)
+
+    def get(self, request):
+        serializer = TenantOperationalSettingsSerializer(self._get_settings(request))
+        return Response(serializer.data)
+
+    def patch(self, request):
+        settings_row = self._get_settings(request)
+        serializer = TenantOperationalSettingsSerializer(
+            settings_row, data=request.data, partial=True
+        )
+        serializer.is_valid(raise_exception=True)
+        changed = {
+            field: {"before": getattr(settings_row, field), "after": value}
+            for field, value in serializer.validated_data.items()
+            if getattr(settings_row, field) != value
+        }
+        serializer.save()
+
+        # Sin esto, el interruptor recien apagado seguiria concediendo
+        # CASH_OPEN/CASH_CLOSE hasta que expire el cache de permisos (A.1.5).
+        PermissionService.invalidate_cashier_switches_cache()
+
+        if changed:
+            AuditLogService.log_action(
+                user=request.user,
+                action="TENANT_SETTINGS_UPDATED",
+                entity="TenantSettings",
+                entity_id=settings_row.id,
+                details=changed,
+            )
+        return Response(serializer.data)
 
 
 class UserAnonymizeView(SchemaAPIView):
