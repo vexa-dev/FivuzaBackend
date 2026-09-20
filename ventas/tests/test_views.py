@@ -1024,10 +1024,16 @@ class SaleVoidAndReturnTests(TenantTestCase):
         return client
 
     def _open_session(self):
+        # La caja se asigna al vendedor (Bloque A.2): la abre el admin, pero
+        # hay casos que venden y devuelven con el vendedor -sin asignacion,
+        # el dueño del turno seria el admin y el vendedor recibiria
+        # CASH_SESSION_NOT_OWNED. El admin puede operarla igual porque tiene
+        # CASH_CLOSE.
         SaleVoidAndReturnTests._register_counter += 1
         register = CashRegister.objects.create(
             warehouse=self.warehouse,
             name=f"Caja {SaleVoidAndReturnTests._register_counter}",
+            assigned_user=self.seller_user,
         )
         response = self._client_as(self.admin_user).post(
             "/api/v1/ventas/cash-sessions/open/",
