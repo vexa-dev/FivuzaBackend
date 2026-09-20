@@ -727,15 +727,19 @@ class SaleEndpointsTests(TenantTestCase):
         return client
 
     def _open_session(self, client=None):
-        # Siempre se abre con el admin -un seller no tiene CASH_MANAGE
-        # (decision deliberada desde Sprint 12), asi que no podria abrir su
-        # propia caja aunque si pueda vender contra una ya abierta. Cada
+        # Siempre se abre con el admin -un seller no tiene CASH_OPEN salvo
+        # que el negocio se lo conceda (Bloque A.1), asi que no podria abrir
+        # su propia caja aunque si pueda vender contra una ya abierta. La
+        # caja se asigna al vendedor (Bloque A.2) porque es el quien vende
+        # en estos tests: sin asignacion, el dueño del turno seria el admin
+        # que la abrio y el vendedor recibiria CASH_SESSION_NOT_OWNED. Cada
         # test usa su propio CashRegister porque CashSessionService no
         # permite dos sesiones abiertas sobre el mismo registro.
         SaleEndpointsTests._register_counter += 1
         register = CashRegister.objects.create(
             warehouse=self.warehouse,
             name=f"Caja {SaleEndpointsTests._register_counter}",
+            assigned_user=self.seller_user,
         )
         response = self._client_as(self.admin_user).post(
             "/api/v1/ventas/cash-sessions/open/",
