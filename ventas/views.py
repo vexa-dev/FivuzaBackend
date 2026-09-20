@@ -36,6 +36,7 @@ from ventas.serializers import (
     CashSessionDetailSerializer,
     CashSessionOpenSerializer,
     CashSessionSerializer,
+    CashSessionSubmitCountSerializer,
     CustomerBalanceLedgerSerializer,
     CustomerDebtLedgerSerializer,
     CustomerSerializer,
@@ -91,6 +92,15 @@ _CASH_OPEN_PERMISSIONS = [
     TenantNotCanceled,
     RequiresFeature("HAS_CASH_MODULE"),
     HasModulePermission("CASH_OPEN"),
+]
+# Entregar la caja contada (primer paso) y cerrarla (segundo) son permisos
+# distintos: el interruptor del negocio concede el primero, nunca el segundo.
+_CASH_SUBMIT_COUNT_PERMISSIONS = [
+    IsAuthenticated,
+    TenantNotSuspended,
+    TenantNotCanceled,
+    RequiresFeature("HAS_CASH_MODULE"),
+    HasModulePermission("CASH_SUBMIT_COUNT"),
 ]
 _CASH_CLOSE_PERMISSIONS = [
     IsAuthenticated,
@@ -176,7 +186,7 @@ class CashSessionViewSet(
         # puede operar -las suyas y las de las cajas que tiene asignadas.
         # Sin esto el selector del POS sigue ofreciendo la caja del companero.
         user = self.request.user
-        if not PermissionService.check_effective_permission(user, "CASH_CLOSE"):
+        if not PermissionService.check_permission(user, "CASH_CLOSE"):
             queryset = queryset.filter(
                 Q(user=user) | Q(cash_register__assigned_user=user)
             )
@@ -254,6 +264,31 @@ class CashSessionOpenView(SchemaAPIView):
         return Response(
             CashSessionSerializer(session, context={"request": request}).data,
             status=status.HTTP_201_CREATED,
+        )
+
+
+class CashSessionSubmitCountView(SchemaAPIView):
+    serializer_class = CashSessionSubmitCountSerializer
+    """POST -> el cajero entrega su conteo (Bloque A: cierre en dos pasos).
+
+    La caja queda en PENDING_APPROVAL: no admite mas ventas ni movimientos,
+    pero tampoco esta cerrada -el esperado y la diferencia los calcula el
+    cierre definitivo, que hace un supervisor."""
+
+    permission_classes = _CASH_SUBMIT_COUNT_PERMISSIONS
+
+    def post(self, request, pk):
+        session = get_object_or_404(CashSession, pk=pk)
+        WarehouseAccessService.require_warehouse(
+            request.user, session.cash_register.warehouse_id
+        )
+        serializer = CashSessionSubmitCountSerializer(
+            data=request.data, context={"request": request, "session": session}
+        )
+        serializer.is_valid(raise_exception=True)
+        session = serializer.save()
+        return Response(
+            CashSessionSerializer(session, context={"request": request}).data
         )
 
 
@@ -803,17 +838,23 @@ class SalesReportView(SchemaAPIView):
 
 
 class CashSessionReportView(SchemaAPIView):
-    """GET /ventas/reports/cash-sessions/?date_from=&date_to=&export=
+    """GET /ventas/reports/cash-sessions/?date_from=&date_to=&include_open=&export=
     (Sprint 25, API Spec §4.16). Sesiones de caja con su cuadre -mismo
     criterio que los demas reportes de este sprint: la misma consulta
-    arma la pantalla y la exportacion."""
+    arma la pantalla y la exportacion.
 
-    permission_classes = _CASH_READ_PERMISSIONS
+    Bloque A.3: el reporte lleva esperado y diferencia, o sea el resultado
+    del control. Exige CASH_CLOSE -si no, el arqueo a ciegas se
+    esquivaba bajando el mismo dato en un Excel. Por defecto solo incluye
+    cajas cerradas; `include_open=true` suma las abiertas y las entregadas,
+    para revisar un turno en curso."""
+
+    permission_classes = _CASH_CLOSE_PERMISSIONS
 
     def get(self, request):
         from rest_framework.exceptions import ValidationError
 
-        from usuarios.services import ReportExportService
+        from usuarios.services import AuditLogService, ReportExportService
 
         date_from = request.query_params.get("date_from")
         date_to = request.query_params.get("date_to")
@@ -828,6 +869,9 @@ class CashSessionReportView(SchemaAPIView):
         queryset = WarehouseAccessService.scope_queryset(
             queryset, request.user, lookup="cash_register__warehouse_id"
         )
+        include_open = request.query_params.get("include_open") == "true"
+        if not include_open:
+            queryset = queryset.filter(status="CLOSED")
 
         rows = [
             {
@@ -865,6 +909,21 @@ class CashSessionReportView(SchemaAPIView):
                 "difference",
                 "status",
             ]
+            # Quien se lleva el arqueo de un turno queda registrado: es el
+            # dato mas sensible del modulo de caja (Bloque A.3).
+            AuditLogService.log_action(
+                user=request.user,
+                action="CASH_SESSION_REPORT_EXPORTED",
+                entity="CashSession",
+                entity_id=0,
+                details={
+                    "date_from": date_from,
+                    "date_to": date_to,
+                    "include_open": include_open,
+                    "format": export_format,
+                    "rows": len(rows),
+                },
+            )
             return ReportExportService.export_queryset(
                 rows=rows,
                 columns=columns,

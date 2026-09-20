@@ -46,6 +46,34 @@ class CashRegisterSerializer(serializers.ModelSerializer):
         )
         return warehouse
 
+    def validate(self, attrs):
+        """Bloque A.2: asignar la caja a alguien que no trabaja en ese
+        almacen, o a alguien dado de baja, deja una caja que nadie puede
+        abrir -es un error de configuracion silencioso, asi que se rechaza
+        al guardarlo y no al intentar vender."""
+        assigned_user = attrs.get(
+            "assigned_user", getattr(self.instance, "assigned_user", None)
+        )
+        if assigned_user is None:
+            return attrs
+
+        if not assigned_user.is_active or assigned_user.deleted_at is not None:
+            raise serializers.ValidationError(
+                {"assigned_user": "Esta persona ya no está activa en el sistema."}
+            )
+
+        warehouse = attrs.get("warehouse", getattr(self.instance, "warehouse", None))
+        allowed = WarehouseAccessService.allowed_warehouse_ids(assigned_user)
+        if warehouse is not None and warehouse.id not in allowed:
+            raise serializers.ValidationError(
+                {
+                    "assigned_user": (
+                        "Esta persona no tiene acceso al almacén de esta caja."
+                    )
+                }
+            )
+        return attrs
+
 
 class CashSessionSerializer(serializers.ModelSerializer):
     # Esperado "a la fecha" de una caja abierta, con la misma formula del
@@ -70,6 +98,8 @@ class CashSessionSerializer(serializers.ModelSerializer):
             "expected_closing_amount",
             "expected_amount_so_far",
             "counted_closing_amount",
+            "counted_at",
+            "approved_by",
             "difference",
             "status",
             "closing_at",
@@ -80,6 +110,8 @@ class CashSessionSerializer(serializers.ModelSerializer):
             "opening_at",
             "expected_closing_amount",
             "counted_closing_amount",
+            "counted_at",
+            "approved_by",
             "difference",
             "status",
             "closing_at",
@@ -104,15 +136,15 @@ class CashSessionSerializer(serializers.ModelSerializer):
         serializers.DecimalField(max_digits=14, decimal_places=4, allow_null=True)
     )
     def get_expected_amount_so_far(self, session):
-        if session.status != "OPEN":
+        if session.status not in ("OPEN", "PENDING_APPROVAL"):
             return None
         expected = CashSessionService._calculate_expected_closing_amount(session)
         return str(expected)
 
     def _viewer_closes_cash(self) -> bool:
-        """Permiso propio, no el efectivo: el interruptor del negocio deja
-        al cajero cerrar su caja, pero no lo convierte en quien controla el
-        arqueo (Bloque A.3)."""
+        """Quien controla la caja, es decir quien tiene CASH_CLOSE. El
+        cajero al que el negocio le permitio entregar su caja tiene
+        CASH_SUBMIT_COUNT, que no alcanza (Bloque A.3)."""
         from usuarios.services import PermissionService
 
         request = self.context.get("request")
@@ -612,7 +644,9 @@ class CashSessionOpenSerializer(serializers.Serializer):
         )
 
 
-class CashSessionCloseSerializer(serializers.Serializer):
+class CashSessionSubmitCountSerializer(serializers.Serializer):
+    """Primer paso del cierre (Bloque A): el cajero entrega lo que conto."""
+
     counted_closing_amount = serializers.DecimalField(
         max_digits=12, decimal_places=4, min_value=0
     )
@@ -626,9 +660,33 @@ class CashSessionCloseSerializer(serializers.Serializer):
         return attrs
 
     def create(self, validated_data):
-        return CashSessionService.close_session(
+        return CashSessionService.submit_count(
             session=self.context["session"],
             counted_closing_amount=validated_data["counted_closing_amount"],
+            user=self.context["request"].user,
+            notes=validated_data.get("notes"),
+        )
+
+
+class CashSessionCloseSerializer(serializers.Serializer):
+    # Opcional desde el cierre en dos pasos: si el cajero ya entrego su
+    # conteo, el supervisor confirma sin volver a escribirlo.
+    counted_closing_amount = serializers.DecimalField(
+        max_digits=12, decimal_places=4, min_value=0, required=False
+    )
+    notes = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        WarehouseAccessService.require_warehouse(
+            self.context["request"].user,
+            self.context["session"].cash_register.warehouse_id,
+        )
+        return attrs
+
+    def create(self, validated_data):
+        return CashSessionService.close_session(
+            session=self.context["session"],
+            counted_closing_amount=validated_data.get("counted_closing_amount"),
             user=self.context["request"].user,
             tenant=self.context["request"].tenant,
             notes=validated_data.get("notes"),

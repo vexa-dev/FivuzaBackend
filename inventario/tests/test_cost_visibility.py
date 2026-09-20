@@ -9,7 +9,7 @@ from rest_framework.test import APIClient
 from core.models import TenantSettings
 from inventario.models import Category, Warehouse
 from inventario.services import ProductVariantService, StockService
-from usuarios.models import Role, User, UserWarehouse
+from usuarios.models import Permission, Role, RolePermission, User, UserWarehouse
 
 
 class CostVisibilityTests(TenantTestCase):
@@ -32,8 +32,18 @@ class CostVisibilityTests(TenantTestCase):
             "vendedor@negocio.com", Role.objects.get(name="seller")
         )
 
+        # Administra el catalogo pero no ve costos: el caso real del
+        # "cataloguero" que carga productos sin acceso a los margenes.
+        cls.catalog_role = Role.objects.create(name="catalogador")
+        for code in ("INVENTORY_VIEW", "INVENTORY_MANAGE"):
+            RolePermission.objects.create(
+                role=cls.catalog_role, permission=Permission.objects.get(code=code)
+            )
+        cls.catalog_user = cls._create_user("catalogo@negocio.com", cls.catalog_role)
+
         cls.warehouse = Warehouse.objects.create(name="Principal")
         UserWarehouse.objects.create(user=cls.seller_user, warehouse=cls.warehouse)
+        UserWarehouse.objects.create(user=cls.catalog_user, warehouse=cls.warehouse)
         cls.category = Category.objects.create(name="Ropa")
 
         product = ProductVariantService.create_product(
@@ -121,3 +131,63 @@ class CostVisibilityTests(TenantTestCase):
 
         supervisor = self._client_as(self.admin_user).get("/api/v1/dashboard/metrics/")
         self.assertIn("gross_margin", supervisor.data)
+
+    def test_catalog_manager_cannot_write_a_cost_he_cannot_see(self):
+        """Bloque A.5: ver y escribir el costo van juntos. Quien administra
+        el catalogo sin INVENTORY_VIEW_COST edita todo lo demas, pero no
+        puede pisar un valor que nunca vio."""
+        client = self._client_as(self.catalog_user)
+        response = client.patch(
+            f"/api/v1/inventario/product-variants/{self.variant.id}/",
+            {"cost": "1.00"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.variant.refresh_from_db()
+        self.assertEqual(str(self.variant.cost), "10.0000")
+
+        # El resto de la variante si lo edita con normalidad.
+        allowed = client.patch(
+            f"/api/v1/inventario/product-variants/{self.variant.id}/",
+            {"price": "30.00"},
+            format="json",
+        )
+        self.assertEqual(allowed.status_code, 200)
+
+    def test_cost_cannot_be_set_when_creating_a_product_either(self):
+        response = self._client_as(self.catalog_user).post(
+            "/api/v1/inventario/products/",
+            {
+                "type": "PRODUCT",
+                "name": "Producto sin permiso de costo",
+                "category": self.category.id,
+                "unit_of_measure": "UND",
+                "variants_input": [{"sku": "SKU-COST-DENIED", "cost": "99.00"}],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+        # Sin el campo costo, la creacion pasa.
+        allowed = self._client_as(self.catalog_user).post(
+            "/api/v1/inventario/products/",
+            {
+                "type": "PRODUCT",
+                "name": "Producto sin costo declarado",
+                "category": self.category.id,
+                "unit_of_measure": "UND",
+                "variants_input": [{"sku": "SKU-COST-OK", "price": "10.00"}],
+            },
+            format="json",
+        )
+        self.assertEqual(allowed.status_code, 201)
+
+    def test_whoever_sees_the_cost_can_still_write_it(self):
+        response = self._client_as(self.admin_user).patch(
+            f"/api/v1/inventario/product-variants/{self.variant.id}/",
+            {"cost": "12.00"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.variant.refresh_from_db()
+        self.assertEqual(str(self.variant.cost), "12.0000")

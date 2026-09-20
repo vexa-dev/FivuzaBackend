@@ -37,12 +37,18 @@ _CASHIER_SWITCHES_CACHE_PREFIX = "usuarios:cashier-switches"
 # tenants en marcha lo tienen concedido a sus roles, asi que seguir exigiendo
 # solo CASH_OPEN/CASH_CLOSE los dejaria sin poder abrir ni cerrar de un dia
 # para otro -CASH_MANAGE los implica siempre.
-_IMPLIED_PERMISSIONS = {"CASH_MANAGE": {"CASH_OPEN", "CASH_CLOSE"}}
+_IMPLIED_PERMISSIONS = {
+    "CASH_MANAGE": {"CASH_OPEN", "CASH_CLOSE"},
+    # Quien cierra cajas obviamente puede entregar la suya.
+    "CASH_CLOSE": {"CASH_SUBMIT_COUNT"},
+}
 # Interruptor de TenantSettings -> permiso que concede a quien ya vende
 # (SALES_MANAGE), aunque su rol no lo liste (Bloque A.0/A.1).
 _CASHIER_SWITCH_PERMISSIONS = {
     "cashier_can_open_session": "CASH_OPEN",
-    "cashier_can_close_session": "CASH_CLOSE",
+    # El interruptor concede entregar la caja, nunca cerrarla: el cierre
+    # definitivo lo aprueba quien tiene CASH_CLOSE por rol.
+    "cashier_can_close_session": "CASH_SUBMIT_COUNT",
 }
 _RESET_TOKEN_TTL_MINUTES = 30
 
@@ -81,10 +87,16 @@ class PermissionService:
             else:
                 role_codes.discard(override.permission.code)
 
-        for code, implied in _IMPLIED_PERMISSIONS.items():
-            if code in role_codes:
-                role_codes |= implied
-        return role_codes
+        # Se aplica hasta el punto fijo: CASH_MANAGE implica CASH_CLOSE, que
+        # a su vez implica CASH_SUBMIT_COUNT.
+        while True:
+            expanded = set(role_codes)
+            for code, implied in _IMPLIED_PERMISSIONS.items():
+                if code in expanded:
+                    expanded |= implied
+            if expanded == role_codes:
+                return role_codes
+            role_codes = expanded
 
     @staticmethod
     def get_permission_codes(user) -> set[str]:
@@ -149,11 +161,16 @@ class PermissionService:
         cache.delete(PermissionService._cache_key(user_id))
 
     @staticmethod
-    def invalidate_cashier_switches_cache() -> None:
+    def invalidate_cashier_switches_cache(schema_name: str | None = None) -> None:
         """Se llama al guardar los interruptores (A.0/A.1.5): sin esto, un
         cajero seguiria abriendo caja hasta 5 minutos despues de que el dueño
-        apague el interruptor."""
-        cache.delete(f"{_CASHIER_SWITCHES_CACHE_PREFIX}:{connection.schema_name}")
+        apague el interruptor.
+
+        `schema_name` es obligatorio cuando quien guarda no esta operando
+        dentro del esquema del tenant -el panel interno de Fivuza edita
+        TenantSettings desde `public`."""
+        schema = schema_name or connection.schema_name
+        cache.delete(f"{_CASHIER_SWITCHES_CACHE_PREFIX}:{schema}")
 
     @staticmethod
     def invalidate_role_cache(role_id: int) -> None:

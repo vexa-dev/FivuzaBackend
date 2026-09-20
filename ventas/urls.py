@@ -43,6 +43,13 @@ urlpatterns = [
         views.CashSessionOpenView.as_view(),
         name="cash-session-open",
     ),
+    # Bloque A: el cajero entrega su conteo y el supervisor cierra. Dos
+    # rutas y no una con bandera -son dos permisos distintos.
+    path(
+        "ventas/cash-sessions/<int:pk>/submit-count/",
+        views.CashSessionSubmitCountView.as_view(),
+        name="cash-session-submit-count",
+    ),
     path(
         "ventas/cash-sessions/<int:pk>/close/",
         views.CashSessionCloseView.as_view(),

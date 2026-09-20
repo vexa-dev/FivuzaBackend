@@ -171,6 +171,12 @@ class TenantProvisioningService:
         # PermissionService._resolve_codes.
         ("CASH_OPEN", "CASH"),
         ("CASH_CLOSE", "CASH"),
+        # Primer paso del cierre en dos pasos: entregar la caja contada para
+        # que un supervisor la revise. Es lo que concede el interruptor
+        # cashier_can_close_session -deliberadamente un codigo propio y no
+        # CASH_CLOSE a medias, para que "puedo entregar mi caja" y "controlo
+        # las cajas del negocio" nunca se confundan.
+        ("CASH_SUBMIT_COUNT", "CASH"),
         ("SALES_MANAGE", "SALES"),
         # Sprint 18: separados de SALES_MANAGE a proposito (Plan de
         # Implementacion, Sprint 18: "un cajero puede vender sin poder anular
@@ -204,6 +210,7 @@ class TenantProvisioningService:
             "CASH_MANAGE",
             "CASH_OPEN",
             "CASH_CLOSE",
+            "CASH_SUBMIT_COUNT",
             "SALES_MANAGE",
             "SALES_VOID",
             "SALES_RETURN",
@@ -225,6 +232,7 @@ class TenantProvisioningService:
             "CASH_MANAGE",
             "CASH_OPEN",
             "CASH_CLOSE",
+            "CASH_SUBMIT_COUNT",
             "SALES_MANAGE",
             "SALES_VOID",
             "SALES_RETURN",

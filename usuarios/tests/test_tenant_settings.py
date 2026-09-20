@@ -129,3 +129,57 @@ class TenantOperationalSettingsTests(TenantTestCase):
         self.assertFalse(
             AuditLog.objects.filter(action="TENANT_SETTINGS_UPDATED").exists()
         )
+
+    def test_turning_a_switch_off_takes_effect_on_the_next_request(self):
+        """El interruptor concede permisos: si el cache sobrevive al cambio,
+        el cajero sigue entrando durante minutos (Bloque A.1.5)."""
+        from usuarios.services import PermissionService
+
+        client = self._client_as(self.admin_user)
+        client.patch(
+            "/api/v1/usuarios/settings/",
+            {"cashier_can_open_session": True},
+            format="json",
+        )
+        self.assertIn(
+            "CASH_OPEN",
+            PermissionService.get_effective_permission_codes(self.seller_user),
+        )
+
+        client.patch(
+            "/api/v1/usuarios/settings/",
+            {"cashier_can_open_session": False},
+            format="json",
+        )
+        self.assertNotIn(
+            "CASH_OPEN",
+            PermissionService.get_effective_permission_codes(self.seller_user),
+        )
+
+    def test_platform_panel_also_clears_the_permission_cache(self):
+        """Fivuza puede tocar los mismos interruptores desde su panel
+        interno, que corre en el esquema public: la invalidacion tiene que
+        apuntar al esquema del tenant, no al de la request."""
+        from django.db import connection
+
+        from usuarios.services import PermissionService
+
+        settings_row = TenantSettings.objects.get(tenant=self.tenant)
+        settings_row.cashier_can_open_session = True
+        settings_row.save(update_fields=["cashier_can_open_session"])
+        PermissionService.invalidate_cashier_switches_cache(connection.schema_name)
+        self.assertIn(
+            "CASH_OPEN",
+            PermissionService.get_effective_permission_codes(self.seller_user),
+        )
+
+        # Simula el guardado desde el panel: la fila cambia sin que la
+        # conexion este dentro del esquema del tenant.
+        TenantSettings.objects.filter(tenant=self.tenant).update(
+            cashier_can_open_session=False
+        )
+        PermissionService.invalidate_cashier_switches_cache(self.tenant.schema_name)
+        self.assertNotIn(
+            "CASH_OPEN",
+            PermissionService.get_effective_permission_codes(self.seller_user),
+        )

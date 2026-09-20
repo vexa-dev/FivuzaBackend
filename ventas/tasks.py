@@ -1,5 +1,5 @@
-"""Tareas de Celery propias de ventas: notificación al administrador cuando
-una CashSession cierra con difference != 0.
+"""Tareas de Celery propias de ventas: notificaciones al administrador
+sobre el ciclo de vida de una CashSession.
 
 send_cash_difference_alert: disparada por CashSessionService.close_session()
 cuando abs(difference) supera TenantSettings.cash_difference_alert_threshold
@@ -55,6 +55,50 @@ def send_cash_difference_alert(schema_name: str, session_id: int) -> None:
         )
         send_mail(
             subject=f"Diferencia de arqueo en {session.cash_register.name}",
+            message=strip_tags(html_body),
+            html_message=html_body,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=recipients,
+        )
+
+
+@shared_task
+def send_cash_count_submitted_alert(schema_name: str, session_id: int) -> None:
+    """Bloque A: el cajero entrego su caja y hay que revisarla. Mismo patron
+    que send_cash_difference_alert -sin esto, el cierre en dos pasos
+    dependeria de que el administrador se acuerde de mirar el historial."""
+    with schema_context(schema_name):
+        from usuarios.models import User
+        from ventas.models import CashSession
+
+        session = (
+            CashSession.objects.select_related("cash_register", "user")
+            .filter(id=session_id)
+            .first()
+        )
+        if session is None or session.status != "PENDING_APPROVAL":
+            return
+
+        recipients = list(
+            User.objects.filter(role__name="admin", is_active=True).values_list(
+                "email", flat=True
+            )
+        )
+        if not recipients:
+            return
+
+        html_body = render_to_string(
+            "ventas/emails/cash_count_submitted_alert.html",
+            {
+                "cash_register_name": session.cash_register.name,
+                "session_id": session.id,
+                "counted_by": session.user.email,
+                "opening_amount": session.opening_amount,
+                "counted_closing_amount": session.counted_closing_amount,
+            },
+        )
+        send_mail(
+            subject=f"Caja entregada para revision: {session.cash_register.name}",
             message=strip_tags(html_body),
             html_message=html_body,
             from_email=settings.DEFAULT_FROM_EMAIL,

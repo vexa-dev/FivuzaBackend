@@ -47,7 +47,18 @@ class CashSessionNotOpenError(APIException):
     default_detail = {
         "error": {
             "code": "CASH_SESSION_NOT_OPEN",
-            "message": "Esta sesion de caja ya esta cerrada.",
+            "message": "Esta sesion de caja ya no admite movimientos.",
+        }
+    }
+
+
+class CashSessionAlreadyCountedError(APIException):
+    status_code = 409
+    default_code = "CASH_SESSION_ALREADY_COUNTED"
+    default_detail = {
+        "error": {
+            "code": "CASH_SESSION_ALREADY_COUNTED",
+            "message": "Esta caja ya fue entregada y esta esperando la aprobacion de un supervisor.",
         }
     }
 
@@ -59,6 +70,17 @@ class CashSessionNotOwnedError(APIException):
         "error": {
             "code": "CASH_SESSION_NOT_OWNED",
             "message": "Esta caja no es tuya. Pide a quien la abrio, o a un supervisor, que la opere.",
+        }
+    }
+
+
+class CountedAmountRequiredError(APIException):
+    status_code = 400
+    default_code = "COUNTED_AMOUNT_REQUIRED"
+    default_detail = {
+        "error": {
+            "code": "COUNTED_AMOUNT_REQUIRED",
+            "message": "Indica el monto contado para cerrar la caja.",
         }
     }
 
@@ -80,9 +102,12 @@ class CashSessionService:
 
     @staticmethod
     def _has_cash_close(user) -> bool:
+        """Supervisor de caja. El interruptor del negocio (Bloque A.0)
+        concede CASH_SUBMIT_COUNT, no esto: entregar la caja propia nunca
+        convierte a nadie en supervisor de las ajenas."""
         from usuarios.services import PermissionService
 
-        return PermissionService.check_effective_permission(user, "CASH_CLOSE")
+        return PermissionService.check_permission(user, "CASH_CLOSE")
 
     @staticmethod
     def assert_can_open(*, cash_register: CashRegister, user) -> None:
@@ -121,6 +146,9 @@ class CashSessionService:
         *, cash_register: CashRegister, user, opening_amount
     ) -> CashSession:
         CashSessionService.assert_can_open(cash_register=cash_register, user=user)
+        # Solo bloquea una sesion OPEN: una caja entregada y pendiente de
+        # aprobacion (Bloque A) no frena el turno siguiente -el supervisor
+        # puede revisarla mas tarde sin dejar el mostrador parado.
         if CashSession.objects.filter(
             cash_register=cash_register, status="OPEN"
         ).exists():
@@ -135,17 +163,86 @@ class CashSessionService:
         )
 
     @staticmethod
-    def close_session(
+    def submit_count(
         *,
         session: CashSession,
         counted_closing_amount,
         user,
+        notes: str | None = None,
+    ) -> CashSession:
+        """Primer paso del cierre en dos pasos (Bloque A.3): el cajero
+        entrega su conteo y la caja deja de admitir ventas y movimientos,
+        pero no queda cerrada -eso lo decide un supervisor, que es quien ve
+        el esperado y la diferencia.
+
+        No calcula ni guarda la diferencia a proposito: el arqueo a ciegas
+        se rompe si el resultado del control vuelve por la respuesta.
+        """
+        CashSessionService.assert_can_close(session=session, user=user)
+        if session.status == "PENDING_APPROVAL":
+            raise CashSessionAlreadyCountedError()
+        if session.status != "OPEN":
+            raise CashSessionNotOpenError()
+
+        session.counted_closing_amount = counted_closing_amount
+        session.counted_at = timezone.now()
+        session.status = "PENDING_APPROVAL"
+        if notes:
+            session.notes = notes
+        session.save(
+            update_fields=[
+                "counted_closing_amount",
+                "counted_at",
+                "status",
+                "notes",
+            ]
+        )
+
+        from usuarios.services import AuditLogService
+
+        AuditLogService.log_action(
+            user=user,
+            action="CASH_SESSION_COUNT_SUBMITTED",
+            entity="CashSession",
+            entity_id=session.id,
+            details={"counted_closing_amount": str(counted_closing_amount)},
+        )
+
+        CashSessionService._notify_count_submitted(session)
+        return session
+
+    @staticmethod
+    def _notify_count_submitted(session: CashSession) -> None:
+        """Aviso al administrador de que hay una caja esperando revision.
+        Mismo patron que la alerta de diferencia (TRD §5.4): Celery +
+        schema_context, para no atar el cierre del cajero a que el correo
+        salga."""
+        from django.db import connection
+
+        from ventas.tasks import send_cash_count_submitted_alert
+
+        send_cash_count_submitted_alert.delay(connection.schema_name, session.id)
+
+    @staticmethod
+    def close_session(
+        *,
+        session: CashSession,
+        counted_closing_amount=None,
+        user,
         tenant=None,
         notes: str | None = None,
     ) -> CashSession:
+        """Cierre definitivo. Lo ejecuta quien tiene CASH_CLOSE propio, sea
+        sobre una caja abierta (cierra de una sola vez) o sobre una que el
+        cajero ya entrego (PENDING_APPROVAL): en ese caso el monto contado
+        ya viene de el y no hace falta repetirlo."""
         CashSessionService.assert_can_close(session=session, user=user)
-        if session.status != "OPEN":
+        if session.status not in ("OPEN", "PENDING_APPROVAL"):
             raise CashSessionNotOpenError()
+        if counted_closing_amount is None:
+            counted_closing_amount = session.counted_closing_amount
+        if counted_closing_amount is None:
+            raise CountedAmountRequiredError()
 
         expected = CashSessionService._calculate_expected_closing_amount(session)
         session.expected_closing_amount = expected
@@ -153,6 +250,7 @@ class CashSessionService:
         session.difference = counted_closing_amount - expected
         session.status = "CLOSED"
         session.closing_at = timezone.now()
+        session.approved_by = user
         if notes:
             session.notes = notes
         session.save(
@@ -162,6 +260,7 @@ class CashSessionService:
                 "difference",
                 "status",
                 "closing_at",
+                "approved_by",
                 "notes",
             ]
         )
@@ -177,6 +276,10 @@ class CashSessionService:
                 "expected_closing_amount": str(expected),
                 "counted_closing_amount": str(counted_closing_amount),
                 "difference": str(session.difference),
+                # Quien conto y quien aprobo pueden ser personas distintas
+                # desde el cierre en dos pasos.
+                "counted_by": session.user.email,
+                "approved_by": user.email,
             },
         )
 
