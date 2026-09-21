@@ -75,7 +75,12 @@ def check_subscription_expirations() -> None:
 def _warn_expiring_subscriptions() -> None:
     from core.models import Subscription
 
-    threshold_date = (timezone.now() + timedelta(days=_EXPIRATION_WARNING_DAYS)).date()
+    # localdate() y no now().date(): la BD guarda UTC y el filtro __date
+    # compara la columna ya convertida a la zona del proyecto (America/Lima,
+    # UTC-5). Con .date() sobre un instante UTC, entre las 19:00 y las 23:59
+    # de Lima las dos fechas caen en dias distintos y el aviso no se enviaba
+    # nunca en esa franja.
+    threshold_date = timezone.localdate() + timedelta(days=_EXPIRATION_WARNING_DAYS)
     subscriptions = Subscription.objects.filter(
         status="active", expires_at__date=threshold_date
     ).select_related("tenant")
