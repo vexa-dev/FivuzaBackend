@@ -1,5 +1,6 @@
 # Pruebas de tareas de Celery propias de core.
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone as datetime_timezone
+from unittest import mock
 
 from django.core import mail
 from django.test import TestCase
@@ -43,6 +44,32 @@ class CheckSubscriptionExpirationsTests(TestCase):
         )
 
         check_subscription_expirations()
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn(subscription.tenant.company_name, mail.outbox[0].body)
+
+    def test_warns_at_night_in_lima_when_utc_is_already_the_next_day(self):
+        """La BD guarda UTC y el filtro compara la fecha ya convertida a la
+        zona del proyecto (America/Lima). Entre las 19:00 y las 23:59 de
+        Lima el dia UTC ya avanzo, y el aviso se perdia: la tarea buscaba
+        una fecha y la columna respondia con la del dia anterior.
+
+        Instante fijo, no la hora real de la corrida: si no, la prueba solo
+        cubriria el caso segun la hora a la que se ejecute el CI.
+        """
+        # 2026-09-21 02:00 UTC = 2026-09-20 21:00 en Lima.
+        frozen_now = datetime(2026, 9, 21, 2, 0, tzinfo=datetime_timezone.utc)
+        # Vence el 2026-09-27 a las 20:00 de Lima, o sea 7 dias despues del
+        # dia en curso en Lima (2026-09-20).
+        expires_at = datetime(2026, 9, 28, 1, 0, tzinfo=datetime_timezone.utc)
+        subscription = self._create_subscription(
+            schema_name="test_expiring_night",
+            status="active",
+            expires_at=expires_at,
+        )
+
+        with mock.patch("django.utils.timezone.now", return_value=frozen_now):
+            check_subscription_expirations()
 
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn(subscription.tenant.company_name, mail.outbox[0].body)
