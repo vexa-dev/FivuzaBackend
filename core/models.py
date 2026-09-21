@@ -217,6 +217,13 @@ class TenantSettings(models.Model):
     # Sprint 29: vertical de Gimnasios, apagado por defecto -no todo tenant
     # opera un gimnasio, mismo criterio que hr_module_enabled.
     gym_module_enabled = models.BooleanField(default=False)
+    # Bloque A (Plan de Mejoras Operativas A.0/A.1): el negocio decide si su
+    # cajero abre y cierra su propia caja. Apagados por defecto porque el
+    # control es justamente el caso base -el dueño los prende si confia en su
+    # gente. Conceden CASH_OPEN/CASH_CLOSE a quien tenga SALES_MANAGE aunque
+    # su rol no los liste (PermissionService.get_effective_permission_codes).
+    cashier_can_open_session = models.BooleanField(default=False)
+    cashier_can_close_session = models.BooleanField(default=False)
     # Umbral de diferencia de arqueo (valor absoluto, moneda del tenant) a
     # partir del cual CashSessionService.close_session() dispara el aviso
     # asincrono al administrador (TRD §5.4). No hay un valor "correcto" único

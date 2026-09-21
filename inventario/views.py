@@ -31,7 +31,7 @@ from inventario.models import (
     VolumePricingTier,
     Warehouse,
 )
-from inventario.permissions import HasInventoryAccess
+from inventario.permissions import HasCostAccess, HasInventoryAccess
 from inventario.serializers import (
     AttributeSerializer,
     AttributeValueSerializer,
@@ -558,9 +558,12 @@ class CatalogImportView(SchemaAPIView):
 class StockValuationReportView(SchemaAPIView):
     """GET /inventario/reports/stock-valuation/?warehouse=&export=
     (Sprint 24, API Spec §4.16). Valorización de stock: cantidad actual x
-    costo actual de cada variante, por almacén."""
+    costo actual de cada variante, por almacén.
 
-    permission_classes = _BASE_PERMISSIONS
+    Bloque A.5: el reporte entero es costo, asi que exige
+    INVENTORY_VIEW_COST ademas del acceso normal a inventario."""
+
+    permission_classes = _BASE_PERMISSIONS + [HasCostAccess]
 
     def get(self, request):
         from decimal import Decimal

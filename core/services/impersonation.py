@@ -132,7 +132,7 @@ class TenantImpersonationService:
             # schema_context, de vuelta en el esquema public del request de
             # platform_staff) dispararia un nuevo SELECT contra una tabla
             # "roles" que no existe fuera del esquema del tenant.
-            return admin, PermissionService.get_permission_codes(admin)
+            return admin, PermissionService.get_effective_permission_codes(admin)
 
     @staticmethod
     def _log_tenant_side(

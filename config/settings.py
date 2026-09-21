@@ -223,7 +223,15 @@ SPECTACULAR_SETTINGS = {
         # nombres semanticos serian mas legibles, renombrarlos rompe clientes
         # generados que importan directamente estos componentes.
         "TypeAb4Enum": [("IN", "IN"), ("OUT", "OUT")],
-        "Status896Enum": [("OPEN", "OPEN"), ("CLOSED", "CLOSED")],
+        # CashSession.status. Conserva el nombre publicado aunque el
+        # Bloque A le sume PENDING_APPROVAL (el cierre en dos pasos):
+        # agregar un valor es aditivo, renombrar el componente romperia
+        # a los clientes generados.
+        "Status896Enum": [
+            ("OPEN", "OPEN"),
+            ("PENDING_APPROVAL", "PENDING_APPROVAL"),
+            ("CLOSED", "CLOSED"),
+        ],
         "MembershipPaymentMethodEnum": [
             ("CASH", "CASH"),
             ("CARD", "CARD"),

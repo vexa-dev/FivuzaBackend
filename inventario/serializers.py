@@ -3,6 +3,8 @@ from decimal import Decimal
 from django.db import transaction
 from rest_framework import serializers
 
+from inventario.permissions import viewer_sees_cost
+
 from inventario.models import (
     Attribute,
     AttributeValue,
@@ -135,6 +137,24 @@ class ProductVariantSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["is_default", "updated_at"]
 
+    def validate_cost(self, value):
+        # Bloque A.5: quien no ve el costo tampoco lo escribe -si no, podria
+        # pisar un valor que nunca vio.
+        if not viewer_sees_cost(self.context.get("request")):
+            raise serializers.ValidationError(
+                "No tienes permiso para modificar el costo."
+            )
+        return value
+
+    def to_representation(self, variant):
+        data = super().to_representation(variant)
+        # Bloque A.5: el cajero vende con el catalogo, no con el margen del
+        # negocio. Se quita del payload -no se envia confiando en que la UI
+        # lo esconda.
+        if not viewer_sees_cost(self.context.get("request")):
+            data.pop("cost", None)
+        return data
+
     def create(self, validated_data):
         attribute_value_ids = [
             value.id for value in validated_data.pop("attribute_value_ids", [])
@@ -242,6 +262,16 @@ class ProductSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         variants = attrs.get("variants_input", [])
+        # Bloque A.5: quien no ve el costo tampoco lo escribe. Se mira el
+        # payload crudo porque el campo tiene default -en attrs siempre
+        # aparece, venga o no del cliente.
+        if not viewer_sees_cost(self.context.get("request")):
+            rows = self.initial_data.get("variants_input") or []
+            if any(isinstance(row, dict) and "cost" in row for row in rows):
+                raise serializers.ValidationError(
+                    {"variants_input": "No tienes permiso para definir el costo."}
+                )
+
         skus = [variant["sku"] for variant in variants]
         if len(skus) != len(set(skus)):
             raise serializers.ValidationError(

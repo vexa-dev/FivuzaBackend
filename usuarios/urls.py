@@ -76,6 +76,13 @@ urlpatterns = [
         views.PayrollCostReportView.as_view(),
         name="payroll_cost_report",
     ),
+    # Interruptores operativos del propio negocio (Bloque A.0) -singleton,
+    # sin id en la ruta: hay una sola fila de settings por tenant.
+    path(
+        "usuarios/settings/",
+        views.TenantOperationalSettingsView.as_view(),
+        name="tenant_operational_settings",
+    ),
     # Derechos ARCO (Sprint 33, Ley N 29733).
     path(
         "usuarios/me/data-export/",

@@ -13,6 +13,16 @@ class CashRegister(models.Model):
     )
     name = models.CharField(max_length=100)
     is_active = models.BooleanField(default=True)
+    # Bloque A.2: caja asignada a una persona. SET_NULL y no PROTECT porque
+    # dar de baja a un cajero no debe bloquear la caja fisica -la caja queda
+    # libre y vuelve a la regla "quien abre el turno es su dueño".
+    assigned_user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="assigned_cash_registers",
+    )
 
     class Meta:
         db_table = "cash_registers"
@@ -39,8 +49,28 @@ class CashSession(models.Model):
     difference = models.DecimalField(
         max_digits=12, decimal_places=4, null=True, blank=True
     )
+    # Bloque A: PENDING_APPROVAL es el paso intermedio del cierre en dos
+    # pasos -el cajero entrega su conteo y la caja deja de admitir ventas y
+    # movimientos, pero no esta cerrada hasta que un supervisor la revisa.
     status = models.CharField(
-        max_length=10, choices=[("OPEN", "OPEN"), ("CLOSED", "CLOSED")]
+        max_length=16,
+        choices=[
+            ("OPEN", "OPEN"),
+            ("PENDING_APPROVAL", "PENDING_APPROVAL"),
+            ("CLOSED", "CLOSED"),
+        ],
+    )
+    # Cuando el cajero entrego su conteo, y quien aprobo el cierre final.
+    # Separados de closing_at/user a proposito: el turno sigue siendo del
+    # cajero aunque lo cierre otra persona (quien pidio y quien autorizo,
+    # el mismo criterio que pide la bitacora).
+    counted_at = models.DateTimeField(null=True, blank=True)
+    approved_by = models.ForeignKey(
+        User,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="approved_cash_sessions",
     )
     closing_at = models.DateTimeField(null=True, blank=True)
     notes = models.CharField(max_length=255, null=True, blank=True)
@@ -56,7 +86,7 @@ class CashSession(models.Model):
         ]
         constraints = [
             models.CheckConstraint(
-                check=models.Q(status__in=["OPEN", "CLOSED"]),
+                check=models.Q(status__in=["OPEN", "PENDING_APPROVAL", "CLOSED"]),
                 name="ck_cash_sessions_status",
             )
         ]

@@ -24,6 +24,9 @@ def HasModulePermission(code):
             user = request.user
             if not hasattr(user, "role_id"):
                 return False
-            return PermissionService.check_permission(user, code)
+            # Efectivo y no propio: un interruptor del negocio (Bloque A.0)
+            # puede conceder CASH_OPEN/CASH_CLOSE a quien ya vende, sin que
+            # su rol los liste.
+            return PermissionService.check_effective_permission(user, code)
 
     return _HasModulePermission

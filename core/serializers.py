@@ -193,6 +193,8 @@ class TenantSettingsSerializer(serializers.ModelSerializer):
             "multi_warehouse_enabled",
             "hr_module_enabled",
             "cash_module_enabled",
+            "cashier_can_open_session",
+            "cashier_can_close_session",
             "cash_difference_alert_threshold",
             "dashboard_refresh_minutes",
             "updated_at",
