@@ -15,6 +15,7 @@ from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from core.date_filters import day_range, optional_date
 from core.auth_cookies import (
     clear_refresh_cookie,
     get_refresh_cookie,
@@ -734,13 +735,13 @@ class PlatformAuditLogViewSet(
         if entity_id:
             queryset = queryset.filter(entity_id=entity_id)
 
-        date_from = params.get("date_from")
-        if date_from:
-            queryset = queryset.filter(created_at__date__gte=date_from)
-
-        date_to = params.get("date_to")
-        if date_to:
-            queryset = queryset.filter(created_at__date__lte=date_to)
+        queryset = queryset.filter(
+            **day_range(
+                "created_at",
+                optional_date(params, "date_from"),
+                optional_date(params, "date_to"),
+            )
+        )
 
         return queryset
 

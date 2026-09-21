@@ -13,6 +13,7 @@ from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from core.date_filters import day_range, optional_date, required_date_range
 from core.auth_cookies import (
     clear_refresh_cookie,
     get_refresh_cookie,
@@ -516,6 +517,7 @@ class UserWarehouseViewSet(TenantAuditMixin, viewsets.ModelViewSet):
         return queryset
 
 
+_AUDIT_EXPORT_MAX_DAYS = 366
 _AUDIT_EXPORT_COLUMNS = [
     "created_at",
     "user_email",
@@ -560,12 +562,13 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
         entity = params.get("entity")
         if entity:
             queryset = queryset.filter(entity=entity)
-        date_from = params.get("date_from")
-        if date_from:
-            queryset = queryset.filter(created_at__date__gte=date_from)
-        date_to = params.get("date_to")
-        if date_to:
-            queryset = queryset.filter(created_at__date__lte=date_to)
+        queryset = queryset.filter(
+            **day_range(
+                "created_at",
+                optional_date(params, "date_from"),
+                optional_date(params, "date_to"),
+            )
+        )
         return queryset
 
     def get_serializer_context(self):
@@ -581,6 +584,18 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
             return super().list(request, *args, **kwargs)
         if export_format not in ("csv", "xlsx"):
             raise ValidationError({"export": "Formato no soportado: usa csv o xlsx."})
+        # Se genera en el mismo request y en memoria: sin tope, exportar
+        # la bitacora sin filtro de fechas bajaria años de historia de una
+        # vez. La exportacion en segundo plano queda para el Bloque G.
+        date_from, date_to = required_date_range(request.query_params)
+        if (date_to - date_from).days >= _AUDIT_EXPORT_MAX_DAYS:
+            raise ValidationError(
+                {
+                    "date_to": (
+                        f"Exporta como máximo {_AUDIT_EXPORT_MAX_DAYS} días a la vez."
+                    )
+                }
+            )
 
         # Mismo serializer que la pantalla: mismo filtro, mismas fechas en
         # hora de Lima y el mismo recorte de costos.
@@ -772,13 +787,10 @@ class AttendanceReportView(SchemaAPIView):
     permission_classes = _HR_PERMISSIONS
 
     def get(self, request):
-        date_from = request.query_params.get("date_from")
-        date_to = request.query_params.get("date_to")
-        if not date_from or not date_to:
-            raise ValidationError("date_from y date_to son requeridos.")
+        date_from, date_to = required_date_range(request.query_params)
 
         queryset = EmployeeAttendance.objects.select_related("employee").filter(
-            check_in__date__gte=date_from, check_in__date__lte=date_to
+            **day_range("check_in", date_from, date_to)
         )
         queryset = WarehouseAccessService.scope_queryset(queryset, request.user)
         employee_id = request.query_params.get("employee")
@@ -841,10 +853,9 @@ class PayrollCostReportView(SchemaAPIView):
     permission_classes = _HR_PERMISSIONS
 
     def get(self, request):
-        period_start = request.query_params.get("period_start")
-        period_end = request.query_params.get("period_end")
-        if not period_start or not period_end:
-            raise ValidationError("period_start y period_end son requeridos.")
+        period_start, period_end = required_date_range(
+            request.query_params, "period_start", "period_end"
+        )
 
         queryset = (
             EmployeePayroll.objects.select_related("employee")

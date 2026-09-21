@@ -9,6 +9,7 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from core.date_filters import day_range, optional_date, required_date_range
 from core.permissions import RequiresFeature, TenantNotCanceled, TenantNotSuspended
 from core.openapi import SchemaAPIView
 from core.viewsets import SoftDeleteDestroyMixin
@@ -203,12 +204,13 @@ class CashSessionViewSet(
         user_id = params.get("user")
         if user_id:
             queryset = queryset.filter(user_id=user_id)
-        opening_from = params.get("opening_from")
-        if opening_from:
-            queryset = queryset.filter(opening_at__date__gte=opening_from)
-        opening_to = params.get("opening_to")
-        if opening_to:
-            queryset = queryset.filter(opening_at__date__lte=opening_to)
+        queryset = queryset.filter(
+            **day_range(
+                "opening_at",
+                optional_date(params, "opening_from"),
+                optional_date(params, "opening_to"),
+            )
+        )
         return queryset
 
 
@@ -524,12 +526,13 @@ class SaleViewSet(
         cash_register_id = params.get("cash_register")
         if cash_register_id:
             queryset = queryset.filter(cash_session__cash_register_id=cash_register_id)
-        date_from = params.get("date_from")
-        if date_from:
-            queryset = queryset.filter(occurred_at__date__gte=date_from)
-        date_to = params.get("date_to")
-        if date_to:
-            queryset = queryset.filter(occurred_at__date__lte=date_to)
+        queryset = queryset.filter(
+            **day_range(
+                "occurred_at",
+                optional_date(params, "date_from"),
+                optional_date(params, "date_to"),
+            )
+        )
         return queryset
 
     def create(self, request, *args, **kwargs):
@@ -802,19 +805,14 @@ class SalesReportView(SchemaAPIView):
     permission_classes = _SALES_READ_PERMISSIONS
 
     def get(self, request):
-        from rest_framework.exceptions import ValidationError
 
         from usuarios.services import ReportExportService
 
-        date_from = request.query_params.get("date_from")
-        date_to = request.query_params.get("date_to")
-        if not date_from or not date_to:
-            raise ValidationError("date_from y date_to son requeridos.")
+        date_from, date_to = required_date_range(request.query_params)
 
         queryset = Sale.objects.select_related("customer", "user").filter(
             status="COMPLETED",
-            occurred_at__date__gte=date_from,
-            occurred_at__date__lte=date_to,
+            **day_range("occurred_at", date_from, date_to),
         )
         queryset = WarehouseAccessService.scope_queryset(queryset, request.user)
         warehouse_id = request.query_params.get("warehouse")
@@ -872,18 +870,14 @@ class CashSessionReportView(SchemaAPIView):
     permission_classes = _CASH_CLOSE_PERMISSIONS
 
     def get(self, request):
-        from rest_framework.exceptions import ValidationError
 
         from usuarios.services import ReportExportService
 
-        date_from = request.query_params.get("date_from")
-        date_to = request.query_params.get("date_to")
-        if not date_from or not date_to:
-            raise ValidationError("date_from y date_to son requeridos.")
+        date_from, date_to = required_date_range(request.query_params)
 
         queryset = (
             CashSession.objects.select_related("cash_register", "user")
-            .filter(opening_at__date__gte=date_from, opening_at__date__lte=date_to)
+            .filter(**day_range("opening_at", date_from, date_to))
             .order_by("opening_at")
         )
         queryset = WarehouseAccessService.scope_queryset(
@@ -961,18 +955,14 @@ class CashMovementReportView(SchemaAPIView):
     permission_classes = _CASH_READ_PERMISSIONS
 
     def get(self, request):
-        from rest_framework.exceptions import ValidationError
 
         from usuarios.services import ReportExportService
 
-        date_from = request.query_params.get("date_from")
-        date_to = request.query_params.get("date_to")
-        if not date_from or not date_to:
-            raise ValidationError("date_from y date_to son requeridos.")
+        date_from, date_to = required_date_range(request.query_params)
 
         queryset = (
             CashMovement.objects.select_related("cash_session__cash_register", "user")
-            .filter(created_at__date__gte=date_from, created_at__date__lte=date_to)
+            .filter(**day_range("created_at", date_from, date_to))
             .order_by("created_at")
         )
         queryset = WarehouseAccessService.scope_queryset(

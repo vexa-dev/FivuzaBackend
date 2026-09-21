@@ -9,6 +9,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from core.date_filters import day_range, required_date_range
 from core.permissions import RequiresFeature, TenantNotCanceled, TenantNotSuspended
 from core.openapi import SchemaAPIView
 from gimnasio.models import (
@@ -339,10 +340,7 @@ class ClassAttendanceReportView(SchemaAPIView):
     permission_classes = _GYM_PERMISSIONS
 
     def get(self, request):
-        date_from = request.query_params.get("date_from")
-        date_to = request.query_params.get("date_to")
-        if not date_from or not date_to:
-            raise ValidationError("date_from y date_to son requeridos.")
+        date_from, date_to = required_date_range(request.query_params)
 
         queryset = ClassBooking.objects.select_related("gym_class").filter(
             class_date__gte=date_from, class_date__lte=date_to
@@ -451,13 +449,10 @@ class RevenueByPlanReportView(SchemaAPIView):
     permission_classes = _GYM_PERMISSIONS
 
     def get(self, request):
-        date_from = request.query_params.get("date_from")
-        date_to = request.query_params.get("date_to")
-        if not date_from or not date_to:
-            raise ValidationError("date_from y date_to son requeridos.")
+        date_from, date_to = required_date_range(request.query_params)
 
         queryset = MembershipPayment.objects.select_related("membership__plan").filter(
-            created_at__date__gte=date_from, created_at__date__lte=date_to
+            **day_range("created_at", date_from, date_to)
         )
 
         summary: dict[int, dict] = {}

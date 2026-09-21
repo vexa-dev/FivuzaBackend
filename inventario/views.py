@@ -10,6 +10,7 @@ from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from core.date_filters import day_range, optional_date
 from core.permissions import RequiresFeature, TenantNotCanceled, TenantNotSuspended
 from core.openapi import SchemaAPIView
 from core.viewsets import SoftDeleteDestroyMixin
@@ -337,12 +338,14 @@ class InventoryMovementViewSet(viewsets.ReadOnlyModelViewSet):
         if warehouse_id:
             WarehouseAccessService.require_warehouse(self.request.user, warehouse_id)
             queryset = queryset.filter(warehouse_id=warehouse_id)
-        date_from = self.request.query_params.get("date_from")
-        if date_from:
-            queryset = queryset.filter(created_at__date__gte=date_from)
-        date_to = self.request.query_params.get("date_to")
-        if date_to:
-            queryset = queryset.filter(created_at__date__lte=date_to)
+        params = self.request.query_params
+        queryset = queryset.filter(
+            **day_range(
+                "created_at",
+                optional_date(params, "date_from"),
+                optional_date(params, "date_to"),
+            )
+        )
         if self.request.query_params.get("oversell_only") == "true":
             queryset = queryset.filter(oversell_flag=True)
         return queryset
