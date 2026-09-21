@@ -121,6 +121,7 @@ class ReturnService:
                     counted_quantity=current_quantity + prepared["quantity_returned"],
                     concept="RETURN",
                     user=user,
+                    audit=False,
                 )
 
         if refund_type == "CASH":

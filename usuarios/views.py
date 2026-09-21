@@ -4,7 +4,6 @@ from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.shortcuts import get_object_or_404
-from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -21,6 +20,7 @@ from core.auth_cookies import (
 )
 from core.models import TenantSettings
 from core.openapi import SchemaAPIView
+from core.viewsets import SoftDeleteDestroyMixin
 from core.permissions import RequiresFeature, TenantNotCanceled, TenantNotSuspended
 from core.throttling import LoginIdentifierRateThrottle, LoginRateThrottle
 from usuarios.models import (
@@ -38,6 +38,7 @@ from usuarios.models import (
     UserPermission,
     UserWarehouse,
 )
+from usuarios.audit import TenantAuditMixin
 from usuarios.permissions import HasModulePermission
 from usuarios.serializers import (
     AuditLogSerializer,
@@ -160,12 +161,27 @@ class TenantUserLogoutView(SchemaAPIView):
         refresh_token = get_refresh_cookie(request)
         try:
             if refresh_token:
-                RefreshToken(refresh_token).blacklist()
+                token = RefreshToken(refresh_token)
+                token.blacklist()
+                self._log_logout(request, token)
         except TokenError:
             pass
         response = Response(status=status.HTTP_205_RESET_CONTENT)
         clear_refresh_cookie(response)
         return response
+
+    @staticmethod
+    def _log_logout(request, token) -> None:
+        # El user_id del token solo identifica a alguien dentro del esquema
+        # que lo emitio: con el token de otro negocio apuntaria a otra persona.
+        if token.get("schema_name") != request.tenant.schema_name:
+            return
+        user = User.objects.filter(id=token.get("user_id")).first()
+        if user is None:
+            return
+        AuditLogService.log_action(
+            user=user, action="LOGOUT", entity="User", entity_id=user.id
+        )
 
 
 class PasswordResetRequestView(SchemaAPIView):
@@ -209,7 +225,7 @@ class PasswordResetConfirmView(SchemaAPIView):
         return Response(status=status.HTTP_200_OK)
 
 
-class RoleViewSet(viewsets.ModelViewSet):
+class RoleViewSet(TenantAuditMixin, viewsets.ModelViewSet):
     """Roles a medida (ej. "Cajero", "Limpieza"): el negocio los crea y les
     concede permisos vía RolePermissionViewSet (API Spec §2.1). destroy()
     delega en RoleService.delete_role() -nunca es un DELETE fisico, ver
@@ -225,7 +241,10 @@ class RoleViewSet(viewsets.ModelViewSet):
     ]
 
     def perform_destroy(self, instance):
-        RoleService.delete_role(instance, deleted_by=self.request.user)
+        # La baja la hace RoleService (valida roles del sistema y en uso),
+        # no DRF: el mixin solo pone el registro alrededor.
+        with self.audited_destroy(instance):
+            RoleService.delete_role(instance, deleted_by=self.request.user)
 
 
 class PermissionViewSet(viewsets.ReadOnlyModelViewSet):
@@ -236,7 +255,7 @@ class PermissionViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsAuthenticated, TenantNotSuspended, TenantNotCanceled]
 
 
-class RolePermissionViewSet(viewsets.ModelViewSet):
+class RolePermissionViewSet(TenantAuditMixin, viewsets.ModelViewSet):
     """Asignacion de permisos a un rol. create/destroy pasan siempre por
     RoleService para dejar registro en RolePermissionsHistory (Esquema
     Backend §4.2) -nunca se inserta/borra la fila directamente."""
@@ -432,7 +451,7 @@ class DataExportViewSet(
         return Response({"download_url": url})
 
 
-class UserViewSet(viewsets.ModelViewSet):
+class UserViewSet(TenantAuditMixin, SoftDeleteDestroyMixin, viewsets.ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserSerializer
     permission_classes = [
@@ -443,14 +462,11 @@ class UserViewSet(viewsets.ModelViewSet):
     ]
 
     def perform_destroy(self, instance):
-        instance.deleted_at = timezone.now()
-        instance.deleted_by = self.request.user
-        instance.is_active = False
-        instance.save(update_fields=["deleted_at", "deleted_by", "is_active"])
+        super().perform_destroy(instance)
         PermissionService.invalidate_user_cache(instance.id)
 
 
-class UserPermissionViewSet(viewsets.ModelViewSet):
+class UserPermissionViewSet(TenantAuditMixin, viewsets.ModelViewSet):
     queryset = UserPermission.objects.all()
     serializer_class = UserPermissionSerializer
     permission_classes = [
@@ -474,7 +490,7 @@ class UserPermissionViewSet(viewsets.ModelViewSet):
         PermissionService.invalidate_user_cache(user_id)
 
 
-class UserWarehouseViewSet(viewsets.ModelViewSet):
+class UserWarehouseViewSet(TenantAuditMixin, viewsets.ModelViewSet):
     queryset = UserWarehouse.objects.select_related("user", "warehouse").order_by(
         "user_id", "warehouse_id"
     )
@@ -500,11 +516,26 @@ class UserWarehouseViewSet(viewsets.ModelViewSet):
         return queryset
 
 
+_AUDIT_EXPORT_COLUMNS = [
+    "created_at",
+    "user_email",
+    "action",
+    "entity",
+    "entity_id",
+    "details",
+]
+
+
 class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
     """Solo lectura -se escribe unicamente via AuditLogService.log_action(),
-    nunca por POST/PUT directo del cliente (API Spec §2.1)."""
+    nunca por POST/PUT directo del cliente (API Spec §2.1).
 
-    queryset = AuditLog.objects.all().order_by("-created_at")
+    Bloque B.3: filtros ?user=&action=&entity=&entity_id=&date_from=&date_to=
+    (fechas en hora de Lima, igual que el resto de reportes) y ?export=csv|xlsx
+    sobre el mismo filtro. La exportacion queda a su vez registrada: bajarse
+    la bitacora entera tambien es una accion que el dueño quiere ver."""
+
+    queryset = AuditLog.objects.select_related("user").order_by("-created_at", "-id")
     serializer_class = AuditLogSerializer
     permission_classes = [
         IsAuthenticated,
@@ -513,8 +544,74 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
         HasModulePermission("USERS_VIEW_AUDIT"),
     ]
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        params = self.request.query_params
+        for param in ("user", "entity_id"):
+            value = params.get(param)
+            if value:
+                if not value.isdigit():
+                    raise ValidationError({param: "Debe ser un numero entero."})
+                lookup = "user_id" if param == "user" else param
+                queryset = queryset.filter(**{lookup: int(value)})
+        action_param = params.get("action")
+        if action_param:
+            queryset = queryset.filter(action=action_param)
+        entity = params.get("entity")
+        if entity:
+            queryset = queryset.filter(entity=entity)
+        date_from = params.get("date_from")
+        if date_from:
+            queryset = queryset.filter(created_at__date__gte=date_from)
+        date_to = params.get("date_to")
+        if date_to:
+            queryset = queryset.filter(created_at__date__lte=date_to)
+        return queryset
 
-class EmployeeViewSet(viewsets.ModelViewSet):
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["hide_cost"] = not PermissionService.check_permission(
+            self.request.user, "INVENTORY_VIEW_COST"
+        )
+        return context
+
+    def list(self, request, *args, **kwargs):
+        export_format = request.query_params.get("export")
+        if not export_format:
+            return super().list(request, *args, **kwargs)
+        if export_format not in ("csv", "xlsx"):
+            raise ValidationError({"export": "Formato no soportado: usa csv o xlsx."})
+
+        # Mismo serializer que la pantalla: mismo filtro, mismas fechas en
+        # hora de Lima y el mismo recorte de costos.
+        rows = [
+            {column: row[column] for column in _AUDIT_EXPORT_COLUMNS}
+            for row in self.get_serializer(self.get_queryset(), many=True).data
+        ]
+        AuditLogService.log_action(
+            user=request.user,
+            action="AUDIT_LOG_EXPORTED",
+            entity="AuditLog",
+            entity_id=0,
+            details={
+                "format": export_format,
+                "rows": len(rows),
+                "filters": {
+                    key: value
+                    for key, value in request.query_params.items()
+                    if key != "export"
+                },
+            },
+        )
+        return ReportExportService.export_queryset(
+            rows=rows,
+            columns=_AUDIT_EXPORT_COLUMNS,
+            format=export_format,
+            filename="bitacora",
+        )
+
+
+class EmployeeViewSet(TenantAuditMixin, SoftDeleteDestroyMixin, viewsets.ModelViewSet):
     """Ficha de trabajador (Sprint 22). Gateado por HAS_HR_MODULE ademas de
     HR_MANAGE -a diferencia de compras (activo por defecto), RRHH arranca
     apagado (tenant_settings.hr_module_enabled=False), asi que el modulo
@@ -537,14 +634,8 @@ class EmployeeViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(full_name__icontains=search)
         return queryset
 
-    def perform_destroy(self, instance):
-        instance.deleted_at = timezone.now()
-        instance.deleted_by = self.request.user
-        instance.is_active = False
-        instance.save(update_fields=["deleted_at", "deleted_by", "is_active"])
 
-
-class EmployeeScheduleViewSet(viewsets.ModelViewSet):
+class EmployeeScheduleViewSet(TenantAuditMixin, viewsets.ModelViewSet):
     """Horario programado por trabajador -vista semanal en el frontend
     (Sprint 22, Convenciones §5.1)."""
 

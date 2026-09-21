@@ -273,9 +273,6 @@ class AuditLogService:
         entity_id: int,
         details: str | dict | None = None,
     ) -> AuditLog:
-        if isinstance(details, dict):
-            details = json.dumps(details, default=str)
-
         # Sprint 10 (Especificacion de API §4.24): si esta accion ocurrio
         # bajo una sesion de impersonacion, se marca explicitamente aqui -sin
         # que cada call site (repartido en las 4 apps de negocio) tenga que
@@ -284,9 +281,20 @@ class AuditLogService:
         from core.impersonation_context import get_impersonating_staff
 
         staff_id = get_impersonating_staff()
-        if staff_id is not None:
-            marker = f"[accion de soporte Fivuza, platform_staff #{staff_id}] "
-            details = marker + (details or "")
+        marker = (
+            f"accion de soporte Fivuza, platform_staff #{staff_id}"
+            if staff_id is not None
+            else None
+        )
+        if isinstance(details, dict):
+            # Bloque B.3: el detalle en diccionario se guarda como JSON que la
+            # pantalla de Actividad lee campo por campo; el marcador va como
+            # una clave mas en vez de un prefijo que lo dejaria ilegible.
+            if marker:
+                details = {"support_action": marker, **details}
+            details = json.dumps(details, default=str)
+        elif marker:
+            details = f"[{marker}] " + (details or "")
 
         return AuditLog.objects.create(
             user=user,
@@ -294,6 +302,25 @@ class AuditLogService:
             entity=entity,
             entity_id=entity_id,
             details=details or "",
+        )
+
+    @staticmethod
+    def log_login(*, user, request, success: bool) -> AuditLog:
+        """Inicio de sesion (Bloque B.2), exitoso o con contraseña
+        incorrecta. La IP sale de get_ident() de DRF, que respeta
+        NUM_PROXIES igual que los throttles: detras del proxy de Railway,
+        X-Forwarded-For sin ese limite seria un dato que el cliente elige."""
+        from rest_framework.throttling import BaseThrottle
+
+        return AuditLogService.log_action(
+            user=user,
+            action="LOGIN" if success else "LOGIN_FAILED",
+            entity="User",
+            entity_id=user.id,
+            details={
+                "ip": BaseThrottle().get_ident(request),
+                "user_agent": request.META.get("HTTP_USER_AGENT", "")[:200],
+            },
         )
 
 
@@ -654,6 +681,10 @@ class PasswordResetService:
 
         reset_token.used_at = timezone.now()
         reset_token.save(update_fields=["used_at"])
+
+        AuditLogService.log_action(
+            user=user, action="PASSWORD_RESET", entity="User", entity_id=user.id
+        )
         return user
 
 

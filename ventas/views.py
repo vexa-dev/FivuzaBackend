@@ -1,4 +1,5 @@
 from django.contrib.postgres.search import SearchQuery, SearchRank
+from django.db import transaction
 from django.db.models import F, Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
@@ -10,9 +11,11 @@ from rest_framework.response import Response
 
 from core.permissions import RequiresFeature, TenantNotCanceled, TenantNotSuspended
 from core.openapi import SchemaAPIView
+from core.viewsets import SoftDeleteDestroyMixin
 from inventario.models import Warehouse
+from usuarios.audit import TenantAuditMixin
 from usuarios.permissions import HasModulePermission
-from usuarios.services import PermissionService
+from usuarios.services import AuditLogService, PermissionService
 from core.warehouse_access import WarehouseAccessService
 from ventas.models import (
     CashMovement,
@@ -145,7 +148,7 @@ _SALES_RETURN_PERMISSIONS = [
 ]
 
 
-class CashRegisterViewSet(viewsets.ModelViewSet):
+class CashRegisterViewSet(TenantAuditMixin, viewsets.ModelViewSet):
     queryset = CashRegister.objects.all().order_by("name")
     serializer_class = CashRegisterSerializer
 
@@ -210,6 +213,7 @@ class CashSessionViewSet(
 
 
 class CashMovementViewSet(
+    TenantAuditMixin,
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
     mixins.CreateModelMixin,
@@ -315,7 +319,7 @@ class CashSessionCloseView(SchemaAPIView):
         )
 
 
-class CustomerViewSet(viewsets.ModelViewSet):
+class CustomerViewSet(TenantAuditMixin, SoftDeleteDestroyMixin, viewsets.ModelViewSet):
     """Sin ActiveManager (Customer no hereda SoftDeleteModel -es preexistente
     a la BDD v5, no un modelo nuevo de este sprint): el filtrado de bajas se
     hace a mano en get_queryset(), mismo resultado que Warehouse/Category."""
@@ -347,12 +351,6 @@ class CustomerViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(updated_at__gte=updated_since)
         return queryset
 
-    def perform_destroy(self, instance):
-        instance.deleted_at = timezone.now()
-        instance.deleted_by = self.request.user
-        instance.is_active = False
-        instance.save(update_fields=["deleted_at", "deleted_by", "is_active"])
-
 
 class CustomerDebtLedgerViewSet(
     mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet
@@ -383,7 +381,17 @@ class CustomerDebtLedgerViewSet(
     def register_payment(self, request):
         serializer = RegisterDebtPaymentSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        entry = serializer.save()
+        # CreditLedgerService.register_payment() no recibe al usuario: el
+        # abono lo registra la vista, en la misma transaccion.
+        with transaction.atomic():
+            entry = serializer.save()
+            AuditLogService.log_action(
+                user=request.user,
+                action="DEBT_PAYMENT_REGISTERED",
+                entity="Customer",
+                entity_id=entry.customer_id,
+                details={"ledger_entry_id": entry.id, "amount": str(entry.amount)},
+            )
         return Response(
             {
                 "id": entry.id,
@@ -417,7 +425,7 @@ class CustomerBalanceLedgerViewSet(
         return queryset
 
 
-class PromotionViewSet(viewsets.ModelViewSet):
+class PromotionViewSet(TenantAuditMixin, viewsets.ModelViewSet):
     queryset = Promotion.objects.all().order_by("-start_date")
     serializer_class = PromotionSerializer
 
@@ -437,7 +445,7 @@ class PromotionViewSet(viewsets.ModelViewSet):
         return queryset
 
 
-class PromotionProductViewSet(viewsets.ModelViewSet):
+class PromotionProductViewSet(TenantAuditMixin, viewsets.ModelViewSet):
     queryset = PromotionProduct.objects.all()
     serializer_class = PromotionProductSerializer
     permission_classes = _SALES_WRITE_PERMISSIONS
@@ -708,23 +716,35 @@ class QuoteViewSet(
         html = QuoteService.render_html(quote, request.tenant)
         return HttpResponse(html, content_type="text/html")
 
+    def _change_status(self, request, quote, transition):
+        """QuoteService.mark_* no recibe al usuario, asi que el cambio de
+        estado lo registra la vista, en la misma transaccion."""
+        previous_status = quote.status
+        with transaction.atomic():
+            quote = transition(quote=quote)
+            AuditLogService.log_action(
+                user=request.user,
+                action="QUOTE_STATUS_CHANGED",
+                entity="Quote",
+                entity_id=quote.id,
+                details={"status": {"before": previous_status, "after": quote.status}},
+            )
+        return Response(QuoteSerializer(quote).data)
+
     @action(detail=True, methods=["post"], url_path="mark-sent")
     def mark_sent(self, request, pk=None):
         quote = get_object_or_404(self.get_queryset(), pk=pk)
-        quote = QuoteService.mark_sent(quote=quote)
-        return Response(QuoteSerializer(quote).data)
+        return self._change_status(request, quote, QuoteService.mark_sent)
 
     @action(detail=True, methods=["post"], url_path="mark-accepted")
     def mark_accepted(self, request, pk=None):
         quote = get_object_or_404(self.get_queryset(), pk=pk)
-        quote = QuoteService.mark_accepted(quote=quote)
-        return Response(QuoteSerializer(quote).data)
+        return self._change_status(request, quote, QuoteService.mark_accepted)
 
     @action(detail=True, methods=["post"], url_path="mark-rejected")
     def mark_rejected(self, request, pk=None):
         quote = get_object_or_404(self.get_queryset(), pk=pk)
-        quote = QuoteService.mark_rejected(quote=quote)
-        return Response(QuoteSerializer(quote).data)
+        return self._change_status(request, quote, QuoteService.mark_rejected)
 
     @action(detail=True, methods=["post"], url_path="convert")
     def convert(self, request, pk=None):
@@ -854,7 +874,7 @@ class CashSessionReportView(SchemaAPIView):
     def get(self, request):
         from rest_framework.exceptions import ValidationError
 
-        from usuarios.services import AuditLogService, ReportExportService
+        from usuarios.services import ReportExportService
 
         date_from = request.query_params.get("date_from")
         date_to = request.query_params.get("date_to")

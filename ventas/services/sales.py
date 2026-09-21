@@ -279,6 +279,7 @@ class SaleService:
                 counted_quantity=prepared["current_quantity"] - prepared["quantity"],
                 concept="SALE",
                 user=user,
+                audit=False,
                 oversell_flag=prepared["oversold"],
             )
 
@@ -382,6 +383,7 @@ class SaleService:
                 counted_quantity=current_quantity + detail.quantity,
                 concept="RETURN",
                 user=user,
+                audit=False,
             )
 
         cash_amount = sale.payments.filter(method="CASH").aggregate(

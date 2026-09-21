@@ -153,7 +153,13 @@ class StockService:
         concept: str,
         user,
         oversell_flag: bool = False,
+        audit: bool = True,
     ) -> InventoryMovement:
+        """audit=False lo usan las operaciones que ya dejan su propio
+        registro en la bitacora (venta, devolucion, compra, traslado,
+        importacion): el movimiento queda igual en el Kardex, pero la
+        bitacora muestra una linea por operacion de negocio, no una por
+        cada variante que toco (Bloque B.4)."""
         # get_or_create resuelve la carrera de "primer ajuste sobre esta
         # variante+almacen" (reintenta el get si otro request gano la
         # creacion primero, gracias al constraint unico); el select_for_update
@@ -186,6 +192,8 @@ class StockService:
         )
         stock.quantity = counted_quantity
         stock.save(update_fields=["quantity"])
+        if not audit:
+            return movement
 
         from usuarios.services import AuditLogService
 
@@ -240,6 +248,7 @@ class StockService:
             counted_quantity=origin_stock.quantity - quantity,
             concept="TRANSFER_OUT",
             user=user,
+            audit=False,
         )
 
         dest_stock, _ = Stock.objects.get_or_create(
@@ -252,6 +261,7 @@ class StockService:
             counted_quantity=dest_stock.quantity + quantity,
             concept="TRANSFER_IN",
             user=user,
+            audit=False,
         )
 
         # Se vinculan entre si via reference_id -recien aqui, porque cada
@@ -261,6 +271,21 @@ class StockService:
         in_movement.reference_id = out_movement.id
         in_movement.save(update_fields=["reference_id"])
 
+        from usuarios.services import AuditLogService
+
+        AuditLogService.log_action(
+            user=user,
+            action="STOCK_TRANSFERRED",
+            entity="ProductVariant",
+            entity_id=variant.id,
+            details={
+                "from_warehouse_id": from_warehouse.id,
+                "to_warehouse_id": to_warehouse.id,
+                "quantity": str(quantity),
+                "out_movement_id": out_movement.id,
+                "in_movement_id": in_movement.id,
+            },
+        )
         return out_movement, in_movement
 
 
@@ -304,11 +329,33 @@ class PurchaseService:
                 counted_quantity=current_quantity + detail.quantity,
                 concept="PURCHASE",
                 user=user,
+                audit=False,
             )
 
         purchase_order.status = "RECEIVED"
         purchase_order.received_at = timezone.now()
         purchase_order.save(update_fields=["status", "received_at"])
+
+        from usuarios.services import AuditLogService
+
+        AuditLogService.log_action(
+            user=user,
+            action="PURCHASE_RECEIVED",
+            entity="PurchaseOrder",
+            entity_id=purchase_order.id,
+            details={
+                "warehouse_id": purchase_order.warehouse_id,
+                "supplier_id": purchase_order.supplier_id,
+                "lines": [
+                    {
+                        "variant_id": detail.variant_id,
+                        "quantity": str(detail.quantity),
+                        "unit_cost": str(detail.unit_cost),
+                    }
+                    for detail in purchase_order.details.all()
+                ],
+            },
+        )
         return purchase_order
 
     @staticmethod
@@ -452,6 +499,18 @@ class CatalogImportService:
 
         created = sum(1 for r in results if r["status"] == "created")
         errors = sum(1 for r in results if r["status"] == "error")
+
+        # Un registro por importacion, no uno por fila (Bloque B.4): una
+        # carga de 2000 productos no puede enterrar el resto de la bitacora.
+        from usuarios.services import AuditLogService
+
+        AuditLogService.log_action(
+            user=user,
+            action="CATALOG_IMPORTED",
+            entity="Product",
+            entity_id=0,
+            details={"total": len(rows), "created": created, "errors": errors},
+        )
         return {
             "total": len(rows),
             "created": created,
@@ -539,6 +598,7 @@ class CatalogImportService:
                 counted_quantity=cantidad_inicial,
                 concept="ADJUSTMENT",
                 user=user,
+                audit=False,
             )
 
 

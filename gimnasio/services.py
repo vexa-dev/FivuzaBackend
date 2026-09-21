@@ -18,6 +18,20 @@ def _add_months(base: date, months: int) -> date:
     return base.replace(year=year, month=month, day=day)
 
 
+def _audit(*, user, action: str, membership: Membership, details=None) -> None:
+    # Import tardio: usuarios.services importa modelos de varias apps y
+    # traerlo a nivel de modulo desde aqui arma un ciclo al arrancar.
+    from usuarios.services import AuditLogService
+
+    AuditLogService.log_action(
+        user=user,
+        action=action,
+        entity="Membership",
+        entity_id=membership.id,
+        details=details,
+    )
+
+
 def _add_period(base: date, periodicity: str) -> date:
     if periodicity == "MONTHLY":
         return _add_months(base, 1)
@@ -80,13 +94,25 @@ class MembershipService:
     @transaction.atomic
     def create_membership(*, customer, plan, start_date: date, user) -> Membership:
         end_date = _add_period(start_date, plan.periodicity)
-        return Membership.objects.create(
+        membership = Membership.objects.create(
             customer=customer,
             plan=plan,
             start_date=start_date,
             end_date=end_date,
             status="ACTIVE",
         )
+        _audit(
+            user=user,
+            action="MEMBERSHIP_CREATED",
+            membership=membership,
+            details={
+                "customer_id": customer.id,
+                "plan_id": plan.id,
+                "start_date": str(start_date),
+                "end_date": str(end_date),
+            },
+        )
+        return membership
 
     @staticmethod
     @transaction.atomic
@@ -108,6 +134,7 @@ class MembershipService:
             if membership.end_date >= timezone.localdate()
             else timezone.localdate()
         )
+        previous_end_date = membership.end_date
         membership.end_date = _add_period(base, membership.plan.periodicity)
         membership.status = "ACTIVE"
         membership.save(update_fields=["end_date", "status"])
@@ -119,18 +146,38 @@ class MembershipService:
                 method=payment_method,
                 user=user,
             )
+        _audit(
+            user=user,
+            action="MEMBERSHIP_RENEWED",
+            membership=membership,
+            details={
+                "end_date": {
+                    "before": str(previous_end_date),
+                    "after": str(membership.end_date),
+                },
+                "payment_amount": (
+                    str(payment_amount) if payment_amount is not None else None
+                ),
+                "payment_method": payment_method
+                if payment_amount is not None
+                else None,
+            },
+        )
         return membership
 
     @staticmethod
+    @transaction.atomic
     def freeze_membership(*, membership: Membership, user) -> Membership:
         if membership.status != "ACTIVE":
             raise MembershipNotActiveError()
         membership.status = "FROZEN"
         membership.frozen_since = timezone.localdate()
         membership.save(update_fields=["status", "frozen_since"])
+        _audit(user=user, action="MEMBERSHIP_FROZEN", membership=membership)
         return membership
 
     @staticmethod
+    @transaction.atomic
     def unfreeze_membership(*, membership: Membership, user) -> Membership:
         if membership.status != "FROZEN":
             raise MembershipNotFrozenError()
@@ -139,14 +186,22 @@ class MembershipService:
         membership.status = "ACTIVE"
         membership.frozen_since = None
         membership.save(update_fields=["end_date", "status", "frozen_since"])
+        _audit(
+            user=user,
+            action="MEMBERSHIP_UNFROZEN",
+            membership=membership,
+            details={"frozen_days": frozen_days, "end_date": str(membership.end_date)},
+        )
         return membership
 
     @staticmethod
+    @transaction.atomic
     def cancel_membership(*, membership: Membership, user) -> Membership:
         if membership.status == "CANCELLED":
             raise MembershipAlreadyCancelledError()
         membership.status = "CANCELLED"
         membership.save(update_fields=["status"])
+        _audit(user=user, action="MEMBERSHIP_CANCELLED", membership=membership)
         return membership
 
     @staticmethod

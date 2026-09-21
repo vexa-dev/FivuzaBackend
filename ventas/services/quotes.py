@@ -116,6 +116,21 @@ class QuoteService:
                 discount_amount=prepared["discount_amount"],
                 subtotal=prepared["subtotal"],
             )
+
+        from usuarios.services import AuditLogService
+
+        AuditLogService.log_action(
+            user=user,
+            action="QUOTE_CREATED",
+            entity="Quote",
+            entity_id=quote.id,
+            details={
+                "customer_id": customer.id if customer else None,
+                "total": str(quote.total),
+                "lines": len(prepared_lines),
+                "valid_until": str(valid_until),
+            },
+        )
         return quote
 
     @staticmethod
@@ -166,6 +181,16 @@ class QuoteService:
         )
         quote.sale = sale
         quote.save(update_fields=["sale"])
+
+        from usuarios.services import AuditLogService
+
+        AuditLogService.log_action(
+            user=user,
+            action="QUOTE_CONVERTED",
+            entity="Quote",
+            entity_id=quote.id,
+            details={"sale_id": sale.id},
+        )
         return sale
 
     @staticmethod

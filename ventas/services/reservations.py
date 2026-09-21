@@ -64,7 +64,7 @@ class ReservationService:
             raise InsufficientStockError(
                 sku=variant.sku, available=available, requested=quantity
             )
-        return ProductReservation.objects.create(
+        reservation = ProductReservation.objects.create(
             customer=customer,
             variant=variant,
             warehouse=warehouse,
@@ -72,6 +72,23 @@ class ReservationService:
             expires_at=expires_at,
             user=user,
         )
+
+        from usuarios.services import AuditLogService
+
+        AuditLogService.log_action(
+            user=user,
+            action="RESERVATION_CREATED",
+            entity="ProductReservation",
+            entity_id=reservation.id,
+            details={
+                "customer_id": customer.id,
+                "variant_id": variant.id,
+                "warehouse_id": warehouse.id,
+                "quantity": str(quantity),
+                "expires_at": str(expires_at),
+            },
+        )
+        return reservation
 
     @staticmethod
     @transaction.atomic
@@ -82,6 +99,15 @@ class ReservationService:
             raise ReservationNotActiveError()
         reservation.status = "CANCELLED"
         reservation.save(update_fields=["status"])
+
+        from usuarios.services import AuditLogService
+
+        AuditLogService.log_action(
+            user=user,
+            action="RESERVATION_CANCELLED",
+            entity="ProductReservation",
+            entity_id=reservation.id,
+        )
         return reservation
 
     @staticmethod
@@ -111,6 +137,16 @@ class ReservationService:
         reservation.status = "CONVERTED"
         reservation.sale = sale
         reservation.save(update_fields=["status", "sale"])
+
+        from usuarios.services import AuditLogService
+
+        AuditLogService.log_action(
+            user=user,
+            action="RESERVATION_CONVERTED",
+            entity="ProductReservation",
+            entity_id=reservation.id,
+            details={"sale_id": sale.id},
+        )
         return sale
 
     @staticmethod

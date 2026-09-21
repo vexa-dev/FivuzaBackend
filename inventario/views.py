@@ -3,7 +3,6 @@ from django.contrib.postgres.search import SearchQuery, SearchRank
 from django.db.models import F
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
-from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -13,6 +12,7 @@ from rest_framework.response import Response
 
 from core.permissions import RequiresFeature, TenantNotCanceled, TenantNotSuspended
 from core.openapi import SchemaAPIView
+from core.viewsets import SoftDeleteDestroyMixin
 from core.services import FeatureFlagService
 from inventario import selectors
 from inventario.models import (
@@ -53,6 +53,7 @@ from inventario.serializers import (
     VolumePricingTierSerializer,
     WarehouseSerializer,
 )
+from usuarios.audit import TenantAuditMixin
 from usuarios.permissions import HasModulePermission
 from core.warehouse_access import WarehouseAccessService
 
@@ -81,7 +82,7 @@ _TRANSFER_PERMISSIONS = [
 ]
 
 
-class WarehouseViewSet(viewsets.ModelViewSet):
+class WarehouseViewSet(TenantAuditMixin, SoftDeleteDestroyMixin, viewsets.ModelViewSet):
     queryset = Warehouse.objects.all().order_by("name")
     serializer_class = WarehouseSerializer
     permission_classes = _BASE_PERMISSIONS
@@ -113,16 +114,10 @@ class WarehouseViewSet(viewsets.ModelViewSet):
                     "message": "El plan/configuracion actual solo permite 1 almacen.",
                 }
             )
-        serializer.save()
-
-    def perform_destroy(self, instance):
-        instance.deleted_at = timezone.now()
-        instance.deleted_by = self.request.user
-        instance.is_active = False
-        instance.save(update_fields=["deleted_at", "deleted_by", "is_active"])
+        super().perform_create(serializer)
 
 
-class CategoryViewSet(viewsets.ModelViewSet):
+class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin, viewsets.ModelViewSet):
     queryset = Category.objects.all().order_by("name")
     serializer_class = CategorySerializer
     permission_classes = _BASE_PERMISSIONS
@@ -134,14 +129,8 @@ class CategoryViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(name__icontains=search)
         return queryset
 
-    def perform_destroy(self, instance):
-        instance.deleted_at = timezone.now()
-        instance.deleted_by = self.request.user
-        instance.is_active = False
-        instance.save(update_fields=["deleted_at", "deleted_by", "is_active"])
 
-
-class BrandViewSet(viewsets.ModelViewSet):
+class BrandViewSet(TenantAuditMixin, SoftDeleteDestroyMixin, viewsets.ModelViewSet):
     queryset = Brand.objects.all().order_by("name")
     serializer_class = BrandSerializer
     permission_classes = _BASE_PERMISSIONS
@@ -153,14 +142,8 @@ class BrandViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(name__icontains=search)
         return queryset
 
-    def perform_destroy(self, instance):
-        instance.deleted_at = timezone.now()
-        instance.deleted_by = self.request.user
-        instance.is_active = False
-        instance.save(update_fields=["deleted_at", "deleted_by", "is_active"])
 
-
-class SupplierViewSet(viewsets.ModelViewSet):
+class SupplierViewSet(TenantAuditMixin, SoftDeleteDestroyMixin, viewsets.ModelViewSet):
     queryset = Supplier.objects.all().order_by("company_name")
     serializer_class = SupplierSerializer
     permission_classes = _BASE_PERMISSIONS
@@ -172,25 +155,20 @@ class SupplierViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(company_name__icontains=search)
         return queryset
 
-    def perform_destroy(self, instance):
-        instance.deleted_at = timezone.now()
-        instance.deleted_by = self.request.user
-        instance.save(update_fields=["deleted_at", "deleted_by"])
 
-
-class AttributeViewSet(viewsets.ModelViewSet):
+class AttributeViewSet(TenantAuditMixin, viewsets.ModelViewSet):
     queryset = Attribute.objects.all().order_by("name")
     serializer_class = AttributeSerializer
     permission_classes = _BASE_PERMISSIONS
 
 
-class AttributeValueViewSet(viewsets.ModelViewSet):
+class AttributeValueViewSet(TenantAuditMixin, viewsets.ModelViewSet):
     queryset = AttributeValue.objects.all().order_by("value")
     serializer_class = AttributeValueSerializer
     permission_classes = _BASE_PERMISSIONS
 
 
-class ProductViewSet(viewsets.ModelViewSet):
+class ProductViewSet(TenantAuditMixin, SoftDeleteDestroyMixin, viewsets.ModelViewSet):
     queryset = Product.objects.select_related("category", "supplier").prefetch_related(
         "variants"
     )
@@ -227,16 +205,12 @@ class ProductViewSet(viewsets.ModelViewSet):
                     "message": "El plan/configuracion actual no permite variantes.",
                 }
             )
-        serializer.save()
-
-    def perform_destroy(self, instance):
-        instance.deleted_at = timezone.now()
-        instance.deleted_by = self.request.user
-        instance.is_active = False
-        instance.save(update_fields=["deleted_at", "deleted_by", "is_active"])
+        super().perform_create(serializer)
 
 
-class ProductVariantViewSet(viewsets.ModelViewSet):
+class ProductVariantViewSet(
+    TenantAuditMixin, SoftDeleteDestroyMixin, viewsets.ModelViewSet
+):
     queryset = ProductVariant.objects.select_related("product").prefetch_related(
         "attribute_values"
     )
@@ -261,7 +235,7 @@ class ProductVariantViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         try:
-            serializer.save()
+            super().perform_create(serializer)
         except DjangoValidationError as exc:
             raise ValidationError(exc.message) from exc
 
@@ -276,10 +250,7 @@ class ProductVariantViewSet(viewsets.ModelViewSet):
                 "No se puede eliminar la unica variante de un producto."
             )
         was_default = instance.is_default
-        instance.deleted_at = timezone.now()
-        instance.deleted_by = self.request.user
-        instance.is_active = False
-        instance.save(update_fields=["deleted_at", "deleted_by", "is_active"])
+        super().perform_destroy(instance)
         if was_default:
             next_default = ProductVariant.objects.filter(
                 product_id=instance.product_id
@@ -440,13 +411,13 @@ class LowStockVariantsView(SchemaAPIView):
         return Response(LowStockVariantSerializer(variants, many=True).data)
 
 
-class TaxRateViewSet(viewsets.ModelViewSet):
+class TaxRateViewSet(TenantAuditMixin, viewsets.ModelViewSet):
     queryset = TaxRate.objects.all().order_by("name")
     serializer_class = TaxRateSerializer
     permission_classes = _PURCHASES_PERMISSIONS
 
 
-class ProductTaxViewSet(viewsets.ModelViewSet):
+class ProductTaxViewSet(TenantAuditMixin, viewsets.ModelViewSet):
     queryset = ProductTax.objects.select_related("variant", "tax_rate")
     serializer_class = ProductTaxSerializer
     permission_classes = _PURCHASES_PERMISSIONS
@@ -459,7 +430,7 @@ class ProductTaxViewSet(viewsets.ModelViewSet):
         return queryset
 
 
-class PurchaseOrderViewSet(viewsets.ModelViewSet):
+class PurchaseOrderViewSet(TenantAuditMixin, viewsets.ModelViewSet):
     """Visible solo si tenant_settings.purchases_enabled=true
     (RequiresFeature). La recepcion pasa siempre por PurchaseService, nunca
     por un PATCH directo de `status` -por eso `status` es de solo lectura
@@ -637,7 +608,7 @@ class StockTransferView(SchemaAPIView):
         )
 
 
-class VolumePricingTierViewSet(viewsets.ModelViewSet):
+class VolumePricingTierViewSet(TenantAuditMixin, viewsets.ModelViewSet):
     """Tramos de precio por cantidad mínima (Sprint 26, Ficha de Producto
     §5.1) -CRUD normal, sin acción propia: a diferencia de Stock, no tiene
     efectos secundarios sobre otras tablas al crearse/editarse."""
