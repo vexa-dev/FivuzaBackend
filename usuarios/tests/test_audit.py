@@ -3,7 +3,7 @@
 import csv
 import io
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from django.core.cache import cache
 from django.test import SimpleTestCase
@@ -328,7 +328,12 @@ class TenantAuditTests(TenantTestCase):
         self._seed_filter_logs()
         response = self._client_as(self.admin_user).get(
             "/api/v1/usuarios/audit-logs/",
-            {"entity": "Category", "export": "csv"},
+            {
+                "entity": "Category",
+                "export": "csv",
+                "date_from": timezone.localdate().isoformat(),
+                "date_to": timezone.localdate().isoformat(),
+            },
         )
         self.assertEqual(response.status_code, 200)
         rows = list(csv.DictReader(io.StringIO(response.content.decode())))
@@ -344,6 +349,62 @@ class TenantAuditTests(TenantTestCase):
             "/api/v1/usuarios/audit-logs/", {"export": "pdf"}
         )
         self.assertEqual(response.status_code, 400)
+
+    def test_export_requires_a_bounded_date_range(self):
+        client = self._client_as(self.admin_user)
+        base = "/api/v1/usuarios/audit-logs/"
+        # Sin fechas: bajaria toda la historia de una vez.
+        self.assertEqual(client.get(base, {"export": "csv"}).status_code, 400)
+        # Mas de 366 dias.
+        too_long = client.get(
+            base,
+            {"export": "csv", "date_from": "2025-01-01", "date_to": "2026-01-02"},
+        )
+        self.assertEqual(too_long.status_code, 400)
+        # Un año completo, justo en el limite.
+        one_year = client.get(
+            base,
+            {"export": "csv", "date_from": "2025-01-01", "date_to": "2026-01-01"},
+        )
+        self.assertEqual(one_year.status_code, 200)
+        self.assertFalse(self._logs(action="AUDIT_LOG_EXPORTED").count() > 1)
+
+    def test_invalid_or_reversed_dates_answer_400_not_500(self):
+        client = self._client_as(self.admin_user)
+        base = "/api/v1/usuarios/audit-logs/"
+        self.assertEqual(client.get(base, {"date_from": "hoy"}).status_code, 400)
+        reversed_range = client.get(
+            base,
+            {"export": "csv", "date_from": "2026-02-01", "date_to": "2026-01-01"},
+        )
+        self.assertEqual(reversed_range.status_code, 400)
+        # Mismo helper en los reportes que ya existian.
+        report = client.get(
+            "/api/v1/ventas/reports/sales/",
+            {"date_from": "2026-13-01", "date_to": "2026-01-01"},
+        )
+        self.assertEqual(report.status_code, 400)
+
+    def test_date_filter_uses_the_business_day_in_lima(self):
+        AuditLog.objects.all().delete()
+        late = AuditLogService.log_action(
+            user=self.admin_user, action="CREATE", entity="Brand", entity_id=1
+        )
+        # 23:30 del 10 de marzo en Lima son las 04:30 del 11 en UTC: sigue
+        # siendo el 10 para el negocio.
+        lima_night = timezone.make_aware(datetime(2026, 3, 10, 23, 30))
+        AuditLog.objects.filter(pk=late.pk).update(created_at=lima_night)
+
+        def ids(**params):
+            rows = self._results(
+                self._client_as(self.admin_user).get(
+                    "/api/v1/usuarios/audit-logs/", {"entity": "Brand", **params}
+                )
+            )
+            return [row["id"] for row in rows]
+
+        self.assertEqual(ids(date_from="2026-03-10", date_to="2026-03-10"), [late.pk])
+        self.assertEqual(ids(date_from="2026-03-11"), [])
 
     def test_cost_is_hidden_from_a_viewer_without_cost_permission(self):
         product = ProductVariantService.create_product(
