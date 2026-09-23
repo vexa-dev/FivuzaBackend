@@ -1,7 +1,7 @@
 # Herramientas de desarrollo y CI. La imagen de produccion instala solo
 # requirements.txt.
 -r requirements.txt
-pytest-django>=4.12.0,<4.13
+pytest-django>=4.14.0,<4.15
 coverage>=7.6,<8.0
 pip-audit>=2.7,<3.0
 ruff>=0.15.21,<1.0
