@@ -22,6 +22,9 @@ router.register(
     "usuarios/user-warehouses", views.UserWarehouseViewSet, basename="user-warehouse"
 )
 router.register("usuarios/audit-logs", views.AuditLogViewSet, basename="audit-log")
+router.register(
+    "usuarios/login-attempts", views.LoginAttemptViewSet, basename="login-attempt"
+)
 router.register("usuarios/employees", views.EmployeeViewSet, basename="employee")
 router.register(
     "usuarios/employee-schedules",
@@ -63,6 +66,12 @@ urlpatterns = [
         "auth/password-reset/confirm/",
         views.PasswordResetConfirmView.as_view(),
         name="password_reset_confirm",
+    ),
+    # Bloque C.1: autorizacion de supervisor de un solo uso.
+    path(
+        "usuarios/authorizations/",
+        views.SupervisorAuthorizationView.as_view(),
+        name="supervisor_authorization",
     ),
     # Reportes de RRHH (Sprint 23, API Spec §2.1) -APIView, no ViewSet: no
     # representan un recurso CRUD, son agregados de solo lectura.

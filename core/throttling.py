@@ -31,6 +31,23 @@ class LoginIdentifierRateThrottle(SimpleRateThrottle):
         return self.cache_format % {"scope": self.scope, "ident": digest}
 
 
+class SupervisorAuthorizationRateThrottle(SimpleRateThrottle):
+    """Bloque C.1: el endpoint de autorizacion recibe una contraseña, asi que
+    necesita el mismo freno que el login. LoginRateThrottle no sirve aqui:
+    es AnonRateThrottle y no limita a un usuario autenticado (el cajero).
+    Se cuenta por cajero; el limite por correo del supervisor lo pone
+    LoginIdentifierRateThrottle, compartido con el login."""
+
+    scope = "supervisor_authorization"
+
+    def get_cache_key(self, request, view):
+        user_id = getattr(request.user, "id", None)
+        if user_id is None:
+            return None
+        schema = getattr(connection, "schema_name", "public")
+        return self.cache_format % {"scope": self.scope, "ident": f"{schema}:{user_id}"}
+
+
 class BusinessWriteRateThrottle(UserRateThrottle):
     scope = "business_write"
 

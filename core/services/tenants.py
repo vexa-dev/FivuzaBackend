@@ -185,6 +185,10 @@ class TenantProvisioningService:
         # anular una venta completa.
         ("SALES_VOID", "SALES"),
         ("SALES_RETURN", "SALES"),
+        # Bloque C.2: descuento manual sin el tope del rol (Role.
+        # max_discount_percent). Quien lo tiene tambien puede autorizar el
+        # descuento de un cajero con su clave.
+        ("SALES_DISCOUNT", "SALES"),
         # Sprint 29: vertical de Gimnasios, un solo permiso para todo el
         # modulo (mismo criterio que HR_MANAGE, sin split fino).
         ("GYM_MANAGE", "GYM"),
@@ -214,6 +218,7 @@ class TenantProvisioningService:
             "SALES_MANAGE",
             "SALES_VOID",
             "SALES_RETURN",
+            "SALES_DISCOUNT",
             "GYM_MANAGE",
             "DATA_EXPORT",
             "SETTINGS_MANAGE",
@@ -236,6 +241,7 @@ class TenantProvisioningService:
             "SALES_MANAGE",
             "SALES_VOID",
             "SALES_RETURN",
+            "SALES_DISCOUNT",
             "GYM_MANAGE",
         ],
         # "seller" no recibe CASH_MANAGE todavia a proposito (ver nota

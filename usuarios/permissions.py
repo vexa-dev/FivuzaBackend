@@ -30,3 +30,31 @@ def HasModulePermission(code):
             return PermissionService.check_effective_permission(user, code)
 
     return _HasModulePermission
+
+
+def HasPermissionOrSupervisorAuthorization(code):
+    """Bloque C.1: como HasModulePermission(code), pero quien vende
+    (SALES_MANAGE) y no tiene `code` pasa si trae la cabecera de
+    autorizacion de un supervisor. Aqui solo se mira que la cabecera este:
+    el token se valida y se gasta en el servicio, dentro de la transaccion
+    de la operacion. Sin cabecera responde el 403 que abre el modal."""
+
+    class _HasPermissionOrSupervisorAuthorization(BasePermission):
+        def has_permission(self, request, view):
+            from usuarios.authorization import (
+                SupervisorAuthorizationRequiredError,
+                authorization_token_from,
+            )
+
+            user = request.user
+            if not hasattr(user, "role_id"):
+                return False
+            if PermissionService.check_effective_permission(user, code):
+                return True
+            if not PermissionService.check_effective_permission(user, "SALES_MANAGE"):
+                return False
+            if authorization_token_from(request) is None:
+                raise SupervisorAuthorizationRequiredError(code)
+            return True
+
+    return _HasPermissionOrSupervisorAuthorization

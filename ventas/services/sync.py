@@ -102,6 +102,11 @@ class SaleSyncService:
                     client_side_uuid=client_side_uuid,
                     allow_oversell=True,
                     at=SaleSyncService._occurred_at(sale_data.get("occurred_at")),
+                    # Bloque C.2: sin conexion no hay a quien pedir
+                    # autorizacion; el POS ya impide pasar el tope offline,
+                    # asi que lo que llegue por encima se registra y se
+                    # marca en la bitacora en vez de perder la venta.
+                    discount_limit="flag",
                 )
             except IntegrityError:
                 # Dos sincronizaciones casi simultaneas del mismo

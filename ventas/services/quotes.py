@@ -61,11 +61,18 @@ class QuoteService:
     @staticmethod
     @transaction.atomic
     def create_quote(
-        *, customer, user, lines: list[dict], valid_until, at=None
+        *,
+        customer,
+        user,
+        lines: list[dict],
+        valid_until,
+        at=None,
+        authorization_token: str | None = None,
     ) -> Quote:
         at = at or timezone.now()
         subtotal = Decimal("0")
         discount_total = Decimal("0")
+        manual_discount_percent: Decimal | None = None
         prepared_lines = []
         for line in lines:
             variant = ProductVariant.objects.select_related("product").get(
@@ -77,13 +84,19 @@ class QuoteService:
             )
             line_subtotal = unit_price * quantity
             discount_amount = line.get("discount_amount")
-            discount_amount = (
-                Decimal(str(discount_amount))
-                if discount_amount is not None
-                else SaleService._resolve_promotion_discount(
+            if discount_amount is None:
+                discount_amount = SaleService._resolve_promotion_discount(
                     variant=variant, quantity=quantity, unit_price=unit_price, at=at
                 )
-            )
+            else:
+                discount_amount = Decimal(str(discount_amount))
+                line_percent = SaleService.discount_percent(
+                    discount_amount, line_subtotal
+                )
+                if manual_discount_percent is None or (
+                    line_percent > manual_discount_percent
+                ):
+                    manual_discount_percent = line_percent
             prepared_lines.append(
                 {
                     "variant": variant,
@@ -95,6 +108,30 @@ class QuoteService:
             )
             subtotal += line_subtotal
             discount_total += discount_amount
+
+        # Bloque C.2: el descuento de una cotizacion se congela y pasa tal
+        # cual a la venta al convertirla (convert_to_sale no lo revisa), asi
+        # que el tope del rol se aplica aqui, al cotizar.
+        if SaleService.exceeds_discount_limit(
+            user=user, percent=manual_discount_percent
+        ):
+            from usuarios.authorization import (
+                SupervisorAuthorizationRequiredError,
+                SupervisorAuthorizationService,
+            )
+
+            if not authorization_token:
+                raise SupervisorAuthorizationRequiredError(
+                    "SALES_DISCOUNT",
+                    requested_discount_percent=str(manual_discount_percent),
+                    max_discount_percent=str(user.role.max_discount_percent),
+                )
+            SupervisorAuthorizationService.consume(
+                raw_token=authorization_token,
+                user=user,
+                permission="SALES_DISCOUNT",
+                discount_percent=manual_discount_percent,
+            )
 
         quote = Quote.objects.create(
             customer=customer,
@@ -178,6 +215,8 @@ class QuoteService:
             user=user,
             lines=lines,
             payments=payments,
+            # El tope se reviso al cotizar (create_quote).
+            discount_limit="skip",
         )
         quote.sale = sale
         quote.save(update_fields=["sale"])

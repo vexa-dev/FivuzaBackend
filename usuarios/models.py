@@ -18,12 +18,26 @@ class Role(SoftDeleteModel):
     name = models.CharField(max_length=50)
     is_system_default = models.BooleanField(default=False)
     description = models.CharField(max_length=255, blank=True)
+    # Bloque C.2: porcentaje maximo de descuento manual por linea que da
+    # quien tiene este rol sin pedir autorizacion. 0 por defecto -un rol
+    # nuevo no regala nada hasta que el dueño lo decida-; 100 equivale a
+    # "sin tope". Quien tiene SALES_DISCOUNT no tiene tope.
+    max_discount_percent = models.DecimalField(
+        max_digits=5, decimal_places=2, default=0
+    )
     deleted_by = models.ForeignKey(
         "User", on_delete=models.PROTECT, null=True, blank=True, related_name="+"
     )
 
     class Meta:
         db_table = "roles"
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(max_discount_percent__gte=0)
+                & models.Q(max_discount_percent__lte=100),
+                name="ck_roles_max_discount_percent",
+            )
+        ]
 
     def __str__(self):
         return self.name
@@ -398,3 +412,60 @@ class DataExport(models.Model):
                 name="ck_data_exports_status",
             ),
         ]
+
+
+class SupervisorAuthorization(models.Model):
+    """Autorizacion de un solo uso (Bloque C.1): un supervisor escribe su
+    correo y contraseña en el equipo del cajero y la operacion sensible
+    (anular, devolver, descuento sobre el tope) sale adelante sin cerrar la
+    sesion del cajero.
+
+    Tabla y no cache: se consume dentro de la misma transaccion que la
+    operacion que autoriza, asi que si la anulacion falla la autorizacion
+    sigue disponible, y dos pestañas no pueden gastarla a la vez
+    (select_for_update). Solo se guarda el hash del token."""
+
+    token_hash = models.CharField(max_length=64, unique=True)
+    permission = models.CharField(max_length=50)
+    requested_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="+")
+    authorized_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="+")
+    # Anular y devolver quedan atadas a UNA venta; el descuento, al
+    # porcentaje por linea que el supervisor vio al autorizar.
+    target_id = models.IntegerField(null=True, blank=True)
+    discount_percent = models.DecimalField(
+        max_digits=5, decimal_places=2, null=True, blank=True
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    used_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "supervisor_authorizations"
+
+
+class LoginAttempt(models.Model):
+    """Intentos de acceso con un correo que no es de nadie en el negocio
+    (Bloque C.4). No van en AuditLog porque esa tabla cuelga de un User, y
+    es justo la señal de un ataque de fuerza bruta.
+
+    Es la unica tabla que un desconocido puede hacer crecer desde fuera: la
+    frena el throttle de login, un tope diario de filas y una purga a los
+    30 dias (LoginAttemptService)."""
+
+    SOURCE_LOGIN = "LOGIN"
+    SOURCE_SUPERVISOR_AUTHORIZATION = "SUPERVISOR_AUTHORIZATION"
+
+    email = models.CharField(max_length=254)
+    ip = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.CharField(max_length=200, blank=True)
+    source = models.CharField(
+        max_length=30,
+        choices=[
+            (SOURCE_LOGIN, SOURCE_LOGIN),
+            (SOURCE_SUPERVISOR_AUTHORIZATION, SOURCE_SUPERVISOR_AUTHORIZATION),
+        ],
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        db_table = "login_attempts"

@@ -18,6 +18,7 @@ from usuarios.models import (
     EmployeeAttendance,
     EmployeePayroll,
     EmployeeSchedule,
+    LoginAttempt,
     Permission,
     Role,
     RolePermission,
@@ -69,14 +70,29 @@ class TenantUserTokenObtainSerializer(serializers.Serializer):
     }
 
     def validate(self, attrs):
+        request = self.context["request"]
         try:
             user = User.objects.get(email=attrs["email"], is_active=True)
         except User.DoesNotExist:
+            # Bloque C.4: el correo no es de nadie activo en el negocio. No
+            # cabe en AuditLog (cuelga de un User) y es justo la señal de
+            # fuerza bruta, asi que va a su propia tabla.
+            from usuarios.authorization import (
+                LoginAttemptService,
+                equalize_unknown_user_timing,
+            )
+            from usuarios.models import LoginAttempt
+
+            equalize_unknown_user_timing(attrs["password"])
+            LoginAttemptService.record_unknown_email(
+                email=attrs["email"],
+                request=request,
+                source=LoginAttempt.SOURCE_LOGIN,
+            )
             self.fail("invalid_credentials")
 
         from usuarios.services import AuditLogService
 
-        request = self.context["request"]
         if not user.check_password(attrs["password"]):
             # Solo se registra si el correo existe: la bitacora cuelga de un
             # User, y un correo inventado no tiene a quien atribuirse. El
@@ -91,32 +107,97 @@ class TenantUserTokenObtainSerializer(serializers.Serializer):
         schema_name = request.tenant.schema_name
         refresh = issue_tokens_for_tenant_user(user, schema_name)
 
-        from usuarios.services import PermissionService
-
         return {
             "refresh": str(refresh),
             "access": str(refresh.access_token),
-            "user": {
-                "id": user.id,
-                "email": user.email,
-                "role": user.role.name,
-                "warehouse_ids": list(
-                    WarehouseAccessService.allowed_warehouse_ids(user)
-                ),
-                # El frontend usa esto para mostrar/ocultar secciones segun
-                # permiso, nunca segun el NOMBRE del rol -los roles son
-                # personalizables (Convenciones), un nombre fijo no alcanza.
-                "permissions": sorted(
-                    PermissionService.get_effective_permission_codes(user)
-                ),
-            },
+            "user": session_user_payload(user),
         }
 
 
+def session_user_payload(user: User) -> dict:
+    """El usuario que reciben el login y el refresh (mismo contrato en los
+    dos). El frontend muestra u oculta secciones segun `permissions`, nunca
+    segun el NOMBRE del rol -los roles son personalizables (Convenciones)."""
+    from usuarios.services import PermissionService
+
+    return {
+        "id": user.id,
+        "email": user.email,
+        "role": user.role.name,
+        "warehouse_ids": list(WarehouseAccessService.allowed_warehouse_ids(user)),
+        "permissions": sorted(PermissionService.get_effective_permission_codes(user)),
+        # Bloque C.2: el POS lo usa para avisar antes de cobrar y para
+        # impedir un descuento sobre el tope sin conexion.
+        "max_discount_percent": str(user.role.max_discount_percent),
+    }
+
+
 class RoleSerializer(serializers.ModelSerializer):
+    max_discount_percent = serializers.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        min_value=Decimal("0"),
+        max_value=Decimal("100"),
+        required=False,
+    )
+
     class Meta:
         model = Role
-        fields = ["id", "name", "is_system_default", "description"]
+        fields = [
+            "id",
+            "name",
+            "is_system_default",
+            "description",
+            "max_discount_percent",
+        ]
+
+
+class SupervisorAuthorizationRequestSerializer(serializers.Serializer):
+    """Bloque C.1: el supervisor escribe su correo y contraseña en el equipo
+    del cajero. target_id es la venta a anular o devolver; discount_percent,
+    el mayor descuento por linea que va a autorizar."""
+
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True, trim_whitespace=False)
+    permission = serializers.ChoiceField(
+        choices=["SALES_VOID", "SALES_RETURN", "SALES_DISCOUNT"]
+    )
+    target_id = serializers.IntegerField(required=False, allow_null=True)
+    discount_percent = serializers.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        min_value=Decimal("0.01"),
+        max_value=Decimal("100"),
+        required=False,
+        allow_null=True,
+    )
+
+    def validate(self, attrs):
+        permission = attrs["permission"]
+        if permission in ("SALES_VOID", "SALES_RETURN") and not attrs.get("target_id"):
+            raise serializers.ValidationError(
+                {"target_id": "Indica la venta que se va a autorizar."}
+            )
+        if permission == "SALES_DISCOUNT" and attrs.get("discount_percent") is None:
+            raise serializers.ValidationError(
+                {"discount_percent": "Indica el descuento que se va a autorizar."}
+            )
+        return attrs
+
+
+class SupervisorAuthorizationResponseSerializer(serializers.Serializer):
+    token = serializers.CharField()
+    permission = serializers.CharField()
+    expires_at = serializers.DateTimeField()
+    authorized_by = serializers.IntegerField()
+    authorized_by_email = serializers.EmailField()
+
+
+class LoginAttemptSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LoginAttempt
+        fields = ["id", "email", "ip", "user_agent", "source", "created_at"]
+        read_only_fields = fields
 
 
 class PermissionSerializer(serializers.ModelSerializer):
@@ -304,9 +385,38 @@ class AuditLogSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_details(self, obj) -> str:
+        details = obj.details
         if self.context.get("hide_cost"):
-            return strip_cost_from_details(obj.details)
-        return obj.details
+            details = strip_cost_from_details(details)
+        return self._with_user_emails(details)
+
+    # Bloque C: la bitacora guarda solo el id de quien autorizo o pidio una
+    # operacion; el correo se resuelve al leer, asi anonimizar a esa
+    # persona tambien lo borra del historial.
+    _USER_REFERENCE_KEYS = ("authorized_by", "requested_by")
+
+    def _with_user_emails(self, details: str) -> str:
+        if not any(f'"{key}"' in details for key in self._USER_REFERENCE_KEYS):
+            return details
+        try:
+            parsed = json.loads(details)
+        except (TypeError, ValueError):
+            return details
+        if not isinstance(parsed, dict):
+            return details
+        emails = self.context.setdefault("_user_emails", {})
+        for key in self._USER_REFERENCE_KEYS:
+            user_id = parsed.get(key)
+            if not isinstance(user_id, int):
+                continue
+            if user_id not in emails:
+                emails[user_id] = (
+                    User.all_objects.filter(id=user_id)
+                    .values_list("email", flat=True)
+                    .first()
+                )
+            parsed[f"{key}_email"] = emails[user_id]
+        return json.dumps(parsed)
 
 
 # Bloque A.5 aplicado a la bitacora: el costo de un producto, de una compra
