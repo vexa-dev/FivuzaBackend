@@ -1,8 +1,10 @@
 # Pruebas de flujo completo a través de la capa de servicios (ej. crear una venta
 # de punta a punta), no solo de una unidad aislada.
+import importlib
 from datetime import timedelta
 from decimal import Decimal
 
+from django.apps import apps as django_apps
 from django.utils import timezone
 from django_tenants.test.cases import TenantTestCase
 
@@ -18,6 +20,7 @@ from ventas.models import (
     Promotion,
     PromotionProduct,
     Quote,
+    QuoteDetail,
     Sale,
 )
 from ventas.services import (
@@ -317,6 +320,156 @@ class SaleServiceTests(TenantTestCase):
 
         self.assertEqual(sale.discount_total, Decimal("5.00"))
         self.assertEqual(sale.total, Decimal("95.00"))
+
+    def test_percentage_promotion_charges_in_cents(self):
+        # 12.5% de 10.99 = 1.37375: el POS cobra en centimos (S/ 9.62), y
+        # ese pago tiene que cuadrar con el total de la venta.
+        variant = self._create_variant(price="10.99", stock_quantity="10")
+        promotion = Promotion.objects.create(
+            name="12.5% descuento",
+            type="PERCENTAGE",
+            value="12.50",
+            start_date=timezone.now() - timedelta(days=1),
+            end_date=timezone.now() + timedelta(days=1),
+            is_active=True,
+        )
+        PromotionProduct.objects.create(promotion=promotion, variant=variant)
+        session = self._open_session()
+
+        sale = SaleService.create_sale(
+            customer=self.customer,
+            cash_session=session,
+            user=self.user,
+            lines=[{"variant_id": variant.id, "quantity": "1"}],
+            payments=[{"method": "CASH", "amount": Decimal("9.62")}],
+        )
+
+        self.assertEqual(sale.total, Decimal("9.62"))
+
+    def test_fractional_quantity_charges_in_cents(self):
+        # Producto por KG: 1.234 x 10.50 = 12.957 -se cobra S/ 12.96.
+        variant = self._create_variant(price="10.50", stock_quantity="10")
+        session = self._open_session()
+
+        sale = SaleService.create_sale(
+            customer=self.customer,
+            cash_session=session,
+            user=self.user,
+            lines=[{"variant_id": variant.id, "quantity": "1.234"}],
+            payments=[{"method": "CASH", "amount": Decimal("12.96")}],
+        )
+
+        self.assertEqual(sale.total, Decimal("12.96"))
+
+    def _promote(self, variant, *, type, value):
+        promotion = Promotion.objects.create(
+            name="Promo",
+            type=type,
+            value=value,
+            start_date=timezone.now() - timedelta(days=1),
+            end_date=timezone.now() + timedelta(days=1),
+            is_active=True,
+        )
+        PromotionProduct.objects.create(promotion=promotion, variant=variant)
+
+    def test_promotion_discount_rounds_half_up_per_line(self):
+        # 15% de 10.50 = 1.575 -> 1.58 (ROUND_HALF_UP sobre el descuento de
+        # la linea, no sobre el total): se cobra 8.92, no 8.93.
+        variant = self._create_variant(price="10.50", stock_quantity="10")
+        self._promote(variant, type="PERCENTAGE", value="15.00")
+        session = self._open_session()
+
+        sale = SaleService.create_sale(
+            customer=self.customer,
+            cash_session=session,
+            user=self.user,
+            lines=[{"variant_id": variant.id, "quantity": "1"}],
+            payments=[{"method": "CASH", "amount": Decimal("8.92")}],
+        )
+
+        detail = sale.details.get()
+        self.assertEqual(detail.discount_amount, Decimal("1.58"))
+        self.assertEqual(detail.subtotal, Decimal("8.92"))
+        self.assertEqual(sale.discount_total, Decimal("1.58"))
+        self.assertEqual(sale.total, Decimal("8.92"))
+
+    def test_payment_with_fraction_of_cent_is_rejected(self):
+        # El total sin redondear (8.925) ya no es un monto valido.
+        variant = self._create_variant(price="10.50", stock_quantity="10")
+        self._promote(variant, type="PERCENTAGE", value="15.00")
+        session = self._open_session()
+
+        with self.assertRaises(PaymentMismatchError):
+            SaleService.create_sale(
+                customer=self.customer,
+                cash_session=session,
+                user=self.user,
+                lines=[{"variant_id": variant.id, "quantity": "1"}],
+                payments=[{"method": "CASH", "amount": Decimal("8.925")}],
+            )
+
+    def test_fixed_promotion_on_fractional_quantity_rounds_to_cents(self):
+        # 0.755 kg x 4.00 = 3.02; S/ 1.00 por kg = 0.755 -> 0.76.
+        variant = self._create_variant(price="4.00", stock_quantity="10")
+        self._promote(variant, type="FIXED_AMOUNT", value="1.00")
+        session = self._open_session()
+
+        sale = SaleService.create_sale(
+            customer=self.customer,
+            cash_session=session,
+            user=self.user,
+            lines=[{"variant_id": variant.id, "quantity": "0.755"}],
+            payments=[{"method": "CASH", "amount": Decimal("2.26")}],
+        )
+
+        self.assertEqual(sale.details.get().discount_amount, Decimal("0.76"))
+        self.assertEqual(sale.total, Decimal("2.26"))
+
+    def test_manual_discount_rounds_to_cents(self):
+        variant = self._create_variant(price="20.00", stock_quantity="10")
+        session = self._open_session()
+
+        sale = SaleService.create_sale(
+            customer=self.customer,
+            cash_session=session,
+            user=self.user,
+            lines=[
+                {
+                    "variant_id": variant.id,
+                    "quantity": "1",
+                    "discount_amount": Decimal("1.2350"),
+                }
+            ],
+            payments=[{"method": "CASH", "amount": Decimal("18.76")}],
+        )
+
+        self.assertEqual(sale.details.get().discount_amount, Decimal("1.24"))
+        self.assertEqual(sale.total, Decimal("18.76"))
+
+    def test_line_subtotals_add_up_to_sale_total(self):
+        # Varias lineas con fracciones: redondear cada una (no solo el
+        # total) mantiene la suma de los detalles igual al total cobrado.
+        kg = self._create_variant(price="10.50", stock_quantity="10")
+        promo = self._create_variant(price="10.50", stock_quantity="10")
+        self._promote(promo, type="PERCENTAGE", value="15.00")
+        session = self._open_session()
+
+        sale = SaleService.create_sale(
+            customer=self.customer,
+            cash_session=session,
+            user=self.user,
+            lines=[
+                {"variant_id": kg.id, "quantity": "1.234"},
+                {"variant_id": promo.id, "quantity": "1"},
+            ],
+            # 12.96 + (10.50 - 1.58)
+            payments=[{"method": "CASH", "amount": Decimal("21.88")}],
+        )
+
+        self.assertEqual(sale.subtotal, Decimal("23.46"))
+        self.assertEqual(sale.discount_total, Decimal("1.58"))
+        self.assertEqual(sale.total, Decimal("21.88"))
+        self.assertEqual(sum(d.subtotal for d in sale.details.all()), sale.total)
 
     def test_insufficient_stock_rolls_back_everything(self):
         variant = self._create_variant(price="20.00", stock_quantity="2")
@@ -1046,6 +1199,88 @@ class QuoteServiceTests(TenantTestCase):
         self.assertEqual(sale.details.first().unit_price, Decimal("25.00"))
         quote.refresh_from_db()
         self.assertEqual(quote.sale_id, sale.id)
+
+    def test_quote_with_promotion_rounds_to_cents_and_converts(self):
+        # Misma regla que create_sale(): 15% de 10.50 = 1.575 -> 1.58. Si la
+        # cotizacion no redondeara, su total (8.925) no se podria cobrar.
+        variant = self._create_variant(price="10.50")
+        promotion = Promotion.objects.create(
+            name="15% descuento",
+            type="PERCENTAGE",
+            value="15.00",
+            start_date=timezone.now() - timedelta(days=1),
+            end_date=timezone.now() + timedelta(days=1),
+            is_active=True,
+        )
+        PromotionProduct.objects.create(promotion=promotion, variant=variant)
+        quote = QuoteService.create_quote(
+            customer=self.customer,
+            user=self.user,
+            lines=[{"variant_id": variant.id, "quantity": "1"}],
+            valid_until=timezone.now() + timedelta(days=7),
+        )
+        self.assertEqual(quote.discount_total, Decimal("1.58"))
+        self.assertEqual(quote.total, Decimal("8.92"))
+
+        QuoteService.mark_accepted(quote=quote)
+        sale = QuoteService.convert_to_sale(
+            quote=quote,
+            cash_session=self._open_session(),
+            user=self.user,
+            payments=[{"method": "CASH", "amount": quote.total}],
+        )
+        self.assertEqual(sale.total, quote.total)
+
+    def test_migration_rounds_pending_quotes_only(self):
+        # Cotizaciones guardadas antes de redondear a centimos (0011).
+        migration = importlib.import_module(
+            "ventas.migrations.0011_round_pending_quote_amounts"
+        )
+
+        def legacy_quote(sale=None):
+            quote = Quote.objects.create(
+                customer=self.customer,
+                user=self.user,
+                status="ACCEPTED",
+                valid_until=timezone.now() + timedelta(days=7),
+                subtotal=Decimal("10.5000"),
+                discount_total=Decimal("1.5750"),
+                total=Decimal("8.9250"),
+                sale=sale,
+            )
+            QuoteDetail.objects.create(
+                quote=quote,
+                variant_id=1,
+                product_name_snapshot="Camiseta",
+                sku_snapshot="SKU-LEGACY",
+                quantity=Decimal("1.000"),
+                unit_price=Decimal("10.5000"),
+                discount_amount=Decimal("1.5750"),
+                subtotal=Decimal("8.9250"),
+            )
+            return quote
+
+        variant = self._create_variant(price="20.00")
+        converted_sale = SaleService.create_sale(
+            customer=self.customer,
+            cash_session=self._open_session(),
+            user=self.user,
+            lines=[{"variant_id": variant.id, "quantity": "1"}],
+            payments=[{"method": "CASH", "amount": Decimal("20.00")}],
+        )
+        pending = legacy_quote()
+        converted = legacy_quote(sale=converted_sale)
+
+        migration.round_pending_quote_amounts(django_apps, None)
+
+        pending.refresh_from_db()
+        self.assertEqual(pending.discount_total, Decimal("1.58"))
+        self.assertEqual(pending.total, Decimal("8.92"))
+        detail = pending.details.get()
+        self.assertEqual(detail.discount_amount, Decimal("1.58"))
+        self.assertEqual(detail.subtotal, Decimal("8.92"))
+        converted.refresh_from_db()
+        self.assertEqual(converted.total, Decimal("8.9250"))
 
     def test_convert_quote_not_accepted_raises(self):
         variant = self._create_variant()
