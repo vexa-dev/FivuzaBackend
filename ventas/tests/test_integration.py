@@ -35,6 +35,7 @@ from ventas.services import (
     QuoteService,
     ReservationNotActiveError,
     ReservationService,
+    ReturnService,
     SaleService,
 )
 
@@ -470,6 +471,58 @@ class SaleServiceTests(TenantTestCase):
         self.assertEqual(sale.discount_total, Decimal("1.58"))
         self.assertEqual(sale.total, Decimal("21.88"))
         self.assertEqual(sum(d.subtotal for d in sale.details.all()), sale.total)
+
+    def _sell(self, *, price, quantity, amount):
+        variant = self._create_variant(price=price, stock_quantity="100")
+        return SaleService.create_sale(
+            customer=self.customer,
+            cash_session=self._open_session(),
+            user=self.user,
+            lines=[{"variant_id": variant.id, "quantity": quantity}],
+            payments=[{"method": "CASH", "amount": Decimal(amount)}],
+        )
+
+    def _return(self, sale, quantity):
+        return ReturnService.create_return(
+            sale=sale,
+            items=[
+                {"sale_detail_id": sale.details.get().id, "quantity_returned": quantity}
+            ],
+            reason="Cliente devolvio",
+            refund_type="BALANCE",
+            user=self.user,
+        )
+
+    def test_partial_return_refunds_in_cents_and_last_takes_the_rest(self):
+        # 1.234 kg x 10.50 = 12.96. Devolver 0.5 kg: 12.96 x 0.5 / 1.234 =
+        # 5.2512... -> 5.25; el resto (0.734 kg) se lleva 12.96 - 5.25.
+        sale = self._sell(price="10.50", quantity="1.234", amount="12.96")
+
+        first = self._return(sale, "0.5")
+        last = self._return(sale, "0.734")
+
+        self.assertEqual(first.total_refund_amount, Decimal("5.25"))
+        self.assertEqual(last.total_refund_amount, Decimal("7.71"))
+
+    def test_partial_returns_add_up_to_what_was_charged(self):
+        # 3 x 3.3333 = 9.9999 -> 10.00. Tres devoluciones de 1: 3.33, 3.33
+        # y la ultima 3.34 (no 3.33: sumarian 9.99).
+        sale = self._sell(price="3.3333", quantity="3", amount="10.00")
+
+        refunds = [self._return(sale, "1").total_refund_amount for _ in range(3)]
+
+        self.assertEqual(refunds, [Decimal("3.33"), Decimal("3.33"), Decimal("3.34")])
+        self.assertEqual(sum(refunds), sale.total)
+
+    def test_partial_returns_never_refund_more_than_the_line(self):
+        # 20 x 0.005 = 0.10: cada unidad vale medio centimo, que redondea a
+        # 0.01. Sin tope, 20 devoluciones de 1 reembolsarian 0.20.
+        sale = self._sell(price="0.0050", quantity="20", amount="0.10")
+
+        refunds = [self._return(sale, "1").total_refund_amount for _ in range(20)]
+
+        self.assertEqual(sum(refunds), Decimal("0.10"))
+        self.assertTrue(all(refund >= 0 for refund in refunds))
 
     def test_insufficient_stock_rolls_back_everything(self):
         variant = self._create_variant(price="20.00", stock_quantity="2")
