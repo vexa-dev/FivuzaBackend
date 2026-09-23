@@ -2,19 +2,21 @@
 
 Borra y recrea el esquema `e2e` en cada corrida para que las pruebas partan
 siempre del mismo estado: un admin, dos cajeros con su caja asignada (Bloque
-A), la caja por defecto, un producto con stock y un cliente. Solo corre con
-DEBUG=True o E2E_SEED_ALLOWED=True: borra un esquema completo y nunca debe
-ejecutarse contra produccion.
+A), la caja por defecto, un producto con stock, otro con promocion vigente
+y un cliente. Solo corre con DEBUG=True o E2E_SEED_ALLOWED=True: borra un
+esquema completo y nunca debe ejecutarse contra produccion.
 
     python manage.py seed_e2e
 """
 
 import os
+from datetime import timedelta
 from decimal import Decimal
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import connection
+from django.utils import timezone
 from django_tenants.utils import schema_context
 
 from core.models import Domain, Tenant, TenantSettings
@@ -34,6 +36,12 @@ E2E_CASHIER_TWO_REGISTER = "Caja Cajero 2"
 E2E_PRODUCT_NAME = "Camiseta E2E"
 E2E_PRODUCT_SKU = "E2E-001"
 E2E_PRODUCT_PRICE = "20.00"
+# Producto con promocion vigente: el POS tiene que cobrar el total ya
+# descontado, igual que SaleService._resolve_promotion_discount.
+E2E_PROMO_PRODUCT_NAME = "Gorra Promo E2E"
+E2E_PROMO_PRODUCT_SKU = "E2E-PROMO"
+E2E_PROMO_PRODUCT_PRICE = "25.00"
+E2E_PROMO_PERCENT = "20"
 E2E_CUSTOMER_NAME = "Cliente E2E"
 E2E_CUSTOMER_DOCUMENT = "70000001"
 
@@ -88,7 +96,7 @@ class Command(BaseCommand):
         from inventario.models import Category, Warehouse
         from inventario.services import ProductVariantService, StockService
         from usuarios.models import Role, User, UserWarehouse
-        from ventas.models import CashRegister, Customer
+        from ventas.models import CashRegister, Customer, Promotion, PromotionProduct
 
         admin = User.objects.create(
             email=E2E_ADMIN_EMAIL, role=Role.objects.get(name="admin")
@@ -127,6 +135,38 @@ class Command(BaseCommand):
             concept="ADJUSTMENT",
             user=admin,
         )
+
+        # Categoria propia: una promocion por categoria sobre "Ropa" le
+        # cambiaria el precio a la camiseta de los demas E2E.
+        promo_product = ProductVariantService.create_product(
+            product_data={
+                "type": "PRODUCT",
+                "name": E2E_PROMO_PRODUCT_NAME,
+                "category": Category.objects.create(name="Accesorios"),
+                "unit_of_measure": "UND",
+            },
+            variants_data=[
+                {"sku": E2E_PROMO_PRODUCT_SKU, "price": E2E_PROMO_PRODUCT_PRICE}
+            ],
+        )
+        promo_variant = promo_product.variants.first()
+        StockService.adjust_stock(
+            variant=promo_variant,
+            warehouse=warehouse,
+            counted_quantity=Decimal("100"),
+            concept="ADJUSTMENT",
+            user=admin,
+        )
+        now = timezone.now()
+        promotion = Promotion.objects.create(
+            name="Promo E2E",
+            type="PERCENTAGE",
+            value=Decimal(E2E_PROMO_PERCENT),
+            start_date=now - timedelta(days=1),
+            end_date=now + timedelta(days=30),
+        )
+        PromotionProduct.objects.create(promotion=promotion, variant=promo_variant)
+
         Customer.objects.create(
             document_type="DNI",
             document_number=E2E_CUSTOMER_DOCUMENT,
