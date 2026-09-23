@@ -1,4 +1,5 @@
 from django.contrib.postgres.search import SearchQuery, SearchRank
+from django.db import transaction
 from django.db.models import F, Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
@@ -8,11 +9,14 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from core.date_filters import day_range, optional_date, required_date_range
 from core.permissions import RequiresFeature, TenantNotCanceled, TenantNotSuspended
 from core.openapi import SchemaAPIView
+from core.viewsets import SoftDeleteDestroyMixin
 from inventario.models import Warehouse
+from usuarios.audit import TenantAuditMixin
 from usuarios.permissions import HasModulePermission
-from usuarios.services import PermissionService
+from usuarios.services import AuditLogService, PermissionService
 from core.warehouse_access import WarehouseAccessService
 from ventas.models import (
     CashMovement,
@@ -145,7 +149,7 @@ _SALES_RETURN_PERMISSIONS = [
 ]
 
 
-class CashRegisterViewSet(viewsets.ModelViewSet):
+class CashRegisterViewSet(TenantAuditMixin, viewsets.ModelViewSet):
     queryset = CashRegister.objects.all().order_by("name")
     serializer_class = CashRegisterSerializer
 
@@ -200,16 +204,18 @@ class CashSessionViewSet(
         user_id = params.get("user")
         if user_id:
             queryset = queryset.filter(user_id=user_id)
-        opening_from = params.get("opening_from")
-        if opening_from:
-            queryset = queryset.filter(opening_at__date__gte=opening_from)
-        opening_to = params.get("opening_to")
-        if opening_to:
-            queryset = queryset.filter(opening_at__date__lte=opening_to)
+        queryset = queryset.filter(
+            **day_range(
+                "opening_at",
+                optional_date(params, "opening_from"),
+                optional_date(params, "opening_to"),
+            )
+        )
         return queryset
 
 
 class CashMovementViewSet(
+    TenantAuditMixin,
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
     mixins.CreateModelMixin,
@@ -315,7 +321,7 @@ class CashSessionCloseView(SchemaAPIView):
         )
 
 
-class CustomerViewSet(viewsets.ModelViewSet):
+class CustomerViewSet(TenantAuditMixin, SoftDeleteDestroyMixin, viewsets.ModelViewSet):
     """Sin ActiveManager (Customer no hereda SoftDeleteModel -es preexistente
     a la BDD v5, no un modelo nuevo de este sprint): el filtrado de bajas se
     hace a mano en get_queryset(), mismo resultado que Warehouse/Category."""
@@ -347,12 +353,6 @@ class CustomerViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(updated_at__gte=updated_since)
         return queryset
 
-    def perform_destroy(self, instance):
-        instance.deleted_at = timezone.now()
-        instance.deleted_by = self.request.user
-        instance.is_active = False
-        instance.save(update_fields=["deleted_at", "deleted_by", "is_active"])
-
 
 class CustomerDebtLedgerViewSet(
     mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet
@@ -383,7 +383,17 @@ class CustomerDebtLedgerViewSet(
     def register_payment(self, request):
         serializer = RegisterDebtPaymentSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        entry = serializer.save()
+        # CreditLedgerService.register_payment() no recibe al usuario: el
+        # abono lo registra la vista, en la misma transaccion.
+        with transaction.atomic():
+            entry = serializer.save()
+            AuditLogService.log_action(
+                user=request.user,
+                action="DEBT_PAYMENT_REGISTERED",
+                entity="Customer",
+                entity_id=entry.customer_id,
+                details={"ledger_entry_id": entry.id, "amount": str(entry.amount)},
+            )
         return Response(
             {
                 "id": entry.id,
@@ -417,7 +427,7 @@ class CustomerBalanceLedgerViewSet(
         return queryset
 
 
-class PromotionViewSet(viewsets.ModelViewSet):
+class PromotionViewSet(TenantAuditMixin, viewsets.ModelViewSet):
     queryset = Promotion.objects.all().order_by("-start_date")
     serializer_class = PromotionSerializer
 
@@ -437,7 +447,7 @@ class PromotionViewSet(viewsets.ModelViewSet):
         return queryset
 
 
-class PromotionProductViewSet(viewsets.ModelViewSet):
+class PromotionProductViewSet(TenantAuditMixin, viewsets.ModelViewSet):
     queryset = PromotionProduct.objects.all()
     serializer_class = PromotionProductSerializer
     permission_classes = _SALES_WRITE_PERMISSIONS
@@ -516,12 +526,13 @@ class SaleViewSet(
         cash_register_id = params.get("cash_register")
         if cash_register_id:
             queryset = queryset.filter(cash_session__cash_register_id=cash_register_id)
-        date_from = params.get("date_from")
-        if date_from:
-            queryset = queryset.filter(occurred_at__date__gte=date_from)
-        date_to = params.get("date_to")
-        if date_to:
-            queryset = queryset.filter(occurred_at__date__lte=date_to)
+        queryset = queryset.filter(
+            **day_range(
+                "occurred_at",
+                optional_date(params, "date_from"),
+                optional_date(params, "date_to"),
+            )
+        )
         return queryset
 
     def create(self, request, *args, **kwargs):
@@ -708,23 +719,35 @@ class QuoteViewSet(
         html = QuoteService.render_html(quote, request.tenant)
         return HttpResponse(html, content_type="text/html")
 
+    def _change_status(self, request, quote, transition):
+        """QuoteService.mark_* no recibe al usuario, asi que el cambio de
+        estado lo registra la vista, en la misma transaccion."""
+        previous_status = quote.status
+        with transaction.atomic():
+            quote = transition(quote=quote)
+            AuditLogService.log_action(
+                user=request.user,
+                action="QUOTE_STATUS_CHANGED",
+                entity="Quote",
+                entity_id=quote.id,
+                details={"status": {"before": previous_status, "after": quote.status}},
+            )
+        return Response(QuoteSerializer(quote).data)
+
     @action(detail=True, methods=["post"], url_path="mark-sent")
     def mark_sent(self, request, pk=None):
         quote = get_object_or_404(self.get_queryset(), pk=pk)
-        quote = QuoteService.mark_sent(quote=quote)
-        return Response(QuoteSerializer(quote).data)
+        return self._change_status(request, quote, QuoteService.mark_sent)
 
     @action(detail=True, methods=["post"], url_path="mark-accepted")
     def mark_accepted(self, request, pk=None):
         quote = get_object_or_404(self.get_queryset(), pk=pk)
-        quote = QuoteService.mark_accepted(quote=quote)
-        return Response(QuoteSerializer(quote).data)
+        return self._change_status(request, quote, QuoteService.mark_accepted)
 
     @action(detail=True, methods=["post"], url_path="mark-rejected")
     def mark_rejected(self, request, pk=None):
         quote = get_object_or_404(self.get_queryset(), pk=pk)
-        quote = QuoteService.mark_rejected(quote=quote)
-        return Response(QuoteSerializer(quote).data)
+        return self._change_status(request, quote, QuoteService.mark_rejected)
 
     @action(detail=True, methods=["post"], url_path="convert")
     def convert(self, request, pk=None):
@@ -782,19 +805,14 @@ class SalesReportView(SchemaAPIView):
     permission_classes = _SALES_READ_PERMISSIONS
 
     def get(self, request):
-        from rest_framework.exceptions import ValidationError
 
         from usuarios.services import ReportExportService
 
-        date_from = request.query_params.get("date_from")
-        date_to = request.query_params.get("date_to")
-        if not date_from or not date_to:
-            raise ValidationError("date_from y date_to son requeridos.")
+        date_from, date_to = required_date_range(request.query_params)
 
         queryset = Sale.objects.select_related("customer", "user").filter(
             status="COMPLETED",
-            occurred_at__date__gte=date_from,
-            occurred_at__date__lte=date_to,
+            **day_range("occurred_at", date_from, date_to),
         )
         queryset = WarehouseAccessService.scope_queryset(queryset, request.user)
         warehouse_id = request.query_params.get("warehouse")
@@ -852,18 +870,14 @@ class CashSessionReportView(SchemaAPIView):
     permission_classes = _CASH_CLOSE_PERMISSIONS
 
     def get(self, request):
-        from rest_framework.exceptions import ValidationError
 
-        from usuarios.services import AuditLogService, ReportExportService
+        from usuarios.services import ReportExportService
 
-        date_from = request.query_params.get("date_from")
-        date_to = request.query_params.get("date_to")
-        if not date_from or not date_to:
-            raise ValidationError("date_from y date_to son requeridos.")
+        date_from, date_to = required_date_range(request.query_params)
 
         queryset = (
             CashSession.objects.select_related("cash_register", "user")
-            .filter(opening_at__date__gte=date_from, opening_at__date__lte=date_to)
+            .filter(**day_range("opening_at", date_from, date_to))
             .order_by("opening_at")
         )
         queryset = WarehouseAccessService.scope_queryset(
@@ -941,18 +955,14 @@ class CashMovementReportView(SchemaAPIView):
     permission_classes = _CASH_READ_PERMISSIONS
 
     def get(self, request):
-        from rest_framework.exceptions import ValidationError
 
         from usuarios.services import ReportExportService
 
-        date_from = request.query_params.get("date_from")
-        date_to = request.query_params.get("date_to")
-        if not date_from or not date_to:
-            raise ValidationError("date_from y date_to son requeridos.")
+        date_from, date_to = required_date_range(request.query_params)
 
         queryset = (
             CashMovement.objects.select_related("cash_session__cash_register", "user")
-            .filter(created_at__date__gte=date_from, created_at__date__lte=date_to)
+            .filter(**day_range("created_at", date_from, date_to))
             .order_by("created_at")
         )
         queryset = WarehouseAccessService.scope_queryset(

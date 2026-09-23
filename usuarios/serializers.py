@@ -1,3 +1,4 @@
+import json
 from decimal import Decimal
 
 from django.db import transaction
@@ -73,13 +74,21 @@ class TenantUserTokenObtainSerializer(serializers.Serializer):
         except User.DoesNotExist:
             self.fail("invalid_credentials")
 
+        from usuarios.services import AuditLogService
+
+        request = self.context["request"]
         if not user.check_password(attrs["password"]):
+            # Solo se registra si el correo existe: la bitacora cuelga de un
+            # User, y un correo inventado no tiene a quien atribuirse. El
+            # throttle de login ya frena el volumen.
+            AuditLogService.log_login(user=user, request=request, success=False)
             self.fail("invalid_credentials")
 
         user.last_login = timezone.now()
         user.save(update_fields=["last_login"])
+        AuditLogService.log_login(user=user, request=request, success=True)
 
-        schema_name = self.context["request"].tenant.schema_name
+        schema_name = request.tenant.schema_name
         refresh = issue_tokens_for_tenant_user(user, schema_name)
 
         from usuarios.services import PermissionService
@@ -271,13 +280,21 @@ class UserPermissionSerializer(serializers.ModelSerializer):
 
 class AuditLogSerializer(serializers.ModelSerializer):
     """Solo lectura -se escribe unicamente via AuditLogService.log_action(),
-    nunca por POST/PUT directo del cliente."""
+    nunca por POST/PUT directo del cliente.
+
+    Bloque B.3: `details` sale ya filtrado por strip_cost_from_details()
+    cuando quien consulta no tiene INVENTORY_VIEW_COST (lo decide la vista
+    y lo pasa en context["hide_cost"])."""
+
+    user_email = serializers.EmailField(source="user.email", read_only=True)
+    details = serializers.SerializerMethodField()
 
     class Meta:
         model = AuditLog
         fields = [
             "id",
             "user",
+            "user_email",
             "action",
             "entity",
             "entity_id",
@@ -285,6 +302,37 @@ class AuditLogSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = fields
+
+    def get_details(self, obj) -> str:
+        if self.context.get("hide_cost"):
+            return strip_cost_from_details(obj.details)
+        return obj.details
+
+
+# Bloque A.5 aplicado a la bitacora: el costo de un producto, de una compra
+# o de un ajuste de costo promedio no puede llegar por la pantalla de
+# Actividad a quien no lo ve en inventario.
+_COST_DETAIL_KEYS = frozenset({"cost", "old_cost", "new_cost", "unit_cost"})
+
+
+def _strip_cost(value):
+    if isinstance(value, dict):
+        return {
+            key: _strip_cost(inner)
+            for key, inner in value.items()
+            if key not in _COST_DETAIL_KEYS
+        }
+    if isinstance(value, list):
+        return [_strip_cost(item) for item in value]
+    return value
+
+
+def strip_cost_from_details(details: str) -> str:
+    try:
+        parsed = json.loads(details)
+    except (TypeError, ValueError):
+        return details
+    return json.dumps(_strip_cost(parsed))
 
 
 class EmployeeSerializer(serializers.ModelSerializer):

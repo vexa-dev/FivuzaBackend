@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from django.db import transaction
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from rest_framework import mixins, status, viewsets
@@ -8,6 +9,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from core.date_filters import day_range, required_date_range
 from core.permissions import RequiresFeature, TenantNotCanceled, TenantNotSuspended
 from core.openapi import SchemaAPIView
 from gimnasio.models import (
@@ -32,8 +34,9 @@ from gimnasio.serializers import (
     MembershipSerializer,
 )
 from gimnasio.services import AccessCheckService, ClassBookingService, MembershipService
+from usuarios.audit import TenantAuditMixin
 from usuarios.permissions import HasModulePermission
-from usuarios.services import ReportExportService
+from usuarios.services import AuditLogService, ReportExportService
 
 # Mismo esquema que RRHH (Sprint 22): un solo nivel de permiso para todo el
 # modulo, sin split lectura/escritura -el gimnasio es chico, no hay un rol
@@ -47,7 +50,24 @@ _GYM_PERMISSIONS = [
 ]
 
 
-class MembershipPlanViewSet(viewsets.ModelViewSet):
+def _audit_booking(request, action: str, booking: ClassBooking) -> None:
+    """ClassBookingService no recibe al usuario (lo llaman tambien las
+    pruebas sin request), asi que la bitacora la escribe la vista."""
+    AuditLogService.log_action(
+        user=request.user,
+        action=action,
+        entity="ClassBooking",
+        entity_id=booking.id,
+        details={
+            "customer_id": booking.customer_id,
+            "gym_class_id": booking.gym_class_id,
+            "class_date": str(booking.class_date),
+            "status": booking.status,
+        },
+    )
+
+
+class MembershipPlanViewSet(TenantAuditMixin, viewsets.ModelViewSet):
     queryset = MembershipPlan.objects.all().order_by("name")
     serializer_class = MembershipPlanSerializer
     permission_classes = _GYM_PERMISSIONS
@@ -152,7 +172,7 @@ class MembershipViewSet(
         return HttpResponse(content, content_type="image/png")
 
 
-class GymClassViewSet(viewsets.ModelViewSet):
+class GymClassViewSet(TenantAuditMixin, viewsets.ModelViewSet):
     queryset = GymClass.objects.select_related("instructor").order_by("name")
     serializer_class = GymClassSerializer
     permission_classes = _GYM_PERMISSIONS
@@ -164,7 +184,7 @@ class GymClassViewSet(viewsets.ModelViewSet):
         return queryset
 
 
-class ClassScheduleViewSet(viewsets.ModelViewSet):
+class ClassScheduleViewSet(TenantAuditMixin, viewsets.ModelViewSet):
     queryset = ClassSchedule.objects.select_related("gym_class").order_by(
         "day_of_week", "start_time"
     )
@@ -211,7 +231,9 @@ class ClassBookingViewSet(
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        booking = serializer.save()
+        with transaction.atomic():
+            booking = serializer.save()
+            _audit_booking(request, "CLASS_BOOKED", booking)
         return Response(
             ClassBookingSerializer(booking).data, status=status.HTTP_201_CREATED
         )
@@ -220,15 +242,19 @@ class ClassBookingViewSet(
     def attend(self, request, pk=None):
         booking = get_object_or_404(self.get_queryset(), pk=pk)
         attended = bool(request.data.get("attended", True))
-        booking = ClassBookingService.mark_attendance(
-            booking=booking, attended=attended
-        )
+        with transaction.atomic():
+            booking = ClassBookingService.mark_attendance(
+                booking=booking, attended=attended
+            )
+            _audit_booking(request, "CLASS_ATTENDANCE_MARKED", booking)
         return Response(ClassBookingSerializer(booking).data)
 
     @action(detail=True, methods=["post"], url_path="cancel")
     def cancel(self, request, pk=None):
         booking = get_object_or_404(self.get_queryset(), pk=pk)
-        booking = ClassBookingService.cancel_booking(booking=booking)
+        with transaction.atomic():
+            booking = ClassBookingService.cancel_booking(booking=booking)
+            _audit_booking(request, "CLASS_BOOKING_CANCELLED", booking)
         return Response(ClassBookingSerializer(booking).data)
 
 
@@ -254,7 +280,20 @@ class MembershipGroupViewSet(
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        group = serializer.save()
+        with transaction.atomic():
+            group = serializer.save()
+            AuditLogService.log_action(
+                user=request.user,
+                action="MEMBERSHIP_GROUP_CREATED",
+                entity="MembershipGroup",
+                entity_id=group.id,
+                details={
+                    "holder_customer_id": group.holder_customer_id,
+                    "membership_ids": list(
+                        group.memberships.values_list("id", flat=True)
+                    ),
+                },
+            )
         group = self.get_queryset().get(pk=group.pk)
         return Response(
             MembershipGroupSerializer(group).data, status=status.HTTP_201_CREATED
@@ -301,10 +340,7 @@ class ClassAttendanceReportView(SchemaAPIView):
     permission_classes = _GYM_PERMISSIONS
 
     def get(self, request):
-        date_from = request.query_params.get("date_from")
-        date_to = request.query_params.get("date_to")
-        if not date_from or not date_to:
-            raise ValidationError("date_from y date_to son requeridos.")
+        date_from, date_to = required_date_range(request.query_params)
 
         queryset = ClassBooking.objects.select_related("gym_class").filter(
             class_date__gte=date_from, class_date__lte=date_to
@@ -413,13 +449,10 @@ class RevenueByPlanReportView(SchemaAPIView):
     permission_classes = _GYM_PERMISSIONS
 
     def get(self, request):
-        date_from = request.query_params.get("date_from")
-        date_to = request.query_params.get("date_to")
-        if not date_from or not date_to:
-            raise ValidationError("date_from y date_to son requeridos.")
+        date_from, date_to = required_date_range(request.query_params)
 
         queryset = MembershipPayment.objects.select_related("membership__plan").filter(
-            created_at__date__gte=date_from, created_at__date__lte=date_to
+            **day_range("created_at", date_from, date_to)
         )
 
         summary: dict[int, dict] = {}

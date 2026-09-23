@@ -1,6 +1,7 @@
 import uuid
 from decimal import Decimal
 
+from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
 from rest_framework.exceptions import APIException
@@ -142,6 +143,7 @@ class CashSessionService:
         raise CashSessionNotOwnedError()
 
     @staticmethod
+    @transaction.atomic
     def open_session(
         *, cash_register: CashRegister, user, opening_amount
     ) -> CashSession:
@@ -154,13 +156,27 @@ class CashSessionService:
         ).exists():
             raise CashSessionAlreadyOpenError()
 
-        return CashSession.objects.create(
+        session = CashSession.objects.create(
             cash_register=cash_register,
             user=user,
             opening_amount=opening_amount,
             opening_at=timezone.now(),
             status="OPEN",
         )
+
+        from usuarios.services import AuditLogService
+
+        AuditLogService.log_action(
+            user=user,
+            action="CASH_SESSION_OPENED",
+            entity="CashSession",
+            entity_id=session.id,
+            details={
+                "cash_register_id": cash_register.id,
+                "opening_amount": str(opening_amount),
+            },
+        )
+        return session
 
     @staticmethod
     def submit_count(
