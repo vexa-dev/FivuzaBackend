@@ -5,6 +5,7 @@ from rest_framework import serializers
 
 from inventario.models import ProductVariant, Warehouse
 from core.warehouse_access import WarehouseAccessService
+from usuarios.authorization import authorization_token_from
 from ventas.models import (
     CashMovement,
     CashRegister,
@@ -458,13 +459,15 @@ class SaleCreateSerializer(serializers.Serializer):
         return value
 
     def create(self, validated_data):
+        request = self.context["request"]
         return SaleService.create_sale(
             customer=validated_data["customer"],
             cash_session=validated_data["cash_session"],
-            user=self.context["request"].user,
+            user=request.user,
             lines=validated_data["lines"],
             payments=validated_data["payments"],
             client_side_uuid=validated_data.get("client_side_uuid") or None,
+            authorization_token=authorization_token_from(request),
         )
 
 
@@ -533,10 +536,12 @@ class SaleVoidSerializer(serializers.Serializer):
     reason = serializers.CharField()
 
     def create(self, validated_data):
+        request = self.context["request"]
         return SaleService.void_sale(
             self.context["sale"],
             reason=validated_data["reason"],
-            user=self.context["request"].user,
+            user=request.user,
+            authorization_token=authorization_token_from(request),
         )
 
 
@@ -615,6 +620,7 @@ class SaleReturnCreateSerializer(serializers.Serializer):
             refund_type=validated_data["refund_type"],
             user=self.context["request"].user,
             cash_session=validated_data.get("cash_session"),
+            authorization_token=authorization_token_from(self.context["request"]),
         )
 
 
@@ -848,11 +854,13 @@ class QuoteCreateSerializer(serializers.Serializer):
         return value
 
     def create(self, validated_data):
+        request = self.context["request"]
         return QuoteService.create_quote(
             customer=validated_data["customer"],
-            user=self.context["request"].user,
+            user=request.user,
             lines=validated_data["lines"],
             valid_until=validated_data["valid_until"],
+            authorization_token=authorization_token_from(request),
         )
 
 

@@ -40,7 +40,18 @@ class ReturnService:
         refund_type: str,
         user,
         cash_session: CashSession | None = None,
+        authorization_token: str | None = None,
     ) -> SaleReturn:
+        # Bloque C.1: sin SALES_RETURN propio, la devolucion sale con la
+        # autorizacion de un supervisor para esta venta.
+        from usuarios.authorization import SupervisorAuthorizationService
+
+        authorization = SupervisorAuthorizationService.require(
+            user=user,
+            permission="SALES_RETURN",
+            raw_token=authorization_token,
+            target_id=sale.id,
+        )
         if sale.status != "COMPLETED":
             raise SaleNotCompletedError()
         if refund_type == "CASH" and (
@@ -155,6 +166,7 @@ class ReturnService:
                 "invoice_number": sale.invoice_number,
                 "total_refund_amount": str(total_refund_amount),
                 "refund_type": refund_type,
+                **SupervisorAuthorizationService.audit_details(authorization),
             },
         )
 

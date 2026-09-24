@@ -15,7 +15,10 @@ from core.openapi import SchemaAPIView
 from core.viewsets import SoftDeleteDestroyMixin
 from inventario.models import Warehouse
 from usuarios.audit import TenantAuditMixin
-from usuarios.permissions import HasModulePermission
+from usuarios.permissions import (
+    HasModulePermission,
+    HasPermissionOrSupervisorAuthorization,
+)
 from usuarios.services import AuditLogService, PermissionService
 from core.warehouse_access import WarehouseAccessService
 from ventas.models import (
@@ -132,20 +135,21 @@ _SALES_WRITE_PERMISSIONS = [
 ]
 # Separados de SALES_MANAGE a proposito (Sprint 18): un cajero puede vender
 # sin poder anular lo ya cobrado, pero si puede procesar una devolucion en
-# el mostrador (ver core/services.py _ROLE_PERMISSIONS).
+# el mostrador (ver core/services.py _ROLE_PERMISSIONS). Bloque C.1: sin el
+# permiso propio, el cajero lo hace con la autorizacion de un supervisor.
 _SALES_VOID_PERMISSIONS = [
     IsAuthenticated,
     TenantNotSuspended,
     TenantNotCanceled,
     RequiresFeature("HAS_SALES_MODULE"),
-    HasModulePermission("SALES_VOID"),
+    HasPermissionOrSupervisorAuthorization("SALES_VOID"),
 ]
 _SALES_RETURN_PERMISSIONS = [
     IsAuthenticated,
     TenantNotSuspended,
     TenantNotCanceled,
     RequiresFeature("HAS_SALES_MODULE"),
-    HasModulePermission("SALES_RETURN"),
+    HasPermissionOrSupervisorAuthorization("SALES_RETURN"),
 ]
 
 

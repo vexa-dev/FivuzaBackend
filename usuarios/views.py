@@ -4,6 +4,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.shortcuts import get_object_or_404
+from drf_spectacular.utils import extend_schema
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -23,7 +24,11 @@ from core.models import TenantSettings
 from core.openapi import SchemaAPIView
 from core.viewsets import SoftDeleteDestroyMixin
 from core.permissions import RequiresFeature, TenantNotCanceled, TenantNotSuspended
-from core.throttling import LoginIdentifierRateThrottle, LoginRateThrottle
+from core.throttling import (
+    LoginIdentifierRateThrottle,
+    LoginRateThrottle,
+    SupervisorAuthorizationRateThrottle,
+)
 from usuarios.models import (
     AuditLog,
     DataExport,
@@ -31,6 +36,7 @@ from usuarios.models import (
     EmployeeAttendance,
     EmployeePayroll,
     EmployeeSchedule,
+    LoginAttempt,
     Permission,
     Role,
     RolePermission,
@@ -40,6 +46,7 @@ from usuarios.models import (
     UserWarehouse,
 )
 from usuarios.audit import TenantAuditMixin
+from usuarios.authorization import SupervisorAuthorizationService
 from usuarios.permissions import HasModulePermission
 from usuarios.serializers import (
     AuditLogSerializer,
@@ -50,6 +57,7 @@ from usuarios.serializers import (
     EmployeePayrollSerializer,
     EmployeeScheduleSerializer,
     EmployeeSerializer,
+    LoginAttemptSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
     PayrollGenerateSerializer,
@@ -58,12 +66,15 @@ from usuarios.serializers import (
     RolePermissionSerializer,
     RolePermissionsHistorySerializer,
     RoleSerializer,
+    SupervisorAuthorizationRequestSerializer,
+    SupervisorAuthorizationResponseSerializer,
     TenantOperationalSettingsSerializer,
     TenantUserTokenObtainSerializer,
     UserPermissionSerializer,
     UserSerializer,
     UserWarehouseSerializer,
     issue_tokens_for_tenant_user,
+    session_user_payload,
 )
 from usuarios.services import (
     AttendanceService,
@@ -135,17 +146,7 @@ class TenantUserRefreshView(SchemaAPIView):
         response = Response(
             {
                 "access": str(refresh.access_token),
-                "user": {
-                    "id": user.id,
-                    "email": user.email,
-                    "role": user.role.name,
-                    "warehouse_ids": list(
-                        WarehouseAccessService.allowed_warehouse_ids(user)
-                    ),
-                    "permissions": sorted(
-                        PermissionService.get_effective_permission_codes(user)
-                    ),
-                },
+                "user": session_user_payload(user),
             }
         )
         set_refresh_cookie(response, str(refresh))
@@ -182,6 +183,54 @@ class TenantUserLogoutView(SchemaAPIView):
             return
         AuditLogService.log_action(
             user=user, action="LOGOUT", entity="User", entity_id=user.id
+        )
+
+
+class SupervisorAuthorizationView(SchemaAPIView):
+    """POST correo/contraseña de un supervisor + la operacion -> token de un
+    solo uso (Bloque C.1). Lo llama el equipo del cajero, con la sesion del
+    cajero: la del supervisor nunca se abre."""
+
+    serializer_class = SupervisorAuthorizationRequestSerializer
+    permission_classes = [
+        IsAuthenticated,
+        TenantNotSuspended,
+        TenantNotCanceled,
+        RequiresFeature("HAS_SALES_MODULE"),
+    ]
+    throttle_classes = [
+        SupervisorAuthorizationRateThrottle,
+        LoginIdentifierRateThrottle,
+    ]
+
+    @extend_schema(
+        request=SupervisorAuthorizationRequestSerializer,
+        responses={201: SupervisorAuthorizationResponseSerializer},
+    )
+    def post(self, request):
+        serializer = SupervisorAuthorizationRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        raw_token, authorization = SupervisorAuthorizationService.grant(
+            requested_by=request.user,
+            email=data["email"],
+            password=data["password"],
+            permission=data["permission"],
+            request=request,
+            target_id=data.get("target_id"),
+            discount_percent=data.get("discount_percent"),
+        )
+        return Response(
+            SupervisorAuthorizationResponseSerializer(
+                {
+                    "token": raw_token,
+                    "permission": authorization.permission,
+                    "expires_at": authorization.expires_at,
+                    "authorized_by": authorization.authorized_by_id,
+                    "authorized_by_email": authorization.authorized_by.email,
+                }
+            ).data,
+            status=status.HTTP_201_CREATED,
         )
 
 
@@ -623,6 +672,38 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
             columns=_AUDIT_EXPORT_COLUMNS,
             format=export_format,
             filename="bitacora",
+        )
+
+
+class LoginAttemptViewSet(viewsets.ReadOnlyModelViewSet):
+    """Intentos de acceso con correos que no son de nadie del negocio
+    (Bloque C.4), junto a la bitacora y con su mismo permiso. Filtros
+    ?email=&source=&date_from=&date_to= (fechas en hora de Lima)."""
+
+    queryset = LoginAttempt.objects.order_by("-created_at", "-id")
+    serializer_class = LoginAttemptSerializer
+    permission_classes = [
+        IsAuthenticated,
+        TenantNotSuspended,
+        TenantNotCanceled,
+        HasModulePermission("USERS_VIEW_AUDIT"),
+    ]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        params = self.request.query_params
+        email = params.get("email")
+        if email:
+            queryset = queryset.filter(email__icontains=email)
+        source = params.get("source")
+        if source:
+            queryset = queryset.filter(source=source)
+        return queryset.filter(
+            **day_range(
+                "created_at",
+                optional_date(params, "date_from"),
+                optional_date(params, "date_to"),
+            )
         )
 
 

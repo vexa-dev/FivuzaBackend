@@ -203,6 +203,7 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "login_ip": "5/min" if THROTTLE_ENABLED else "1000000/min",
         "login_identifier": "5/min" if THROTTLE_ENABLED else "1000000/min",
+        "supervisor_authorization": "5/min" if THROTTLE_ENABLED else "1000000/min",
         "business_write": "100/min" if THROTTLE_ENABLED else "1000000/min",
     },
 }
@@ -423,6 +424,11 @@ CELERY_BEAT_SCHEDULE = {
     "usuarios-expire-data-exports": {
         "task": "usuarios.tasks.expire_data_exports",
         "schedule": crontab(hour=4, minute=0),
+    },
+    # Bloque C.4: intentos de acceso con correos desconocidos, 30 dias.
+    "usuarios-purge-login-attempts": {
+        "task": "usuarios.tasks.purge_login_attempts",
+        "schedule": crontab(hour=4, minute=30),
     },
     # Sprint 33 (Ley N 29733): diaria, no instantanea -el periodo de
     # gracia se mide en dias, no hace falta revisar mas seguido.

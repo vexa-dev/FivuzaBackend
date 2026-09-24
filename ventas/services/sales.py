@@ -1,5 +1,5 @@
 import uuid
-from decimal import Decimal
+from decimal import ROUND_UP, Decimal
 
 from django.db import transaction
 from django.db.models import Sum
@@ -155,7 +155,14 @@ class SaleService:
         client_side_uuid: str | None = None,
         allow_oversell: bool = False,
         at=None,
+        authorization_token: str | None = None,
+        discount_limit: str = "enforce",
     ) -> Sale:
+        """discount_limit (Bloque C.2) decide que pasa con un descuento
+        manual por encima del tope del rol: "enforce" exige autorizacion de
+        supervisor (POS en linea), "flag" registra la venta y la marca en la
+        bitacora (sync offline: la mercaderia ya salio) y "skip" no revisa
+        (cotizacion convertida: su descuento se reviso al cotizar)."""
         if cash_session.status != "OPEN":
             raise NoCashSessionError()
         # Bloque A.2: vender en la caja de otro le descuadra el arqueo a esa
@@ -168,6 +175,7 @@ class SaleService:
 
         subtotal = Decimal("0")
         discount_total = Decimal("0")
+        manual_discount_percent: Decimal | None = None
         prepared_lines = []
         oversold_variant_ids: list[int] = []
         for line in lines:
@@ -225,6 +233,13 @@ class SaleService:
                 )
             else:
                 discount_amount = min(Decimal(str(discount_amount)), line_subtotal)
+                line_percent = SaleService.discount_percent(
+                    discount_amount, line_subtotal
+                )
+                if manual_discount_percent is None or (
+                    line_percent > manual_discount_percent
+                ):
+                    manual_discount_percent = line_percent
 
             prepared_lines.append(
                 {
@@ -244,6 +259,33 @@ class SaleService:
         payments_total = sum((p["amount"] for p in payments), Decimal("0"))
         if payments_total != total:
             raise PaymentMismatchError()
+
+        from usuarios.authorization import (
+            SupervisorAuthorizationRequiredError,
+            SupervisorAuthorizationService,
+        )
+
+        discount_authorization = None
+        discount_over_limit = discount_limit != "skip" and (
+            SaleService.exceeds_discount_limit(
+                user=user, percent=manual_discount_percent
+            )
+        )
+        if discount_over_limit and discount_limit == "enforce":
+            if not authorization_token:
+                # El POS muestra ambos porcentajes en el modal y pide la
+                # autorizacion por el mismo que calculo el backend.
+                raise SupervisorAuthorizationRequiredError(
+                    "SALES_DISCOUNT",
+                    requested_discount_percent=str(manual_discount_percent),
+                    max_discount_percent=str(user.role.max_discount_percent),
+                )
+            discount_authorization = SupervisorAuthorizationService.consume(
+                raw_token=authorization_token,
+                user=user,
+                permission="SALES_DISCOUNT",
+                discount_percent=manual_discount_percent,
+            )
 
         sale = Sale.objects.create(
             invoice_number=SaleService._next_invoice_number(),
@@ -303,17 +345,39 @@ class SaleService:
 
         from usuarios.services import AuditLogService
 
+        sale_details = {
+            "invoice_number": sale.invoice_number,
+            "total": str(total),
+            "lines": len(prepared_lines),
+        }
+        if manual_discount_percent is not None:
+            sale_details["manual_discount_percent"] = str(manual_discount_percent)
         AuditLogService.log_action(
             user=user,
             action="SALE_CREATED",
             entity="Sale",
             entity_id=sale.id,
             details={
-                "invoice_number": sale.invoice_number,
-                "total": str(total),
-                "lines": len(prepared_lines),
+                **sale_details,
+                **SupervisorAuthorizationService.audit_details(discount_authorization),
             },
         )
+        if discount_over_limit and discount_limit == "flag":
+            # Venta offline con un descuento que el cajero no podia dar: el
+            # POS lo impide sin conexion, asi que esto es un tope cambiado
+            # mientras estaba offline o un cliente manipulado. Se registra
+            # aparte para que el dueño la encuentre filtrando la bitacora.
+            AuditLogService.log_action(
+                user=user,
+                action="SALE_DISCOUNT_OVER_LIMIT",
+                entity="Sale",
+                entity_id=sale.id,
+                details={
+                    "invoice_number": sale.invoice_number,
+                    "manual_discount_percent": str(manual_discount_percent),
+                    "max_discount_percent": str(user.role.max_discount_percent),
+                },
+            )
 
         # Atributo transitorio (no persiste en el modelo): SaleSyncService lo
         # lee para armar el array "conflicts" de la respuesta de /sales/sync/
@@ -339,8 +403,33 @@ class SaleService:
         return sale
 
     @staticmethod
+    def discount_percent(discount_amount: Decimal, line_subtotal: Decimal) -> Decimal:
+        """Porcentaje del descuento sobre la linea, redondeado hacia arriba a
+        centesimas: 10.001% ya es mas que un tope de 10%."""
+        if line_subtotal <= 0:
+            return Decimal("0")
+        return (discount_amount * Decimal("100") / line_subtotal).quantize(
+            Decimal("0.01"), rounding=ROUND_UP
+        )
+
+    @staticmethod
+    def exceeds_discount_limit(*, user, percent: Decimal | None) -> bool:
+        """Bloque C.2: el tope es por linea (decision del equipo: evita
+        regalar un producto dentro de una compra grande). Quien tiene
+        SALES_DISCOUNT no tiene tope."""
+        if percent is None or percent <= 0:
+            return False
+        from usuarios.services import PermissionService
+
+        if PermissionService.check_permission(user, "SALES_DISCOUNT"):
+            return False
+        return percent > user.role.max_discount_percent
+
+    @staticmethod
     @transaction.atomic
-    def void_sale(sale: Sale, *, reason: str, user) -> Sale:
+    def void_sale(
+        sale: Sale, *, reason: str, user, authorization_token: str | None = None
+    ) -> Sale:
         """Anulacion (Sprint 18, Plan de Implementacion): la venta nunca
         debio existir -a diferencia de una devolucion (ReturnService), que
         asume que la venta fue correcta y el cliente simplemente trajo la
@@ -351,7 +440,19 @@ class SaleService:
         Desde el Sprint 19 tambien revierte CREDIT_LEDGER (perdona la deuda)
         y BALANCE (devuelve el saldo a favor consumido) via
         CreditLedgerService -antes quedaba deferido porque esos libros ni
-        se escribian todavia al vender."""
+        se escribian todavia al vender.
+
+        Bloque C.1: quien no tiene SALES_VOID anula con la autorizacion de
+        un supervisor para ESTA venta. Se consume dentro de la transaccion:
+        si la anulacion falla, la autorizacion sigue disponible."""
+        from usuarios.authorization import SupervisorAuthorizationService
+
+        authorization = SupervisorAuthorizationService.require(
+            user=user,
+            permission="SALES_VOID",
+            raw_token=authorization_token,
+            target_id=sale.id,
+        )
         if sale.status != "COMPLETED":
             raise SaleNotCompletedError()
         if sale.returns.exists():
@@ -425,7 +526,11 @@ class SaleService:
             action="SALE_VOIDED",
             entity="Sale",
             entity_id=sale.id,
-            details={"invoice_number": sale.invoice_number, "reason": reason},
+            details={
+                "invoice_number": sale.invoice_number,
+                "reason": reason,
+                **SupervisorAuthorizationService.audit_details(authorization),
+            },
         )
 
         return sale

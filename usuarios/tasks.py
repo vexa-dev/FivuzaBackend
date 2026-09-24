@@ -122,3 +122,14 @@ def _expire_data_exports_in_current_schema() -> None:
             logger.exception("Fallo al borrar de S3 el respaldo #%s.", export.id)
         export.status = "EXPIRED"
         export.save(update_fields=["status"])
+
+
+@shared_task
+def purge_login_attempts() -> None:
+    """Bloque C.4: los intentos con correos desconocidos se guardan 30 dias.
+    Es la unica tabla que alguien de fuera puede hacer crecer."""
+    from usuarios.authorization import LoginAttemptService
+
+    run_per_tenant(
+        "purge_login_attempts", lambda tenant: LoginAttemptService.purge_expired()
+    )

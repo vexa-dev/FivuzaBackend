@@ -1227,10 +1227,11 @@ paths:
     get:
       operationId: v1_core_tenant_settings_list
       description: |-
-        Solo platform_staff por ahora. La Especificacion de API tambien permite
-        'admin del propio tenant para toggles operativos', pero eso depende de
-        PermissionService (usuarios), que llega recien en Sprint 2 -queda
-        pendiente para entonces, no se improvisa aqui.
+        Vista de plataforma: expone TODOS los campos, incluidos los que solo
+        Fivuza decide (modulos contratados, umbral de alerta). El admin del
+        propio tenant edita unicamente los interruptores operativos, por su
+        endpoint aparte -TenantOperationalSettingsView (usuarios/views.py),
+        Bloque A.0.
       parameters:
       - name: page
         required: false
@@ -1259,10 +1260,11 @@ paths:
     post:
       operationId: v1_core_tenant_settings_create
       description: |-
-        Solo platform_staff por ahora. La Especificacion de API tambien permite
-        'admin del propio tenant para toggles operativos', pero eso depende de
-        PermissionService (usuarios), que llega recien en Sprint 2 -queda
-        pendiente para entonces, no se improvisa aqui.
+        Vista de plataforma: expone TODOS los campos, incluidos los que solo
+        Fivuza decide (modulos contratados, umbral de alerta). El admin del
+        propio tenant edita unicamente los interruptores operativos, por su
+        endpoint aparte -TenantOperationalSettingsView (usuarios/views.py),
+        Bloque A.0.
       tags:
       - v1
       requestBody:
@@ -1291,10 +1293,11 @@ paths:
     get:
       operationId: v1_core_tenant_settings_retrieve
       description: |-
-        Solo platform_staff por ahora. La Especificacion de API tambien permite
-        'admin del propio tenant para toggles operativos', pero eso depende de
-        PermissionService (usuarios), que llega recien en Sprint 2 -queda
-        pendiente para entonces, no se improvisa aqui.
+        Vista de plataforma: expone TODOS los campos, incluidos los que solo
+        Fivuza decide (modulos contratados, umbral de alerta). El admin del
+        propio tenant edita unicamente los interruptores operativos, por su
+        endpoint aparte -TenantOperationalSettingsView (usuarios/views.py),
+        Bloque A.0.
       parameters:
       - in: path
         name: id
@@ -1317,10 +1320,11 @@ paths:
     put:
       operationId: v1_core_tenant_settings_update
       description: |-
-        Solo platform_staff por ahora. La Especificacion de API tambien permite
-        'admin del propio tenant para toggles operativos', pero eso depende de
-        PermissionService (usuarios), que llega recien en Sprint 2 -queda
-        pendiente para entonces, no se improvisa aqui.
+        Vista de plataforma: expone TODOS los campos, incluidos los que solo
+        Fivuza decide (modulos contratados, umbral de alerta). El admin del
+        propio tenant edita unicamente los interruptores operativos, por su
+        endpoint aparte -TenantOperationalSettingsView (usuarios/views.py),
+        Bloque A.0.
       parameters:
       - in: path
         name: id
@@ -1355,10 +1359,11 @@ paths:
     patch:
       operationId: v1_core_tenant_settings_partial_update
       description: |-
-        Solo platform_staff por ahora. La Especificacion de API tambien permite
-        'admin del propio tenant para toggles operativos', pero eso depende de
-        PermissionService (usuarios), que llega recien en Sprint 2 -queda
-        pendiente para entonces, no se improvisa aqui.
+        Vista de plataforma: expone TODOS los campos, incluidos los que solo
+        Fivuza decide (modulos contratados, umbral de alerta). El admin del
+        propio tenant edita unicamente los interruptores operativos, por su
+        endpoint aparte -TenantOperationalSettingsView (usuarios/views.py),
+        Bloque A.0.
       parameters:
       - in: path
         name: id
@@ -1392,10 +1397,11 @@ paths:
     delete:
       operationId: v1_core_tenant_settings_destroy
       description: |-
-        Solo platform_staff por ahora. La Especificacion de API tambien permite
-        'admin del propio tenant para toggles operativos', pero eso depende de
-        PermissionService (usuarios), que llega recien en Sprint 2 -queda
-        pendiente para entonces, no se improvisa aqui.
+        Vista de plataforma: expone TODOS los campos, incluidos los que solo
+        Fivuza decide (modulos contratados, umbral de alerta). El admin del
+        propio tenant edita unicamente los interruptores operativos, por su
+        endpoint aparte -TenantOperationalSettingsView (usuarios/views.py),
+        Bloque A.0.
       parameters:
       - in: path
         name: id
@@ -2252,6 +2258,21 @@ paths:
   /api/v1/gimnasio/class-schedules/:
     get:
       operationId: v1_gimnasio_class_schedules_list
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - name: page
         required: false
@@ -2279,6 +2300,21 @@ paths:
           description: ''
     post:
       operationId: v1_gimnasio_class_schedules_create
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       tags:
       - v1
       requestBody:
@@ -2306,6 +2342,21 @@ paths:
   /api/v1/gimnasio/class-schedules/{id}/:
     get:
       operationId: v1_gimnasio_class_schedules_retrieve
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -2327,6 +2378,21 @@ paths:
           description: ''
     put:
       operationId: v1_gimnasio_class_schedules_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -2360,6 +2426,21 @@ paths:
           description: ''
     patch:
       operationId: v1_gimnasio_class_schedules_partial_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -2392,6 +2473,21 @@ paths:
           description: ''
     delete:
       operationId: v1_gimnasio_class_schedules_destroy
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -2410,6 +2506,21 @@ paths:
   /api/v1/gimnasio/classes/:
     get:
       operationId: v1_gimnasio_classes_list
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - name: page
         required: false
@@ -2437,6 +2548,21 @@ paths:
           description: ''
     post:
       operationId: v1_gimnasio_classes_create
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       tags:
       - v1
       requestBody:
@@ -2464,6 +2590,21 @@ paths:
   /api/v1/gimnasio/classes/{id}/:
     get:
       operationId: v1_gimnasio_classes_retrieve
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -2485,6 +2626,21 @@ paths:
           description: ''
     put:
       operationId: v1_gimnasio_classes_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -2518,6 +2674,21 @@ paths:
           description: ''
     patch:
       operationId: v1_gimnasio_classes_partial_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -2550,6 +2721,21 @@ paths:
           description: ''
     delete:
       operationId: v1_gimnasio_classes_destroy
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -2644,6 +2830,21 @@ paths:
   /api/v1/gimnasio/membership-plans/:
     get:
       operationId: v1_gimnasio_membership_plans_list
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - name: page
         required: false
@@ -2671,6 +2872,21 @@ paths:
           description: ''
     post:
       operationId: v1_gimnasio_membership_plans_create
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       tags:
       - v1
       requestBody:
@@ -2698,6 +2914,21 @@ paths:
   /api/v1/gimnasio/membership-plans/{id}/:
     get:
       operationId: v1_gimnasio_membership_plans_retrieve
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -2719,6 +2950,21 @@ paths:
           description: ''
     put:
       operationId: v1_gimnasio_membership_plans_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -2752,6 +2998,21 @@ paths:
           description: ''
     patch:
       operationId: v1_gimnasio_membership_plans_partial_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -2784,6 +3045,21 @@ paths:
           description: ''
     delete:
       operationId: v1_gimnasio_membership_plans_destroy
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -3172,6 +3448,21 @@ paths:
   /api/v1/inventario/attribute-values/:
     get:
       operationId: v1_inventario_attribute_values_list
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - name: page
         required: false
@@ -3199,6 +3490,21 @@ paths:
           description: ''
     post:
       operationId: v1_inventario_attribute_values_create
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       tags:
       - v1
       requestBody:
@@ -3226,6 +3532,21 @@ paths:
   /api/v1/inventario/attribute-values/{id}/:
     get:
       operationId: v1_inventario_attribute_values_retrieve
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -3247,6 +3568,21 @@ paths:
           description: ''
     put:
       operationId: v1_inventario_attribute_values_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -3280,6 +3616,21 @@ paths:
           description: ''
     patch:
       operationId: v1_inventario_attribute_values_partial_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -3312,6 +3663,21 @@ paths:
           description: ''
     delete:
       operationId: v1_inventario_attribute_values_destroy
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -3330,6 +3696,21 @@ paths:
   /api/v1/inventario/attributes/:
     get:
       operationId: v1_inventario_attributes_list
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - name: page
         required: false
@@ -3357,6 +3738,21 @@ paths:
           description: ''
     post:
       operationId: v1_inventario_attributes_create
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       tags:
       - v1
       requestBody:
@@ -3384,6 +3780,21 @@ paths:
   /api/v1/inventario/attributes/{id}/:
     get:
       operationId: v1_inventario_attributes_retrieve
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -3405,6 +3816,21 @@ paths:
           description: ''
     put:
       operationId: v1_inventario_attributes_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -3438,6 +3864,21 @@ paths:
           description: ''
     patch:
       operationId: v1_inventario_attributes_partial_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -3470,6 +3911,21 @@ paths:
           description: ''
     delete:
       operationId: v1_inventario_attributes_destroy
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -3488,6 +3944,21 @@ paths:
   /api/v1/inventario/brands/:
     get:
       operationId: v1_inventario_brands_list
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - name: page
         required: false
@@ -3515,6 +3986,21 @@ paths:
           description: ''
     post:
       operationId: v1_inventario_brands_create
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       tags:
       - v1
       requestBody:
@@ -3542,6 +4028,21 @@ paths:
   /api/v1/inventario/brands/{id}/:
     get:
       operationId: v1_inventario_brands_retrieve
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -3563,6 +4064,21 @@ paths:
           description: ''
     put:
       operationId: v1_inventario_brands_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -3596,6 +4112,21 @@ paths:
           description: ''
     patch:
       operationId: v1_inventario_brands_partial_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -3628,6 +4159,21 @@ paths:
           description: ''
     delete:
       operationId: v1_inventario_brands_destroy
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -3674,6 +4220,21 @@ paths:
   /api/v1/inventario/categories/:
     get:
       operationId: v1_inventario_categories_list
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - name: page
         required: false
@@ -3701,6 +4262,21 @@ paths:
           description: ''
     post:
       operationId: v1_inventario_categories_create
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       tags:
       - v1
       requestBody:
@@ -3728,6 +4304,21 @@ paths:
   /api/v1/inventario/categories/{id}/:
     get:
       operationId: v1_inventario_categories_retrieve
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -3749,6 +4340,21 @@ paths:
           description: ''
     put:
       operationId: v1_inventario_categories_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -3782,6 +4388,21 @@ paths:
           description: ''
     patch:
       operationId: v1_inventario_categories_partial_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -3814,6 +4435,21 @@ paths:
           description: ''
     delete:
       operationId: v1_inventario_categories_destroy
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -3933,6 +4569,21 @@ paths:
   /api/v1/inventario/product-taxes/:
     get:
       operationId: v1_inventario_product_taxes_list
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - name: page
         required: false
@@ -3960,6 +4611,21 @@ paths:
           description: ''
     post:
       operationId: v1_inventario_product_taxes_create
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       tags:
       - v1
       requestBody:
@@ -3987,6 +4653,21 @@ paths:
   /api/v1/inventario/product-taxes/{id}/:
     get:
       operationId: v1_inventario_product_taxes_retrieve
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -4008,6 +4689,21 @@ paths:
           description: ''
     put:
       operationId: v1_inventario_product_taxes_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -4041,6 +4737,21 @@ paths:
           description: ''
     patch:
       operationId: v1_inventario_product_taxes_partial_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -4073,6 +4784,21 @@ paths:
           description: ''
     delete:
       operationId: v1_inventario_product_taxes_destroy
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -4091,6 +4817,21 @@ paths:
   /api/v1/inventario/product-variants/:
     get:
       operationId: v1_inventario_product_variants_list
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - name: page
         required: false
@@ -4118,6 +4859,21 @@ paths:
           description: ''
     post:
       operationId: v1_inventario_product_variants_create
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       tags:
       - v1
       requestBody:
@@ -4145,6 +4901,21 @@ paths:
   /api/v1/inventario/product-variants/{id}/:
     get:
       operationId: v1_inventario_product_variants_retrieve
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -4166,6 +4937,21 @@ paths:
           description: ''
     put:
       operationId: v1_inventario_product_variants_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -4199,6 +4985,21 @@ paths:
           description: ''
     patch:
       operationId: v1_inventario_product_variants_partial_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -4231,6 +5032,21 @@ paths:
           description: ''
     delete:
       operationId: v1_inventario_product_variants_destroy
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -4277,6 +5093,21 @@ paths:
   /api/v1/inventario/product-variants/{id}/upload-image-url/:
     post:
       operationId: v1_inventario_product_variants_upload_image_url_create
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -4311,6 +5142,21 @@ paths:
   /api/v1/inventario/products/:
     get:
       operationId: v1_inventario_products_list
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - name: page
         required: false
@@ -4338,6 +5184,21 @@ paths:
           description: ''
     post:
       operationId: v1_inventario_products_create
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       tags:
       - v1
       requestBody:
@@ -4365,6 +5226,21 @@ paths:
   /api/v1/inventario/products/{id}/:
     get:
       operationId: v1_inventario_products_retrieve
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -4386,6 +5262,21 @@ paths:
           description: ''
     put:
       operationId: v1_inventario_products_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -4419,6 +5310,21 @@ paths:
           description: ''
     patch:
       operationId: v1_inventario_products_partial_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -4451,6 +5357,21 @@ paths:
           description: ''
     delete:
       operationId: v1_inventario_products_destroy
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -4700,6 +5621,9 @@ paths:
         GET /inventario/reports/stock-valuation/?warehouse=&export=
         (Sprint 24, API Spec §4.16). Valorización de stock: cantidad actual x
         costo actual de cada variante, por almacén.
+
+        Bloque A.5: el reporte entero es costo, asi que exige
+        INVENTORY_VIEW_COST ademas del acceso normal a inventario.
       tags:
       - v1
       security:
@@ -4850,6 +5774,21 @@ paths:
   /api/v1/inventario/suppliers/:
     get:
       operationId: v1_inventario_suppliers_list
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - name: page
         required: false
@@ -4877,6 +5816,21 @@ paths:
           description: ''
     post:
       operationId: v1_inventario_suppliers_create
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       tags:
       - v1
       requestBody:
@@ -4904,6 +5858,21 @@ paths:
   /api/v1/inventario/suppliers/{id}/:
     get:
       operationId: v1_inventario_suppliers_retrieve
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -4925,6 +5894,21 @@ paths:
           description: ''
     put:
       operationId: v1_inventario_suppliers_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -4958,6 +5942,21 @@ paths:
           description: ''
     patch:
       operationId: v1_inventario_suppliers_partial_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -4990,6 +5989,21 @@ paths:
           description: ''
     delete:
       operationId: v1_inventario_suppliers_destroy
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -5008,6 +6022,21 @@ paths:
   /api/v1/inventario/tax-rates/:
     get:
       operationId: v1_inventario_tax_rates_list
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - name: page
         required: false
@@ -5035,6 +6064,21 @@ paths:
           description: ''
     post:
       operationId: v1_inventario_tax_rates_create
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       tags:
       - v1
       requestBody:
@@ -5062,6 +6106,21 @@ paths:
   /api/v1/inventario/tax-rates/{id}/:
     get:
       operationId: v1_inventario_tax_rates_retrieve
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -5083,6 +6142,21 @@ paths:
           description: ''
     put:
       operationId: v1_inventario_tax_rates_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -5116,6 +6190,21 @@ paths:
           description: ''
     patch:
       operationId: v1_inventario_tax_rates_partial_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -5148,6 +6237,21 @@ paths:
           description: ''
     delete:
       operationId: v1_inventario_tax_rates_destroy
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -5348,6 +6452,21 @@ paths:
   /api/v1/inventario/warehouses/:
     get:
       operationId: v1_inventario_warehouses_list
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - name: page
         required: false
@@ -5375,6 +6494,21 @@ paths:
           description: ''
     post:
       operationId: v1_inventario_warehouses_create
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       tags:
       - v1
       requestBody:
@@ -5402,6 +6536,21 @@ paths:
   /api/v1/inventario/warehouses/{id}/:
     get:
       operationId: v1_inventario_warehouses_retrieve
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -5423,6 +6572,21 @@ paths:
           description: ''
     put:
       operationId: v1_inventario_warehouses_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -5456,6 +6620,21 @@ paths:
           description: ''
     patch:
       operationId: v1_inventario_warehouses_partial_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -5488,6 +6667,21 @@ paths:
           description: ''
     delete:
       operationId: v1_inventario_warehouses_destroy
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -5570,6 +6764,11 @@ paths:
       description: |-
         Solo lectura -se escribe unicamente via AuditLogService.log_action(),
         nunca por POST/PUT directo del cliente (API Spec §2.1).
+
+        Bloque B.3: filtros ?user=&action=&entity=&entity_id=&date_from=&date_to=
+        (fechas en hora de Lima, igual que el resto de reportes) y ?export=csv|xlsx
+        sobre el mismo filtro. La exportacion queda a su vez registrada: bajarse
+        la bitacora entera tambien es una accion que el dueño quiere ver.
       parameters:
       - name: page
         required: false
@@ -5601,6 +6800,11 @@ paths:
       description: |-
         Solo lectura -se escribe unicamente via AuditLogService.log_action(),
         nunca por POST/PUT directo del cliente (API Spec §2.1).
+
+        Bloque B.3: filtros ?user=&action=&entity=&entity_id=&date_from=&date_to=
+        (fechas en hora de Lima, igual que el resto de reportes) y ?export=csv|xlsx
+        sobre el mismo filtro. La exportacion queda a su vez registrada: bajarse
+        la bitacora entera tambien es una accion que el dueño quiere ver.
       parameters:
       - in: path
         name: id
@@ -5619,6 +6823,37 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AuditLog'
+          description: ''
+  /api/v1/usuarios/authorizations/:
+    post:
+      operationId: v1_usuarios_authorizations_create
+      description: |-
+        POST correo/contraseña de un supervisor + la operacion -> token de un
+        solo uso (Bloque C.1). Lo llama el equipo del cajero, con la sesion del
+        cajero: la del supervisor nunca se abre.
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SupervisorAuthorizationRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SupervisorAuthorizationRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/SupervisorAuthorizationRequest'
+        required: true
+      security:
+      - platformBearerAuth: []
+      - tenantBearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SupervisorAuthorizationResponse'
           description: ''
   /api/v1/usuarios/data-exports/:
     get:
@@ -6351,6 +7586,64 @@ paths:
       responses:
         '204':
           description: No response body
+  /api/v1/usuarios/login-attempts/:
+    get:
+      operationId: v1_usuarios_login_attempts_list
+      description: |-
+        Intentos de acceso con correos que no son de nadie del negocio
+        (Bloque C.4), junto a la bitacora y con su mismo permiso. Filtros
+        ?email=&source=&date_from=&date_to= (fechas en hora de Lima).
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      tags:
+      - v1
+      security:
+      - platformBearerAuth: []
+      - tenantBearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedLoginAttemptList'
+          description: ''
+  /api/v1/usuarios/login-attempts/{id}/:
+    get:
+      operationId: v1_usuarios_login_attempts_retrieve
+      description: |-
+        Intentos de acceso con correos que no son de nadie del negocio
+        (Bloque C.4), junto a la bitacora y con su mismo permiso. Filtros
+        ?email=&source=&date_from=&date_to= (fechas en hora de Lima).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this login attempt.
+        required: true
+      tags:
+      - v1
+      security:
+      - platformBearerAuth: []
+      - tenantBearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginAttempt'
+          description: ''
   /api/v1/usuarios/me/data-export/:
     get:
       operationId: v1_usuarios_me_data_export_retrieve
@@ -6878,9 +8171,84 @@ paths:
       responses:
         '204':
           description: No response body
+  /api/v1/usuarios/settings/:
+    get:
+      operationId: v1_usuarios_settings_retrieve
+      description: |-
+        GET/PATCH de los interruptores operativos del propio negocio (Bloque
+        A.0). Hasta ahora TenantSettings solo se editaba desde el panel interno
+        de Fivuza (core.TenantSettingsViewSet, IsPlatformStaff), pese a que la
+        Especificacion de API siempre contemplo que el admin del tenant manejara
+        sus propios interruptores.
+
+        Es un singleton (una fila por tenant), no un recurso listable: por eso
+        APIView y no ViewSet, mismo criterio que el resto de endpoints que no
+        son un CRUD (Convenciones §4.1).
+      tags:
+      - v1
+      security:
+      - platformBearerAuth: []
+      - tenantBearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantOperationalSettings'
+          description: ''
+    patch:
+      operationId: v1_usuarios_settings_partial_update
+      description: |-
+        GET/PATCH de los interruptores operativos del propio negocio (Bloque
+        A.0). Hasta ahora TenantSettings solo se editaba desde el panel interno
+        de Fivuza (core.TenantSettingsViewSet, IsPlatformStaff), pese a que la
+        Especificacion de API siempre contemplo que el admin del tenant manejara
+        sus propios interruptores.
+
+        Es un singleton (una fila por tenant), no un recurso listable: por eso
+        APIView y no ViewSet, mismo criterio que el resto de endpoints que no
+        son un CRUD (Convenciones §4.1).
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedTenantOperationalSettings'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedTenantOperationalSettings'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedTenantOperationalSettings'
+      security:
+      - platformBearerAuth: []
+      - tenantBearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantOperationalSettings'
+          description: ''
   /api/v1/usuarios/user-permissions/:
     get:
       operationId: v1_usuarios_user_permissions_list
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - name: page
         required: false
@@ -6908,6 +8276,21 @@ paths:
           description: ''
     post:
       operationId: v1_usuarios_user_permissions_create
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       tags:
       - v1
       requestBody:
@@ -6935,6 +8318,21 @@ paths:
   /api/v1/usuarios/user-permissions/{id}/:
     get:
       operationId: v1_usuarios_user_permissions_retrieve
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -6956,6 +8354,21 @@ paths:
           description: ''
     put:
       operationId: v1_usuarios_user_permissions_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -6989,6 +8402,21 @@ paths:
           description: ''
     patch:
       operationId: v1_usuarios_user_permissions_partial_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -7021,6 +8449,21 @@ paths:
           description: ''
     delete:
       operationId: v1_usuarios_user_permissions_destroy
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -7039,6 +8482,21 @@ paths:
   /api/v1/usuarios/user-warehouses/:
     get:
       operationId: v1_usuarios_user_warehouses_list
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - name: page
         required: false
@@ -7066,6 +8524,21 @@ paths:
           description: ''
     post:
       operationId: v1_usuarios_user_warehouses_create
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       tags:
       - v1
       requestBody:
@@ -7093,6 +8566,21 @@ paths:
   /api/v1/usuarios/user-warehouses/{id}/:
     get:
       operationId: v1_usuarios_user_warehouses_retrieve
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -7114,6 +8602,21 @@ paths:
           description: ''
     put:
       operationId: v1_usuarios_user_warehouses_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -7147,6 +8650,21 @@ paths:
           description: ''
     patch:
       operationId: v1_usuarios_user_warehouses_partial_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -7179,6 +8697,21 @@ paths:
           description: ''
     delete:
       operationId: v1_usuarios_user_warehouses_destroy
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -7197,6 +8730,21 @@ paths:
   /api/v1/usuarios/users/:
     get:
       operationId: v1_usuarios_users_list
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - name: page
         required: false
@@ -7224,6 +8772,21 @@ paths:
           description: ''
     post:
       operationId: v1_usuarios_users_create
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       tags:
       - v1
       requestBody:
@@ -7251,6 +8814,21 @@ paths:
   /api/v1/usuarios/users/{id}/:
     get:
       operationId: v1_usuarios_users_retrieve
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -7272,6 +8850,21 @@ paths:
           description: ''
     put:
       operationId: v1_usuarios_users_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -7305,6 +8898,21 @@ paths:
           description: ''
     patch:
       operationId: v1_usuarios_users_partial_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -7337,6 +8945,21 @@ paths:
           description: ''
     delete:
       operationId: v1_usuarios_users_destroy
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -7497,6 +9120,21 @@ paths:
   /api/v1/ventas/cash-registers/:
     get:
       operationId: v1_ventas_cash_registers_list
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - name: page
         required: false
@@ -7524,6 +9162,21 @@ paths:
           description: ''
     post:
       operationId: v1_ventas_cash_registers_create
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       tags:
       - v1
       requestBody:
@@ -7551,6 +9204,21 @@ paths:
   /api/v1/ventas/cash-registers/{id}/:
     get:
       operationId: v1_ventas_cash_registers_retrieve
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -7572,6 +9240,21 @@ paths:
           description: ''
     put:
       operationId: v1_ventas_cash_registers_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -7605,6 +9288,21 @@ paths:
           description: ''
     patch:
       operationId: v1_ventas_cash_registers_partial_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -7637,6 +9335,21 @@ paths:
           description: ''
     delete:
       operationId: v1_ventas_cash_registers_destroy
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -7738,7 +9451,6 @@ paths:
           multipart/form-data:
             schema:
               $ref: '#/components/schemas/CashSessionClose'
-        required: true
       security:
       - platformBearerAuth: []
       - tenantBearerAuth: []
@@ -7748,6 +9460,45 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CashSessionClose'
+          description: ''
+  /api/v1/ventas/cash-sessions/{id}/submit-count/:
+    post:
+      operationId: v1_ventas_cash_sessions_submit_count_create
+      description: |-
+        APIView con contrato base explícito para respuestas dinámicas.
+
+        Las vistas con payload de entrada estable deben reemplazar
+        ``serializer_class`` por su serializer de dominio. Los reportes que
+        devuelven agregados calculados conservan este objeto abierto.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CashSessionSubmitCount'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CashSessionSubmitCount'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CashSessionSubmitCount'
+        required: true
+      security:
+      - platformBearerAuth: []
+      - tenantBearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CashSessionSubmitCount'
           description: ''
   /api/v1/ventas/cash-sessions/open/:
     post:
@@ -8152,6 +9903,21 @@ paths:
   /api/v1/ventas/promotion-products/:
     get:
       operationId: v1_ventas_promotion_products_list
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - name: page
         required: false
@@ -8179,6 +9945,21 @@ paths:
           description: ''
     post:
       operationId: v1_ventas_promotion_products_create
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       tags:
       - v1
       requestBody:
@@ -8206,6 +9987,21 @@ paths:
   /api/v1/ventas/promotion-products/{id}/:
     get:
       operationId: v1_ventas_promotion_products_retrieve
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -8227,6 +10023,21 @@ paths:
           description: ''
     put:
       operationId: v1_ventas_promotion_products_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -8260,6 +10071,21 @@ paths:
           description: ''
     patch:
       operationId: v1_ventas_promotion_products_partial_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -8292,6 +10118,21 @@ paths:
           description: ''
     delete:
       operationId: v1_ventas_promotion_products_destroy
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -8310,6 +10151,21 @@ paths:
   /api/v1/ventas/promotions/:
     get:
       operationId: v1_ventas_promotions_list
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - name: page
         required: false
@@ -8337,6 +10193,21 @@ paths:
           description: ''
     post:
       operationId: v1_ventas_promotions_create
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       tags:
       - v1
       requestBody:
@@ -8364,6 +10235,21 @@ paths:
   /api/v1/ventas/promotions/{id}/:
     get:
       operationId: v1_ventas_promotions_retrieve
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -8385,6 +10271,21 @@ paths:
           description: ''
     put:
       operationId: v1_ventas_promotions_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -8418,6 +10319,21 @@ paths:
           description: ''
     patch:
       operationId: v1_ventas_promotions_partial_update
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -8450,6 +10366,21 @@ paths:
           description: ''
     delete:
       operationId: v1_ventas_promotions_destroy
+      description: |-
+        Registra CREATE/UPDATE/DELETE de un ViewSet del tenant en
+        tenant.audit_logs. Va primero en las bases de la clase:
+
+            class CategoryViewSet(TenantAuditMixin, SoftDeleteDestroyMixin,
+                                  viewsets.ModelViewSet): ...
+
+        Si la vista necesita su propio perform_*, llama a super() (el
+        registro envuelve lo que venga debajo) o, si la baja no es un delete
+        de DRF sino un servicio, usa self.audited_destroy(instance) como
+        contexto -ver RoleViewSet.
+
+        No se aplica a los ViewSets cuyo create() delega en un servicio que ya
+        registra con mas contexto (venta, devolucion...): ahi no hay
+        perform_create y el mixin no tendria nada que envolver.
       parameters:
       - in: path
         name: id
@@ -8758,10 +10689,16 @@ paths:
     get:
       operationId: v1_ventas_reports_cash_sessions_retrieve
       description: |-
-        GET /ventas/reports/cash-sessions/?date_from=&date_to=&export=
+        GET /ventas/reports/cash-sessions/?date_from=&date_to=&include_open=&export=
         (Sprint 25, API Spec §4.16). Sesiones de caja con su cuadre -mismo
         criterio que los demas reportes de este sprint: la misma consulta
         arma la pantalla y la exportacion.
+
+        Bloque A.3: el reporte lleva esperado y diferencia, o sea el resultado
+        del control. Exige CASH_CLOSE -si no, el arqueo a ciegas se
+        esquivaba bajando el mismo dato en un Excel. Por defecto solo incluye
+        cajas cerradas; `include_open=true` suma las abiertas y las entregadas,
+        para revisar un turno en curso.
       tags:
       - v1
       security:
@@ -9285,12 +11222,20 @@ components:
       description: |-
         Solo lectura -se escribe unicamente via AuditLogService.log_action(),
         nunca por POST/PUT directo del cliente.
+
+        Bloque B.3: `details` sale ya filtrado por strip_cost_from_details()
+        cuando quien consulta no tiene INVENTORY_VIEW_COST (lo decide la vista
+        y lo pasa en context["hide_cost"]).
       properties:
         id:
           type: integer
           readOnly: true
         user:
           type: integer
+          readOnly: true
+        user_email:
+          type: string
+          format: email
           readOnly: true
         action:
           type: string
@@ -9316,6 +11261,7 @@ components:
       - entity_id
       - id
       - user
+      - user_email
     BillingCycleEnum:
       enum:
       - MONTHLY
@@ -9409,6 +11355,9 @@ components:
           maxLength: 100
         is_active:
           type: boolean
+        assigned_user:
+          type: integer
+          nullable: true
       required:
       - id
       - name
@@ -9438,10 +11387,25 @@ components:
           pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
           readOnly: true
           nullable: true
+        expected_amount_so_far:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,4})?$
+          nullable: true
+          readOnly: true
         counted_closing_amount:
           type: string
           format: decimal
           pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          readOnly: true
+          nullable: true
+        counted_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        approved_by:
+          type: integer
           readOnly: true
           nullable: true
         difference:
@@ -9464,10 +11428,13 @@ components:
           nullable: true
           maxLength: 255
       required:
+      - approved_by
       - cash_register
       - closing_at
+      - counted_at
       - counted_closing_amount
       - difference
+      - expected_amount_so_far
       - expected_closing_amount
       - id
       - opening_amount
@@ -9483,8 +11450,6 @@ components:
           pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
         notes:
           type: string
-      required:
-      - counted_closing_amount
     CashSessionDetail:
       type: object
       description: |-
@@ -9514,10 +11479,25 @@ components:
           pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
           readOnly: true
           nullable: true
+        expected_amount_so_far:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,4})?$
+          nullable: true
+          readOnly: true
         counted_closing_amount:
           type: string
           format: decimal
           pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          readOnly: true
+          nullable: true
+        counted_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        approved_by:
+          type: integer
           readOnly: true
           nullable: true
         difference:
@@ -9544,16 +11524,25 @@ components:
           items:
             $ref: '#/components/schemas/CashMovement'
           readOnly: true
+        payment_totals:
+          type: object
+          additionalProperties:
+            type: string
+          readOnly: true
       required:
+      - approved_by
       - cash_register
       - closing_at
+      - counted_at
       - counted_closing_amount
       - difference
+      - expected_amount_so_far
       - expected_closing_amount
       - id
       - movements
       - opening_amount
       - opening_at
+      - payment_totals
       - status
       - user
     CashSessionOpen:
@@ -9572,6 +11561,18 @@ components:
       required:
       - cash_register_id
       - opening_amount
+    CashSessionSubmitCount:
+      type: object
+      description: 'Primer paso del cierre (Bloque A): el cajero entrega lo que conto.'
+      properties:
+        counted_closing_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+        notes:
+          type: string
+      required:
+      - counted_closing_amount
     Category:
       type: object
       properties:
@@ -10310,6 +12311,37 @@ components:
       required:
       - quantity
       - variant_id
+    LoginAttempt:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        email:
+          type: string
+          readOnly: true
+        ip:
+          type: string
+          readOnly: true
+          nullable: true
+        user_agent:
+          type: string
+          readOnly: true
+        source:
+          allOf:
+          - $ref: '#/components/schemas/SourceEnum'
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - email
+      - id
+      - ip
+      - source
+      - user_agent
     Membership:
       type: object
       properties:
@@ -11020,6 +13052,29 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/InventoryMovement'
+    PaginatedLoginAttemptList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/LoginAttempt'
     PaginatedMembershipGroupList:
       type: object
       required:
@@ -11847,6 +13902,9 @@ components:
           maxLength: 100
         is_active:
           type: boolean
+        assigned_user:
+          type: integer
+          nullable: true
     PatchedCategory:
       type: object
       properties:
@@ -12366,6 +14424,10 @@ components:
         description:
           type: string
           maxLength: 255
+        max_discount_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
     PatchedRolePermission:
       type: object
       properties:
@@ -12519,6 +14581,24 @@ components:
           type: string
           nullable: true
           readOnly: true
+    PatchedTenantOperationalSettings:
+      type: object
+      description: |-
+        Bloque A.0: la cara que el propio negocio ve de TenantSettings.
+
+        Deliberadamente NO hereda ni reusa core.TenantSettingsSerializer: ese
+        expone los modulos contratados y el umbral de alerta, que decide Fivuza,
+        no el tenant. Aqui solo viven los interruptores que el dueño opera desde
+        la pantalla Configuracion del ERP.
+      properties:
+        cashier_can_open_session:
+          type: boolean
+        cashier_can_close_session:
+          type: boolean
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
     PatchedTenantSettings:
       type: object
       properties:
@@ -12536,6 +14616,10 @@ components:
         hr_module_enabled:
           type: boolean
         cash_module_enabled:
+          type: boolean
+        cashier_can_open_session:
+          type: boolean
+        cashier_can_close_session:
           type: boolean
         cash_difference_alert_threshold:
           type: string
@@ -12699,6 +14783,16 @@ components:
       - description
       - id
       - module
+    PermissionEnum:
+      enum:
+      - SALES_VOID
+      - SALES_RETURN
+      - SALES_DISCOUNT
+      type: string
+      description: |-
+        * `SALES_VOID` - SALES_VOID
+        * `SALES_RETURN` - SALES_RETURN
+        * `SALES_DISCOUNT` - SALES_DISCOUNT
     Plan:
       type: object
       properties:
@@ -13492,6 +15586,10 @@ components:
         description:
           type: string
           maxLength: 255
+        max_discount_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
       required:
       - id
       - name
@@ -13615,6 +15713,9 @@ components:
           type: string
           format: date-time
           readOnly: true
+        occurred_at:
+          type: string
+          format: date-time
       required:
       - created_at
       - customer
@@ -13857,10 +15958,10 @@ components:
       type: object
       description: |-
         No es un ModelSerializer -delega toda la validacion de negocio en
-        SaleSyncService.sync_batch(). La validacion de forma (client_side_uuid
-        presente, customer/cash_session existen, lines/payments no vacios) si
-        la hace DRF antes de llegar al servicio, mismo criterio que
-        SaleCreateSerializer.
+        SaleSyncService.sync_batch(). DRF solo valida la forma (client_side_uuid
+        presente, lines/payments no vacios, tamano del lote); la existencia de
+        cliente/caja y el acceso al almacen se resuelven por venta en el
+        servicio.
       properties:
         sales:
           type: array
@@ -13875,6 +15976,12 @@ components:
         diferencia de SaleCreateSerializer, client_side_uuid es obligatorio -es
         la clave de deduplicacion, sin el no hay forma de saber si esta venta
         ya se sincronizo en un intento anterior.
+
+        customer_id/cash_session_id son enteros simples, no
+        PrimaryKeyRelatedField: si uno no existe (o el usuario no tiene acceso
+        al almacen de la caja), solo esa venta debe quedar FAILED -validarlo
+        aqui rechazaba el lote completo con 400 y trababa la cola offline. La
+        resolucion vive en SaleSyncService.sync_batch().
       properties:
         client_side_uuid:
           type: string
@@ -13882,6 +15989,9 @@ components:
           type: integer
         cash_session_id:
           type: integer
+        occurred_at:
+          type: string
+          format: date-time
         lines:
           type: array
           items:
@@ -13909,13 +16019,23 @@ components:
       description: |-
         * `40x25` - 40x25
         * `50x30` - 50x30
+    SourceEnum:
+      enum:
+      - LOGIN
+      - SUPERVISOR_AUTHORIZATION
+      type: string
+      description: |-
+        * `LOGIN` - LOGIN
+        * `SUPERVISOR_AUTHORIZATION` - SUPERVISOR_AUTHORIZATION
     Status896Enum:
       enum:
       - OPEN
+      - PENDING_APPROVAL
       - CLOSED
       type: string
       description: |-
         * `OPEN` - OPEN
+        * `PENDING_APPROVAL` - PENDING_APPROVAL
         * `CLOSED` - CLOSED
     Stock:
       type: object
@@ -14142,6 +16262,54 @@ components:
         * `active` - active
         * `past_due` - past_due
         * `canceled` - canceled
+    SupervisorAuthorizationRequest:
+      type: object
+      description: |-
+        Bloque C.1: el supervisor escribe su correo y contraseña en el equipo
+        del cajero. target_id es la venta a anular o devolver; discount_percent,
+        el mayor descuento por linea que va a autorizar.
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          writeOnly: true
+        permission:
+          $ref: '#/components/schemas/PermissionEnum'
+        target_id:
+          type: integer
+          nullable: true
+        discount_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+          nullable: true
+      required:
+      - email
+      - password
+      - permission
+    SupervisorAuthorizationResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        permission:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        authorized_by:
+          type: integer
+        authorized_by_email:
+          type: string
+          format: email
+      required:
+      - authorized_by
+      - authorized_by_email
+      - expires_at
+      - permission
+      - token
     Supplier:
       type: object
       properties:
@@ -14281,6 +16449,26 @@ components:
       - platform_staff
       - tenant
       - text
+    TenantOperationalSettings:
+      type: object
+      description: |-
+        Bloque A.0: la cara que el propio negocio ve de TenantSettings.
+
+        Deliberadamente NO hereda ni reusa core.TenantSettingsSerializer: ese
+        expone los modulos contratados y el umbral de alerta, que decide Fivuza,
+        no el tenant. Aqui solo viven los interruptores que el dueño opera desde
+        la pantalla Configuracion del ERP.
+      properties:
+        cashier_can_open_session:
+          type: boolean
+        cashier_can_close_session:
+          type: boolean
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - updated_at
     TenantRegister:
       type: object
       description: |-
@@ -14333,6 +16521,10 @@ components:
         hr_module_enabled:
           type: boolean
         cash_module_enabled:
+          type: boolean
+        cashier_can_open_session:
+          type: boolean
+        cashier_can_close_session:
           type: boolean
         cash_difference_alert_threshold:
           type: string
