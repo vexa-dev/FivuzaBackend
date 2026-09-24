@@ -103,7 +103,7 @@ class CostVisibilityTests(TenantTestCase):
         response = self._client_as(self.admin_user).get(
             f"/api/v1/inventario/product-variants/{self.variant.id}/"
         )
-        self.assertEqual(response.data["cost"], "10.0000")
+        self.assertEqual(response.data["cost"], "10.00")
 
     def test_nested_variants_of_a_product_also_hide_cost(self):
         response = self._client_as(self.seller_user).get(
@@ -144,7 +144,7 @@ class CostVisibilityTests(TenantTestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.variant.refresh_from_db()
-        self.assertEqual(str(self.variant.cost), "10.0000")
+        self.assertEqual(str(self.variant.cost), "10.00")
 
         # El resto de la variante si lo edita con normalidad.
         allowed = client.patch(
@@ -190,4 +190,4 @@ class CostVisibilityTests(TenantTestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.variant.refresh_from_db()
-        self.assertEqual(str(self.variant.cost), "12.0000")
+        self.assertEqual(str(self.variant.cost), "12.00")

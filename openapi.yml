@@ -11305,7 +11305,7 @@ components:
         amount:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         reason:
           type: string
         receipt_url:
@@ -11376,7 +11376,7 @@ components:
         opening_amount:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         opening_at:
           type: string
           format: date-time
@@ -11384,19 +11384,19 @@ components:
         expected_closing_amount:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           readOnly: true
           nullable: true
         expected_amount_so_far:
           type: string
           format: decimal
-          pattern: ^-?\d{0,10}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,12}(?:\.\d{0,2})?$
           nullable: true
           readOnly: true
         counted_closing_amount:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           readOnly: true
           nullable: true
         counted_at:
@@ -11411,7 +11411,7 @@ components:
         difference:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           readOnly: true
           nullable: true
         status:
@@ -11447,7 +11447,7 @@ components:
         counted_closing_amount:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         notes:
           type: string
     CashSessionDetail:
@@ -11468,7 +11468,7 @@ components:
         opening_amount:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         opening_at:
           type: string
           format: date-time
@@ -11476,19 +11476,19 @@ components:
         expected_closing_amount:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           readOnly: true
           nullable: true
         expected_amount_so_far:
           type: string
           format: decimal
-          pattern: ^-?\d{0,10}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,12}(?:\.\d{0,2})?$
           nullable: true
           readOnly: true
         counted_closing_amount:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           readOnly: true
           nullable: true
         counted_at:
@@ -11503,7 +11503,7 @@ components:
         difference:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           readOnly: true
           nullable: true
         status:
@@ -11557,7 +11557,7 @@ components:
         opening_amount:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
       required:
       - cash_register_id
       - opening_amount
@@ -11568,7 +11568,7 @@ components:
         counted_closing_amount:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         notes:
           type: string
       required:
@@ -11698,7 +11698,7 @@ components:
         credit_limit:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           nullable: true
         current_debt:
           type: string
@@ -11752,7 +11752,7 @@ components:
         amount:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           readOnly: true
         currency:
           type: string
@@ -11802,7 +11802,7 @@ components:
         amount:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           readOnly: true
         currency:
           type: string
@@ -11978,7 +11978,7 @@ components:
         salary_amount:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         currency:
           type: string
           maxLength: 3
@@ -12091,22 +12091,22 @@ components:
         base_salary:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           readOnly: true
         bonuses:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           readOnly: true
         deductions:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           readOnly: true
         net_amount:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           readOnly: true
         status:
           allOf:
@@ -12253,7 +12253,7 @@ components:
         quantity:
           type: string
           format: decimal
-          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           readOnly: true
         concept:
           allOf:
@@ -12262,7 +12262,7 @@ components:
         resulting_balance:
           type: string
           format: decimal
-          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           readOnly: true
         oversell_flag:
           type: boolean
@@ -12462,7 +12462,7 @@ components:
         amount:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           readOnly: true
         method:
           allOf:
@@ -12504,7 +12504,7 @@ components:
         price:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         periodicity:
           $ref: '#/components/schemas/PeriodicityEnum'
         benefits:
@@ -13968,7 +13968,7 @@ components:
         credit_limit:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           nullable: true
         current_debt:
           type: string
@@ -14033,7 +14033,7 @@ components:
         salary_amount:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         currency:
           type: string
           maxLength: 3
@@ -14108,7 +14108,7 @@ components:
         price:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         periodicity:
           $ref: '#/components/schemas/PeriodicityEnum'
         benefits:
@@ -14278,15 +14278,15 @@ components:
         cost:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         price:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         min_stock:
           type: string
           format: decimal
-          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         image_url:
           type: string
           format: uri
@@ -14326,7 +14326,7 @@ components:
         value:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         start_date:
           type: string
           format: date-time
@@ -14385,7 +14385,7 @@ components:
         total:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           readOnly: true
         currency:
           type: string
@@ -14403,8 +14403,7 @@ components:
         details_input:
           type: array
           items:
-            type: object
-            additionalProperties: {}
+            $ref: '#/components/schemas/PurchaseOrderLineInput'
           writeOnly: true
         created_at:
           type: string
@@ -14624,7 +14623,7 @@ components:
         cash_difference_alert_threshold:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         dashboard_refresh_minutes:
           type: integer
           maximum: 2147483647
@@ -14704,11 +14703,11 @@ components:
         min_quantity:
           type: string
           format: decimal
-          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         unit_price:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
     PatchedWarehouse:
       type: object
       properties:
@@ -15039,7 +15038,7 @@ components:
         quantity:
           type: string
           format: decimal
-          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         expires_at:
           type: string
           format: date-time
@@ -15127,15 +15126,15 @@ components:
         cost:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         price:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         min_stock:
           type: string
           format: decimal
-          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         image_url:
           type: string
           format: uri
@@ -15188,18 +15187,18 @@ components:
         cost:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
-          default: '0.0000'
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+          default: '0.00'
         price:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
-          default: '0.0000'
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+          default: '0.00'
         min_stock:
           type: string
           format: decimal
-          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
-          default: '0.000'
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+          default: '0.00'
         attribute_value_ids:
           type: array
           items:
@@ -15220,7 +15219,7 @@ components:
         value:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         start_date:
           type: string
           format: date-time
@@ -15311,7 +15310,7 @@ components:
         total:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           readOnly: true
         currency:
           type: string
@@ -15329,8 +15328,7 @@ components:
         details_input:
           type: array
           items:
-            type: object
-            additionalProperties: {}
+            $ref: '#/components/schemas/PurchaseOrderLineInput'
           writeOnly: true
         created_at:
           type: string
@@ -15362,15 +15360,15 @@ components:
         quantity:
           type: string
           format: decimal
-          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         unit_cost:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         subtotal:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           readOnly: true
       required:
       - id
@@ -15378,6 +15376,31 @@ components:
       - quantity
       - subtotal
       - unit_cost
+      - variant_id
+    PurchaseOrderLineInput:
+      type: object
+      description: |-
+        Linea de una orden de compra: cantidad y, o el costo unitario, o el
+        subtotal de la linea. Con subtotal manda el total de la factura del
+        proveedor (1000 unidades por S/ 33.33): se guarda tal cual y el costo
+        unitario (0.03, a 2 decimales como todo) queda solo como referencia.
+      properties:
+        variant_id:
+          type: integer
+        quantity:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        unit_cost:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        subtotal:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+      required:
+      - quantity
       - variant_id
     PurchaseOrderStatusEnum:
       enum:
@@ -15410,17 +15433,17 @@ components:
         subtotal:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           readOnly: true
         discount_total:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           readOnly: true
         total:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           readOnly: true
         sale:
           type: integer
@@ -15486,19 +15509,19 @@ components:
         quantity:
           type: string
           format: decimal
-          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         unit_price:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         discount_amount:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         subtotal:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
       required:
       - id
       - product_name_snapshot
@@ -15515,11 +15538,11 @@ components:
         quantity:
           type: string
           format: decimal
-          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         discount_amount:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           nullable: true
       required:
       - quantity
@@ -15562,7 +15585,7 @@ components:
         quantity:
           type: string
           format: decimal
-          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         expires_at:
           type: string
           format: date-time
@@ -15681,15 +15704,15 @@ components:
         subtotal:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         discount_total:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         total:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         currency:
           type: string
           maxLength: 3
@@ -15775,19 +15798,19 @@ components:
         quantity:
           type: string
           format: decimal
-          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         unit_price:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         discount_amount:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         subtotal:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
       required:
       - id
       - product_name_snapshot
@@ -15804,11 +15827,11 @@ components:
         quantity:
           type: string
           format: decimal
-          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         discount_amount:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           nullable: true
       required:
       - quantity
@@ -15824,7 +15847,7 @@ components:
         amount:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         created_at:
           type: string
           format: date-time
@@ -15842,7 +15865,7 @@ components:
         amount:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
       required:
       - amount
       - method
@@ -15862,7 +15885,7 @@ components:
         total_refund_amount:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         refund_type:
           $ref: '#/components/schemas/RefundTypeEnum'
         details:
@@ -15917,13 +15940,13 @@ components:
         quantity_returned:
           type: string
           format: decimal
-          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         restock:
           type: boolean
         subtotal:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
       required:
       - id
       - quantity_returned
@@ -15937,7 +15960,7 @@ components:
         quantity_returned:
           type: string
           format: decimal
-          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         restock:
           type: boolean
           default: true
@@ -16052,7 +16075,7 @@ components:
         quantity:
           type: string
           format: decimal
-          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           readOnly: true
         updated_at:
           type: string
@@ -16079,7 +16102,7 @@ components:
         counted_quantity:
           type: string
           format: decimal
-          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         concept:
           allOf:
           - $ref: '#/components/schemas/StockAdjustConceptEnum'
@@ -16115,7 +16138,7 @@ components:
         quantity:
           type: string
           format: decimal
-          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
       required:
       - from_warehouse
       - quantity
@@ -16529,7 +16552,7 @@ components:
         cash_difference_alert_threshold:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         dashboard_refresh_minutes:
           type: integer
           maximum: 2147483647
@@ -16685,11 +16708,11 @@ components:
         min_quantity:
           type: string
           format: decimal
-          pattern: ^-?\d{0,9}(?:\.\d{0,3})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         unit_price:
           type: string
           format: decimal
-          pattern: ^-?\d{0,8}(?:\.\d{0,4})?$
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
       required:
       - id
       - min_quantity

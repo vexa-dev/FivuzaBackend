@@ -12,7 +12,7 @@ class MembershipPlan(models.Model):
     de `core` (Fivuza cobrando al tenant), pero en el esquema del tenant."""
 
     name = models.CharField(max_length=150)
-    price = models.DecimalField(max_digits=12, decimal_places=4)
+    price = models.DecimalField(max_digits=12, decimal_places=2)
     periodicity = models.CharField(
         max_length=10,
         choices=[
@@ -87,7 +87,7 @@ class MembershipPayment(models.Model):
     membership = models.ForeignKey(
         Membership, on_delete=models.CASCADE, related_name="payments"
     )
-    amount = models.DecimalField(max_digits=12, decimal_places=4)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
     method = models.CharField(
         max_length=10,
         choices=[("CASH", "CASH"), ("CARD", "CARD"), ("YAPE", "YAPE")],

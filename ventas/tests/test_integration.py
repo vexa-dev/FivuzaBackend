@@ -242,13 +242,13 @@ class SaleServiceTests(TenantTestCase):
 
         self.assertEqual(sale.status, "COMPLETED")
         self.assertEqual(sale.payment_status, "PAID")
-        self.assertEqual(sale.subtotal, Decimal("60.0000"))
-        self.assertEqual(sale.total, Decimal("60.0000"))
+        self.assertEqual(sale.subtotal, Decimal("60.00"))
+        self.assertEqual(sale.total, Decimal("60.00"))
         self.assertEqual(sale.details.count(), 1)
         self.assertEqual(sale.payments.count(), 1)
 
         stock = Stock.objects.get(variant=variant, warehouse=self.warehouse)
-        self.assertEqual(stock.quantity, Decimal("7.000"))
+        self.assertEqual(stock.quantity, Decimal("7.00"))
 
     def test_creates_sale_with_multiple_payments(self):
         variant = self._create_variant(price="20.00", stock_quantity="10")
@@ -265,7 +265,7 @@ class SaleServiceTests(TenantTestCase):
             ],
         )
 
-        self.assertEqual(sale.total, Decimal("40.0000"))
+        self.assertEqual(sale.total, Decimal("40.00"))
         self.assertEqual(sale.payments.count(), 2)
 
     def test_creates_sale_applies_active_promotion(self):
@@ -289,8 +289,8 @@ class SaleServiceTests(TenantTestCase):
             payments=[{"method": "CASH", "amount": Decimal("80.00")}],
         )
 
-        self.assertEqual(sale.discount_total, Decimal("20.0000"))
-        self.assertEqual(sale.total, Decimal("80.0000"))
+        self.assertEqual(sale.discount_total, Decimal("20.00"))
+        self.assertEqual(sale.total, Decimal("80.00"))
 
     def test_manual_discount_overrides_promotion(self):
         variant = self._create_variant(price="100.00", stock_quantity="10")
@@ -348,7 +348,7 @@ class SaleServiceTests(TenantTestCase):
         self.assertEqual(sale.total, Decimal("9.62"))
 
     def test_fractional_quantity_charges_in_cents(self):
-        # Producto por KG: 1.234 x 10.50 = 12.957 -se cobra S/ 12.96.
+        # Producto por KG: 1.25 x 10.50 = 13.125 -se cobra S/ 13.13.
         variant = self._create_variant(price="10.50", stock_quantity="10")
         session = self._open_session()
 
@@ -356,11 +356,27 @@ class SaleServiceTests(TenantTestCase):
             customer=self.customer,
             cash_session=session,
             user=self.user,
-            lines=[{"variant_id": variant.id, "quantity": "1.234"}],
-            payments=[{"method": "CASH", "amount": Decimal("12.96")}],
+            lines=[{"variant_id": variant.id, "quantity": "1.25"}],
+            payments=[{"method": "CASH", "amount": Decimal("13.13")}],
         )
 
-        self.assertEqual(sale.total, Decimal("12.96"))
+        self.assertEqual(sale.total, Decimal("13.13"))
+
+    def test_quantity_with_more_than_two_decimals_is_rounded(self):
+        # El serializer ya rechaza 1.235 kg; si llega directo al servicio
+        # (sync offline, conversion de cotizacion) se pesa a 2 decimales.
+        variant = self._create_variant(price="10.00", stock_quantity="10")
+
+        sale = SaleService.create_sale(
+            customer=self.customer,
+            cash_session=self._open_session(),
+            user=self.user,
+            lines=[{"variant_id": variant.id, "quantity": "1.235"}],
+            payments=[{"method": "CASH", "amount": Decimal("12.40")}],
+        )
+
+        self.assertEqual(sale.details.get().quantity, Decimal("1.24"))
+        self.assertEqual(sale.total, Decimal("12.40"))
 
     def _promote(self, variant, *, type, value):
         promotion = Promotion.objects.create(
@@ -410,21 +426,21 @@ class SaleServiceTests(TenantTestCase):
             )
 
     def test_fixed_promotion_on_fractional_quantity_rounds_to_cents(self):
-        # 0.755 kg x 4.00 = 3.02; S/ 1.00 por kg = 0.755 -> 0.76.
+        # 1.25 kg x 4.00 = 5.00; S/ 1.50 por kg = 1.875 -> 1.88.
         variant = self._create_variant(price="4.00", stock_quantity="10")
-        self._promote(variant, type="FIXED_AMOUNT", value="1.00")
+        self._promote(variant, type="FIXED_AMOUNT", value="1.50")
         session = self._open_session()
 
         sale = SaleService.create_sale(
             customer=self.customer,
             cash_session=session,
             user=self.user,
-            lines=[{"variant_id": variant.id, "quantity": "0.755"}],
-            payments=[{"method": "CASH", "amount": Decimal("2.26")}],
+            lines=[{"variant_id": variant.id, "quantity": "1.25"}],
+            payments=[{"method": "CASH", "amount": Decimal("3.12")}],
         )
 
-        self.assertEqual(sale.details.get().discount_amount, Decimal("0.76"))
-        self.assertEqual(sale.total, Decimal("2.26"))
+        self.assertEqual(sale.details.get().discount_amount, Decimal("1.88"))
+        self.assertEqual(sale.total, Decimal("3.12"))
 
     def test_manual_discount_rounds_to_cents(self):
         variant = self._create_variant(price="20.00", stock_quantity="10")
@@ -460,26 +476,30 @@ class SaleServiceTests(TenantTestCase):
             cash_session=session,
             user=self.user,
             lines=[
-                {"variant_id": kg.id, "quantity": "1.234"},
+                {"variant_id": kg.id, "quantity": "1.25"},
                 {"variant_id": promo.id, "quantity": "1"},
             ],
-            # 12.96 + (10.50 - 1.58)
-            payments=[{"method": "CASH", "amount": Decimal("21.88")}],
+            # 13.13 + (10.50 - 1.58)
+            payments=[{"method": "CASH", "amount": Decimal("22.05")}],
         )
 
-        self.assertEqual(sale.subtotal, Decimal("23.46"))
+        self.assertEqual(sale.subtotal, Decimal("23.63"))
         self.assertEqual(sale.discount_total, Decimal("1.58"))
-        self.assertEqual(sale.total, Decimal("21.88"))
+        self.assertEqual(sale.total, Decimal("22.05"))
         self.assertEqual(sum(d.subtotal for d in sale.details.all()), sale.total)
 
-    def _sell(self, *, price, quantity, amount):
+    def _sell(self, *, price, quantity, amount, discount=None):
         variant = self._create_variant(price=price, stock_quantity="100")
+        line = {"variant_id": variant.id, "quantity": quantity}
+        if discount is not None:
+            line["discount_amount"] = Decimal(discount)
         return SaleService.create_sale(
             customer=self.customer,
             cash_session=self._open_session(),
             user=self.user,
-            lines=[{"variant_id": variant.id, "quantity": quantity}],
+            lines=[line],
             payments=[{"method": "CASH", "amount": Decimal(amount)}],
+            discount_limit="skip",
         )
 
     def _return(self, sale, quantity):
@@ -494,30 +514,31 @@ class SaleServiceTests(TenantTestCase):
         )
 
     def test_partial_return_refunds_in_cents_and_last_takes_the_rest(self):
-        # 1.234 kg x 10.50 = 12.96. Devolver 0.5 kg: 12.96 x 0.5 / 1.234 =
-        # 5.2512... -> 5.25; el resto (0.734 kg) se lleva 12.96 - 5.25.
-        sale = self._sell(price="10.50", quantity="1.234", amount="12.96")
+        # 1.25 kg x 10.50 = 13.13. Devolver 0.5 kg: 13.13 x 0.5 / 1.25 =
+        # 5.252 -> 5.25; el resto (0.75 kg) se lleva 13.13 - 5.25.
+        sale = self._sell(price="10.50", quantity="1.25", amount="13.13")
 
         first = self._return(sale, "0.5")
-        last = self._return(sale, "0.734")
+        last = self._return(sale, "0.75")
 
         self.assertEqual(first.total_refund_amount, Decimal("5.25"))
-        self.assertEqual(last.total_refund_amount, Decimal("7.71"))
+        self.assertEqual(last.total_refund_amount, Decimal("7.88"))
 
     def test_partial_returns_add_up_to_what_was_charged(self):
-        # 3 x 3.3333 = 9.9999 -> 10.00. Tres devoluciones de 1: 3.33, 3.33
-        # y la ultima 3.34 (no 3.33: sumarian 9.99).
-        sale = self._sell(price="3.3333", quantity="3", amount="10.00")
+        # 3 x 3.33 - 0.01 de descuento = 9.98. Tres devoluciones de 1: 3.33,
+        # 3.33 y la ultima 3.32 (no 3.33: sumarian 9.99, mas de lo cobrado).
+        sale = self._sell(price="3.33", quantity="3", amount="9.98", discount="0.01")
 
         refunds = [self._return(sale, "1").total_refund_amount for _ in range(3)]
 
-        self.assertEqual(refunds, [Decimal("3.33"), Decimal("3.33"), Decimal("3.34")])
+        self.assertEqual(refunds, [Decimal("3.33"), Decimal("3.33"), Decimal("3.32")])
         self.assertEqual(sum(refunds), sale.total)
 
     def test_partial_returns_never_refund_more_than_the_line(self):
-        # 20 x 0.005 = 0.10: cada unidad vale medio centimo, que redondea a
-        # 0.01. Sin tope, 20 devoluciones de 1 reembolsarian 0.20.
-        sale = self._sell(price="0.0050", quantity="20", amount="0.10")
+        # 20 x 0.01 - 0.10 de descuento = 0.10: cada unidad vale medio
+        # centimo, que redondea a 0.01. Sin tope, 20 devoluciones de 1
+        # reembolsarian 0.20.
+        sale = self._sell(price="0.01", quantity="20", amount="0.10", discount="0.10")
 
         refunds = [self._return(sale, "1").total_refund_amount for _ in range(20)]
 
@@ -540,7 +561,7 @@ class SaleServiceTests(TenantTestCase):
 
         self.assertEqual(Sale.objects.count(), sales_before)
         stock = Stock.objects.get(variant=variant, warehouse=self.warehouse)
-        self.assertEqual(stock.quantity, Decimal("2.000"))
+        self.assertEqual(stock.quantity, Decimal("2.00"))
 
     def test_payment_mismatch_rolls_back_everything(self):
         variant = self._create_variant(price="20.00", stock_quantity="10")
@@ -558,7 +579,7 @@ class SaleServiceTests(TenantTestCase):
 
         self.assertEqual(Sale.objects.count(), sales_before)
         stock = Stock.objects.get(variant=variant, warehouse=self.warehouse)
-        self.assertEqual(stock.quantity, Decimal("10.000"))
+        self.assertEqual(stock.quantity, Decimal("10.00"))
 
     def test_no_open_cash_session_raises(self):
         variant = self._create_variant(price="20.00", stock_quantity="10")
@@ -758,7 +779,7 @@ class SaleServiceVolumePricingTests(TenantTestCase):
 
         detail = sale.details.first()
         self.assertEqual(detail.unit_price, Decimal("10.00"))
-        self.assertEqual(sale.discount_total, Decimal("12.0000"))
+        self.assertEqual(sale.discount_total, Decimal("12.00"))
         self.assertEqual(sale.total, Decimal("108.00"))
 
 
@@ -855,7 +876,7 @@ class POSCatalogServiceTests(TenantTestCase):
 
         catalog_here = POSCatalogService.catalog(warehouse=self.warehouse)
         row = next(row for row in catalog_here if row["id"] == variant.id)
-        self.assertEqual(row["stock"], "7.000")
+        self.assertEqual(row["stock"], "7.00")
 
         catalog_elsewhere = POSCatalogService.catalog(warehouse=self.other_warehouse)
         row_elsewhere = next(
@@ -879,7 +900,7 @@ class POSCatalogServiceTests(TenantTestCase):
         row = next(row for row in catalog if row["id"] == variant.id)
         self.assertIsNotNone(row["promotion"])
         self.assertEqual(row["promotion"]["type"], "PERCENTAGE")
-        self.assertEqual(row["promotion"]["value"], "20.0000")
+        self.assertEqual(row["promotion"]["value"], "20.00")
 
     def test_catalog_variant_without_promotion_has_none(self):
         variant = self._create_variant()
@@ -985,7 +1006,7 @@ class ReservationServiceTests(TenantTestCase):
             user=self.user,
         )
         stock = Stock.objects.get(variant=variant, warehouse=self.warehouse)
-        self.assertEqual(stock.quantity, Decimal("10.000"))
+        self.assertEqual(stock.quantity, Decimal("10.00"))
 
     def test_available_quantity_subtracts_active_reservations(self):
         variant = self._create_variant(stock_quantity="10")
@@ -1000,7 +1021,7 @@ class ReservationServiceTests(TenantTestCase):
         available = ReservationService.get_available_quantity(
             variant=variant, warehouse=self.warehouse
         )
-        self.assertEqual(available, Decimal("6.000"))
+        self.assertEqual(available, Decimal("6.00"))
 
     def test_create_reservation_exceeding_available_stock_raises(self):
         variant = self._create_variant(stock_quantity="5")
@@ -1037,7 +1058,7 @@ class ReservationServiceTests(TenantTestCase):
         available = ReservationService.get_available_quantity(
             variant=variant, warehouse=self.warehouse
         )
-        self.assertEqual(available, Decimal("10.000"))
+        self.assertEqual(available, Decimal("10.00"))
         reservation.refresh_from_db()
         self.assertEqual(reservation.status, "CANCELLED")
 
@@ -1076,9 +1097,9 @@ class ReservationServiceTests(TenantTestCase):
             payments=[{"method": "CASH", "amount": Decimal("80.00")}],
         )
 
-        self.assertEqual(sale.total, Decimal("80.0000"))
+        self.assertEqual(sale.total, Decimal("80.00"))
         stock = Stock.objects.get(variant=variant, warehouse=self.warehouse)
-        self.assertEqual(stock.quantity, Decimal("6.000"))
+        self.assertEqual(stock.quantity, Decimal("6.00"))
         reservation.refresh_from_db()
         self.assertEqual(reservation.status, "CONVERTED")
         self.assertEqual(reservation.sale_id, sale.id)
@@ -1123,7 +1144,7 @@ class ReservationServiceTests(TenantTestCase):
         available = ReservationService.get_available_quantity(
             variant=variant, warehouse=self.warehouse
         )
-        self.assertEqual(available, Decimal("10.000"))
+        self.assertEqual(available, Decimal("10.00"))
 
     def test_expire_overdue_reservations_ignores_reservations_not_yet_due(self):
         variant = self._create_variant(stock_quantity="10")
@@ -1219,7 +1240,7 @@ class QuoteServiceTests(TenantTestCase):
             valid_until=timezone.now() + timedelta(days=7),
         )
         self.assertEqual(quote.status, "DRAFT")
-        self.assertEqual(quote.total, Decimal("75.0000"))
+        self.assertEqual(quote.total, Decimal("75.00"))
         detail = quote.details.first()
         self.assertEqual(detail.unit_price, Decimal("25.00"))
         self.assertEqual(detail.sku_snapshot, variant.sku)
@@ -1285,7 +1306,10 @@ class QuoteServiceTests(TenantTestCase):
         self.assertEqual(sale.total, quote.total)
 
     def test_migration_rounds_pending_quotes_only(self):
-        # Cotizaciones guardadas antes de redondear a centimos (0011).
+        # Cotizaciones guardadas antes de redondear a centimos (0011). Con
+        # las columnas ya a 2 decimales (0012) la base guarda 1.5750 como
+        # 1.58 y 8.9250 como 8.93: la cotizacion queda descuadrada (lineas
+        # por 8.92, total 8.93) y la migracion la recalcula igual.
         migration = importlib.import_module(
             "ventas.migrations.0011_round_pending_quote_amounts"
         )
@@ -1296,7 +1320,7 @@ class QuoteServiceTests(TenantTestCase):
                 user=self.user,
                 status="ACCEPTED",
                 valid_until=timezone.now() + timedelta(days=7),
-                subtotal=Decimal("10.5000"),
+                subtotal=Decimal("10.50"),
                 discount_total=Decimal("1.5750"),
                 total=Decimal("8.9250"),
                 sale=sale,
@@ -1306,8 +1330,8 @@ class QuoteServiceTests(TenantTestCase):
                 variant_id=1,
                 product_name_snapshot="Camiseta",
                 sku_snapshot="SKU-LEGACY",
-                quantity=Decimal("1.000"),
-                unit_price=Decimal("10.5000"),
+                quantity=Decimal("1.00"),
+                unit_price=Decimal("10.50"),
                 discount_amount=Decimal("1.5750"),
                 subtotal=Decimal("8.9250"),
             )
@@ -1333,7 +1357,7 @@ class QuoteServiceTests(TenantTestCase):
         self.assertEqual(detail.discount_amount, Decimal("1.58"))
         self.assertEqual(detail.subtotal, Decimal("8.92"))
         converted.refresh_from_db()
-        self.assertEqual(converted.total, Decimal("8.9250"))
+        self.assertEqual(converted.total, Decimal("8.93"))
 
     def test_convert_quote_not_accepted_raises(self):
         variant = self._create_variant()

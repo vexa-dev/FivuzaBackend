@@ -3,6 +3,7 @@ from datetime import timedelta
 
 from django.db.models import Count
 
+from core.decimals import round2
 from core.models import (
     PlatformAuditLog,
     PlatformStaff,
@@ -59,6 +60,8 @@ class PlatformDashboardService:
             real_tenants.values_list("status").annotate(count=Count("id"))
         )
 
+        # Un plan semestral o anual prorrateado por mes deja fracciones: se
+        # redondea el MRR una sola vez, al final (core.decimals).
         mrr = 0
         active_subscriptions = Subscription.objects.filter(
             status="active", tenant__is_demo=False
@@ -100,7 +103,7 @@ class PlatformDashboardService:
 
         return {
             "tenants_by_status": tenants_by_status,
-            "mrr": mrr,
+            "mrr": round2(mrr),
             "pending_payments_count": pending_payments_count,
             "recent_tenants": recent_tenants,
             "recently_suspended": recently_suspended,

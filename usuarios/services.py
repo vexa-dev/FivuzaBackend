@@ -14,6 +14,7 @@ from django.utils import timezone
 from rest_framework.exceptions import APIException
 
 from core import storage
+from core.decimals import round2
 from usuarios.models import (
     AuditLog,
     DataExport,
@@ -436,9 +437,7 @@ class AttendanceService:
         if attendance.check_out is None:
             return None
         delta = attendance.check_out - attendance.check_in
-        return (Decimal(delta.total_seconds()) / Decimal(3600)).quantize(
-            Decimal("0.01")
-        )
+        return round2(Decimal(delta.total_seconds()) / Decimal(3600))
 
 
 class PayrollAlreadyExistsError(APIException):
@@ -536,20 +535,18 @@ class PayrollService:
             check_out__isnull=False,
         )
 
-        # Los montos de dinero en todo el sistema usan 4 decimales
-        # (DecimalField(max_digits=12, decimal_places=4), igual que
-        # Sale.total) -no 2, para no perder precision al multiplicar por
-        # horas fraccionarias.
+        # Todo monto va a 2 decimales (core.decimals): el sueldo por horas
+        # se redondea una sola vez, sobre el total de horas del periodo.
         if employee.salary_type == "DAILY":
             days_worked = len({entry.check_in.date() for entry in attendance})
-            return (employee.salary_amount * days_worked).quantize(Decimal("0.0001"))
+            return round2(employee.salary_amount * days_worked)
 
         # HOURLY
         total_hours = sum(
             (AttendanceService.calculate_worked_hours(entry) for entry in attendance),
             Decimal("0"),
         )
-        return (employee.salary_amount * total_hours).quantize(Decimal("0.0001"))
+        return round2(employee.salary_amount * total_hours)
 
     @staticmethod
     def mark_paid(*, payroll: EmployeePayroll, payment_date, user) -> EmployeePayroll:

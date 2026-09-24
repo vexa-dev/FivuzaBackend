@@ -5,6 +5,7 @@ from django.template.loader import render_to_string
 from django.utils import timezone
 from rest_framework.exceptions import APIException
 
+from core.decimals import round2
 from inventario.models import ProductVariant
 from ventas.models import (
     CashSession,
@@ -12,7 +13,7 @@ from ventas.models import (
     QuoteDetail,
     Sale,
 )
-from ventas.services.sales import SaleService, round_money
+from ventas.services.sales import SaleService
 
 
 class QuoteNotAcceptedError(APIException):
@@ -78,20 +79,20 @@ class QuoteService:
             variant = ProductVariant.objects.select_related("product").get(
                 id=line["variant_id"]
             )
-            quantity = Decimal(str(line["quantity"]))
+            quantity = round2(line["quantity"])
             unit_price = SaleService._resolve_unit_price(
                 variant=variant, quantity=quantity
             )
             # Misma regla de centimos que create_sale(): convert_to_sale()
             # le pasa estos montos congelados y el total tiene que coincidir.
-            line_subtotal = round_money(unit_price * quantity)
+            line_subtotal = round2(unit_price * quantity)
             discount_amount = line.get("discount_amount")
             if discount_amount is None:
                 discount_amount = SaleService._resolve_promotion_discount(
                     variant=variant, quantity=quantity, unit_price=unit_price, at=at
                 )
             else:
-                discount_amount = round_money(Decimal(str(discount_amount)))
+                discount_amount = round2(Decimal(str(discount_amount)))
                 line_percent = SaleService.discount_percent(
                     discount_amount, line_subtotal
                 )

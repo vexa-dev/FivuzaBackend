@@ -12,6 +12,7 @@ from django.template.loader import render_to_string
 from django.utils import timezone
 
 from core import storage
+from core.decimals import round2
 from inventario.models import (
     AttributeValue,
     Category,
@@ -320,7 +321,7 @@ class PurchaseService:
             PurchaseService._update_weighted_average_cost(
                 variant=variant,
                 incoming_quantity=detail.quantity,
-                incoming_unit_cost=detail.unit_cost,
+                incoming_total=detail.subtotal,
                 user=user,
             )
             StockService.adjust_stock(
@@ -363,7 +364,7 @@ class PurchaseService:
         *,
         variant: ProductVariant,
         incoming_quantity: Decimal,
-        incoming_unit_cost: Decimal,
+        incoming_total: Decimal,
         user,
     ) -> None:
         # Promedio ponderado contra el stock TOTAL (todos los almacenes),
@@ -376,10 +377,11 @@ class PurchaseService:
         if total_after <= 0:
             return
 
+        # Con el subtotal real de la linea, no costo unitario x cantidad: el
+        # costo unitario va redondeado a 2 decimales y 1000 x 0.03 no son
+        # los S/ 33.33 que se pagaron.
         old_cost = variant.cost
-        new_cost = (
-            (old_cost * total_before) + (incoming_unit_cost * incoming_quantity)
-        ) / total_after
+        new_cost = round2(((old_cost * total_before) + incoming_total) / total_after)
         if new_cost == old_cost:
             return
 
@@ -544,6 +546,11 @@ class CatalogImportService:
         if not Category.objects.filter(name__iexact=category_name).exists():
             return f"categoria '{category_name}' no existe"
 
+        for column in ("costo", "precio", "stock_minimo"):
+            try:
+                Decimal(row.get(column) or "0")
+            except InvalidOperation:
+                return f"{column} invalido"
         try:
             cantidad_inicial = Decimal(row.get("cantidad_inicial") or "0")
         except InvalidOperation:
@@ -579,14 +586,15 @@ class CatalogImportService:
                 {
                     "sku": sku,
                     "barcode": barcode,
-                    "cost": row.get("costo") or "0",
-                    "price": row.get("precio") or "0",
-                    "min_stock": row.get("stock_minimo") or "0",
+                    # A 2 decimales como todo el sistema (core.decimals).
+                    "cost": round2(row.get("costo") or "0"),
+                    "price": round2(row.get("precio") or "0"),
+                    "min_stock": round2(row.get("stock_minimo") or "0"),
                 }
             ],
         )
 
-        cantidad_inicial = Decimal(row.get("cantidad_inicial") or "0")
+        cantidad_inicial = round2(row.get("cantidad_inicial") or "0")
         warehouse_name = (row.get("almacen") or "").strip()
         if cantidad_inicial > 0 and warehouse_name:
             warehouse = Warehouse.objects.get(name__iexact=warehouse_name)

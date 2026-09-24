@@ -518,14 +518,14 @@ class PurchaseServiceTests(TenantTestCase):
         order = self._create_order(quantity="10", unit_cost="12.00")
         PurchaseService.receive_order(purchase_order=order, user=self.user)
         self.variant.refresh_from_db()
-        self.assertEqual(self.variant.cost, Decimal("12.0000"))
+        self.assertEqual(self.variant.cost, Decimal("12.00"))
 
         # Segunda recepcion: 10 u. mas a 20.00 -> promedio ponderado sobre
         # 10@12 + 10@20 = 320/20 = 16.00.
         order2 = self._create_order(quantity="10", unit_cost="20.00")
         PurchaseService.receive_order(purchase_order=order2, user=self.user)
         self.variant.refresh_from_db()
-        self.assertEqual(self.variant.cost, Decimal("16.0000"))
+        self.assertEqual(self.variant.cost, Decimal("16.00"))
 
         self.assertTrue(
             ProductPriceHistory.objects.filter(variant=self.variant).exists()
@@ -586,7 +586,7 @@ class CatalogImportServiceTests(TenantTestCase):
 
         variant = ProductVariant.objects.get(sku="CAM-IMP-1")
         self.assertEqual(variant.barcode, "7501234567890")
-        self.assertEqual(variant.price, Decimal("25.9000"))
+        self.assertEqual(variant.price, Decimal("25.90"))
 
         stock = Stock.objects.get(variant=variant, warehouse=self.warehouse)
         self.assertEqual(stock.quantity, 20)

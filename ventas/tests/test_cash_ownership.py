@@ -341,7 +341,7 @@ class CashOwnershipTests(TenantTestCase):
         supervisor = self._client_as(self.admin_user).get(
             f"/api/v1/ventas/cash-sessions/{session.id}/"
         )
-        self.assertEqual(supervisor.data["expected_amount_so_far"], "0.0000")
+        self.assertEqual(supervisor.data["expected_amount_so_far"], "0.00")
 
     def test_handing_over_the_till_hides_the_result_from_the_cashier(self):
         self._set_switches(can_open=True, can_close=True)
@@ -353,7 +353,7 @@ class CashOwnershipTests(TenantTestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["status"], "PENDING_APPROVAL")
-        self.assertEqual(response.data["counted_closing_amount"], "7.0000")
+        self.assertEqual(response.data["counted_closing_amount"], "7.00")
         self.assertIsNone(response.data["expected_closing_amount"])
         self.assertIsNone(response.data["difference"])
         self.assertIsNone(response.data["expected_amount_so_far"])
@@ -363,7 +363,7 @@ class CashOwnershipTests(TenantTestCase):
         supervisor = self._client_as(self.admin_user).get(
             f"/api/v1/ventas/cash-sessions/{session.id}/"
         )
-        self.assertEqual(supervisor.data["expected_amount_so_far"], "0.0000")
+        self.assertEqual(supervisor.data["expected_amount_so_far"], "0.00")
 
     # --- Cierre en dos pasos ---------------------------------------------
 
@@ -451,8 +451,8 @@ class CashOwnershipTests(TenantTestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["status"], "CLOSED")
-        self.assertEqual(response.data["counted_closing_amount"], "7.0000")
-        self.assertEqual(response.data["difference"], "7.0000")
+        self.assertEqual(response.data["counted_closing_amount"], "7.00")
+        self.assertEqual(response.data["difference"], "7.00")
 
         session.refresh_from_db()
         self.assertEqual(session.approved_by_id, self.admin_user.id)
@@ -498,7 +498,7 @@ class CashOwnershipTests(TenantTestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["status"], "CLOSED")
-        self.assertEqual(response.data["difference"], "3.0000")
+        self.assertEqual(response.data["difference"], "3.00")
 
     def test_closing_an_open_till_without_an_amount_is_rejected(self):
         session = self._open_session(user=self.admin_user)
@@ -526,17 +526,17 @@ class CashOwnershipTests(TenantTestCase):
         )
 
         totals = CashSessionService.payment_totals_by_method(session)
-        self.assertEqual(totals["CASH"], "50.0000")
-        self.assertEqual(totals["CARD"], "30.0000")
-        self.assertEqual(totals["CREDIT_LEDGER"], "20.0000")
+        self.assertEqual(totals["CASH"], "50.00")
+        self.assertEqual(totals["CARD"], "30.00")
+        self.assertEqual(totals["CREDIT_LEDGER"], "20.00")
         self.assertEqual(totals["YAPE"], "0")
 
         detail = self._client_as(self.admin_user).get(
             f"/api/v1/ventas/cash-sessions/{session.id}/"
         )
-        self.assertEqual(detail.data["payment_totals"]["CASH"], "50.0000")
-        self.assertEqual(detail.data["payment_totals"]["CARD"], "30.0000")
-        self.assertEqual(detail.data["payment_totals"]["CREDIT_LEDGER"], "20.0000")
+        self.assertEqual(detail.data["payment_totals"]["CASH"], "50.00")
+        self.assertEqual(detail.data["payment_totals"]["CARD"], "30.00")
+        self.assertEqual(detail.data["payment_totals"]["CREDIT_LEDGER"], "20.00")
 
     # --- Reporte de arqueo (A.3) -----------------------------------------
 

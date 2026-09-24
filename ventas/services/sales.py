@@ -1,5 +1,5 @@
 import uuid
-from decimal import ROUND_HALF_UP, ROUND_UP, Decimal
+from decimal import ROUND_UP, Decimal
 
 from django.db import transaction
 from django.db.models import Sum
@@ -7,6 +7,7 @@ from django.template.loader import render_to_string
 from django.utils import timezone
 from rest_framework.exceptions import APIException, ValidationError
 
+from core.decimals import round2
 from inventario.models import ProductVariant, Stock
 from inventario.services import StockService
 from ventas.models import (
@@ -18,24 +19,6 @@ from ventas.models import (
 from ventas.services.cash import CashSessionService
 from ventas.services.credit import CreditLedgerService
 from ventas.services.promotions import PromotionService
-
-CENT = Decimal("0.01")
-# Escala de los DecimalField de montos (decimal_places=4).
-MONEY_SCALE = Decimal("0.0001")
-
-
-def round_money(value: Decimal) -> Decimal:
-    """Monto de linea a centimos con ROUND_HALF_UP. Se cobra en centimos: si
-    el subtotal o el descuento de una linea arrastran fracciones (15% de
-    10.50 = 1.575; 1.234 kg x 10.50 = 12.957), ningun pago de 2 decimales
-    cuadra con el total y la venta rebota con PAYMENT_MISMATCH. Redondear
-    cada linea (no solo el total) mantiene la suma de los detalles igual al
-    total. El POS aplica la misma regla (src/features/sales/cart/money.ts).
-
-    Devuelve el valor con la escala de la base (8.9200, no 8.92): el total
-    en memoria se serializa con str() en el broadcast del dashboard y en la
-    bitacora, y tiene que verse igual que el que se lee despues de la BD."""
-    return value.quantize(CENT, rounding=ROUND_HALF_UP).quantize(MONEY_SCALE)
 
 
 class InsufficientStockError(APIException):
@@ -205,7 +188,9 @@ class SaleService:
                 raise ValidationError(
                     f"La variante {line['variant_id']} no existe."
                 ) from exc
-            quantity = Decimal(str(line["quantity"]))
+            # A 2 decimales tambien aqui, no solo en el serializer: el sync
+            # offline y convert_to_sale llaman al servicio directo.
+            quantity = round2(line["quantity"])
 
             # Mismo patron que PurchaseService.receive_order (Sprint 5): se
             # lee el stock BAJO el lock de select_for_update, para que el
@@ -238,11 +223,11 @@ class SaleService:
             # esta clave, asi que el comportamiento por defecto no cambia.
             unit_price = line.get("unit_price")
             unit_price = (
-                Decimal(str(unit_price))
+                round2(unit_price)
                 if unit_price is not None
                 else SaleService._resolve_unit_price(variant=variant, quantity=quantity)
             )
-            line_subtotal = round_money(unit_price * quantity)
+            line_subtotal = round2(unit_price * quantity)
 
             discount_amount = line.get("discount_amount")
             if discount_amount is None:
@@ -250,7 +235,7 @@ class SaleService:
                     variant=variant, quantity=quantity, unit_price=unit_price, at=at
                 )
             else:
-                discount_amount = round_money(
+                discount_amount = round2(
                     min(Decimal(str(discount_amount)), line_subtotal)
                 )
                 line_percent = SaleService.discount_percent(
@@ -584,13 +569,13 @@ class SaleService:
 
         # Sobre el subtotal ya redondeado: el % se aplica al monto que ve el
         # cliente en la linea, y el descuento tambien queda en centimos.
-        line_subtotal = round_money(unit_price * quantity)
+        line_subtotal = round2(unit_price * quantity)
         if promotion.type == "PERCENTAGE":
-            return round_money(line_subtotal * promotion.value / Decimal("100"))
+            return round2(line_subtotal * promotion.value / Decimal("100"))
         # FIXED_AMOUNT: monto fijo por unidad, nunca mas que el subtotal de
         # la linea (sin regla documentada sobre si escala con la cantidad;
         # se asume por unidad, tope al subtotal para no dejarlo negativo).
-        return min(round_money(promotion.value * quantity), line_subtotal)
+        return min(round2(promotion.value * quantity), line_subtotal)
 
     @staticmethod
     def _next_invoice_number() -> str:

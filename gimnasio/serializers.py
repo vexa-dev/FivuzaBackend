@@ -91,7 +91,7 @@ class MembershipCreateSerializer(serializers.Serializer):
 
 class MembershipRenewSerializer(serializers.Serializer):
     payment_amount = serializers.DecimalField(
-        max_digits=12, decimal_places=4, min_value=0, required=False, allow_null=True
+        max_digits=12, decimal_places=2, min_value=0, required=False, allow_null=True
     )
     payment_method = serializers.ChoiceField(
         choices=["CASH", "CARD", "YAPE"], required=False, default="CASH"

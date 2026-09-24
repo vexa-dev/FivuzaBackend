@@ -6,7 +6,7 @@ CENT = Decimal("0.01")
 
 
 def _round(value: Decimal) -> Decimal:
-    # Copia de ventas.services.sales.round_money: una migracion no debe
+    # Copia de core.decimals.round2: una migracion no debe
     # importar codigo de la app, que puede cambiar despues.
     return value.quantize(CENT, rounding=ROUND_HALF_UP)
 

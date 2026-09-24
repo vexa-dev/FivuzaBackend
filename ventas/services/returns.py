@@ -4,6 +4,7 @@ from django.db import transaction
 from django.db.models import Sum
 from rest_framework.exceptions import ValidationError
 
+from core.decimals import round2
 from inventario.models import ProductVariant, Stock
 from inventario.services import StockService
 from ventas.models import (
@@ -19,7 +20,6 @@ from ventas.services.sales import (
     NoCashSessionError,
     ReturnExceedsSoldError,
     SaleNotCompletedError,
-    round_money,
 )
 
 
@@ -77,7 +77,7 @@ class ReturnService:
             already_returned = returned["quantity"] or Decimal("0")
             already_refunded = returned["refunded"] or Decimal("0")
             available = sale_detail.quantity - already_returned
-            quantity_returned = Decimal(str(item["quantity_returned"]))
+            quantity_returned = round2(item["quantity_returned"])
             if quantity_returned > available:
                 raise ReturnExceedsSoldError(
                     sku=sale_detail.sku_snapshot,
@@ -97,12 +97,12 @@ class ReturnService:
             # exacto: entre todas reembolsan justo lo que se cobro. El tope
             # evita que muchas parciales redondeadas hacia arriba (20 x 0.005
             # -> 0.01) pasen lo que queda por reembolsar de la linea.
-            remaining = round_money(sale_detail.subtotal - already_refunded)
+            remaining = round2(sale_detail.subtotal - already_refunded)
             if quantity_returned == available:
                 subtotal = remaining
             else:
                 subtotal = min(
-                    round_money(
+                    round2(
                         sale_detail.subtotal * quantity_returned / sale_detail.quantity
                     ),
                     remaining,

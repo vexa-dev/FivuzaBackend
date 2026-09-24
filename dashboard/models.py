@@ -34,9 +34,9 @@ class DailySalesSummary(models.Model):
     id = models.IntegerField(primary_key=True)
     sale_date = models.DateField()
     warehouse_id = models.IntegerField()
-    total_sales = models.DecimalField(max_digits=14, decimal_places=4)
+    total_sales = models.DecimalField(max_digits=14, decimal_places=2)
     total_transactions = models.IntegerField()
-    total_discount = models.DecimalField(max_digits=14, decimal_places=4)
+    total_discount = models.DecimalField(max_digits=14, decimal_places=2)
     refreshed_at = models.DateTimeField()
 
     class Meta:
@@ -52,8 +52,8 @@ class LowStockAlert(models.Model):
     id = models.IntegerField(primary_key=True)
     variant_id = models.IntegerField()
     warehouse_id = models.IntegerField()
-    current_quantity = models.DecimalField(max_digits=12, decimal_places=3)
-    min_stock = models.DecimalField(max_digits=12, decimal_places=3)
+    current_quantity = models.DecimalField(max_digits=12, decimal_places=2)
+    min_stock = models.DecimalField(max_digits=12, decimal_places=2)
     refreshed_at = models.DateTimeField()
 
     class Meta:
