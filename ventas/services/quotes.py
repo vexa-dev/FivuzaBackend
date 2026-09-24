@@ -12,7 +12,7 @@ from ventas.models import (
     QuoteDetail,
     Sale,
 )
-from ventas.services.sales import SaleService
+from ventas.services.sales import SaleService, round_money
 
 
 class QuoteNotAcceptedError(APIException):
@@ -82,14 +82,16 @@ class QuoteService:
             unit_price = SaleService._resolve_unit_price(
                 variant=variant, quantity=quantity
             )
-            line_subtotal = unit_price * quantity
+            # Misma regla de centimos que create_sale(): convert_to_sale()
+            # le pasa estos montos congelados y el total tiene que coincidir.
+            line_subtotal = round_money(unit_price * quantity)
             discount_amount = line.get("discount_amount")
             if discount_amount is None:
                 discount_amount = SaleService._resolve_promotion_discount(
                     variant=variant, quantity=quantity, unit_price=unit_price, at=at
                 )
             else:
-                discount_amount = Decimal(str(discount_amount))
+                discount_amount = round_money(Decimal(str(discount_amount)))
                 line_percent = SaleService.discount_percent(
                     discount_amount, line_subtotal
                 )

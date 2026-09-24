@@ -1,5 +1,5 @@
 import uuid
-from decimal import ROUND_UP, Decimal
+from decimal import ROUND_HALF_UP, ROUND_UP, Decimal
 
 from django.db import transaction
 from django.db.models import Sum
@@ -18,6 +18,24 @@ from ventas.models import (
 from ventas.services.cash import CashSessionService
 from ventas.services.credit import CreditLedgerService
 from ventas.services.promotions import PromotionService
+
+CENT = Decimal("0.01")
+# Escala de los DecimalField de montos (decimal_places=4).
+MONEY_SCALE = Decimal("0.0001")
+
+
+def round_money(value: Decimal) -> Decimal:
+    """Monto de linea a centimos con ROUND_HALF_UP. Se cobra en centimos: si
+    el subtotal o el descuento de una linea arrastran fracciones (15% de
+    10.50 = 1.575; 1.234 kg x 10.50 = 12.957), ningun pago de 2 decimales
+    cuadra con el total y la venta rebota con PAYMENT_MISMATCH. Redondear
+    cada linea (no solo el total) mantiene la suma de los detalles igual al
+    total. El POS aplica la misma regla (src/features/sales/cart/money.ts).
+
+    Devuelve el valor con la escala de la base (8.9200, no 8.92): el total
+    en memoria se serializa con str() en el broadcast del dashboard y en la
+    bitacora, y tiene que verse igual que el que se lee despues de la BD."""
+    return value.quantize(CENT, rounding=ROUND_HALF_UP).quantize(MONEY_SCALE)
 
 
 class InsufficientStockError(APIException):
@@ -224,7 +242,7 @@ class SaleService:
                 if unit_price is not None
                 else SaleService._resolve_unit_price(variant=variant, quantity=quantity)
             )
-            line_subtotal = unit_price * quantity
+            line_subtotal = round_money(unit_price * quantity)
 
             discount_amount = line.get("discount_amount")
             if discount_amount is None:
@@ -232,7 +250,9 @@ class SaleService:
                     variant=variant, quantity=quantity, unit_price=unit_price, at=at
                 )
             else:
-                discount_amount = min(Decimal(str(discount_amount)), line_subtotal)
+                discount_amount = round_money(
+                    min(Decimal(str(discount_amount)), line_subtotal)
+                )
                 line_percent = SaleService.discount_percent(
                     discount_amount, line_subtotal
                 )
@@ -562,13 +582,15 @@ class SaleService:
         if promotion is None:
             return Decimal("0")
 
-        line_subtotal = unit_price * quantity
+        # Sobre el subtotal ya redondeado: el % se aplica al monto que ve el
+        # cliente en la linea, y el descuento tambien queda en centimos.
+        line_subtotal = round_money(unit_price * quantity)
         if promotion.type == "PERCENTAGE":
-            return line_subtotal * promotion.value / Decimal("100")
+            return round_money(line_subtotal * promotion.value / Decimal("100"))
         # FIXED_AMOUNT: monto fijo por unidad, nunca mas que el subtotal de
         # la linea (sin regla documentada sobre si escala con la cantidad;
         # se asume por unidad, tope al subtotal para no dejarlo negativo).
-        return min(promotion.value * quantity, line_subtotal)
+        return min(round_money(promotion.value * quantity), line_subtotal)
 
     @staticmethod
     def _next_invoice_number() -> str:
