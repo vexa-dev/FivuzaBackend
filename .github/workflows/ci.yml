@@ -83,6 +83,16 @@ jobs:
         python manage.py makemigrations --check --dry-run
     - name: Validate OpenAPI
       run: python manage.py spectacular --validate --fail-on-warn --file openapi.yml
+    - name: OpenAPI contract is up to date
+      # El paso anterior regenera openapi.yml; si difiere del commiteado, el
+      # contrato quedo desactualizado (paso desde el Bloque A sin que el CI
+      # lo notara). Se corrige con:
+      #   python manage.py spectacular --file openapi.yml
+      run: |
+        if ! git diff --exit-code -- openapi.yml; then
+          echo "::error file=openapi.yml::openapi.yml esta desactualizado. Regeneralo con 'python manage.py spectacular --file openapi.yml' y commitealo."
+          exit 1
+        fi
 
   build:
     runs-on: ubuntu-latest

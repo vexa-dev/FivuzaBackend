@@ -302,6 +302,53 @@ class CashOwnershipTests(TenantTestCase):
         )
         self.assertEqual(sale.cash_session_id, session.id)
 
+    def test_supervisor_cannot_sell_on_a_till_assigned_to_someone_else(self):
+        """CASH_CLOSE deja cerrar la caja ajena, no meterle ventas: las
+        ventas del supervisor descuadrarian el arqueo del cajero."""
+        session = self._open_session(
+            register=self.assigned_register, user=self.seller_one
+        )
+        variant = self._create_variant()
+        with self.assertRaises(CashSessionNotOwnedError):
+            SaleService.create_sale(
+                customer=self.customer,
+                cash_session=session,
+                user=self.admin_user,
+                lines=[{"variant_id": variant.id, "quantity": "1"}],
+                payments=[{"method": "CASH", "amount": Decimal("20.00")}],
+            )
+
+    def test_assigned_cashier_sells_on_a_till_the_supervisor_opened(self):
+        """El supervisor puede abrir la caja asignada por el cajero; el turno
+        sigue siendo del asignado."""
+        session = self._open_session(
+            register=self.assigned_register, user=self.admin_user
+        )
+        variant = self._create_variant()
+        sale = SaleService.create_sale(
+            customer=self.customer,
+            cash_session=session,
+            user=self.seller_one,
+            lines=[{"variant_id": variant.id, "quantity": "1"}],
+            payments=[{"method": "CASH", "amount": Decimal("20.00")}],
+        )
+        self.assertEqual(sale.cash_session_id, session.id)
+
+    def test_sellable_filter_only_lists_the_supervisors_own_tills(self):
+        """El supervisor lista todas las sesiones (para cerrarlas), pero el
+        selector del POS pide ?sellable=true y solo recibe las suyas."""
+        own = self._open_session(register=self.free_register, user=self.admin_user)
+        self._open_session(register=self.assigned_register, user=self.admin_user)
+        client = self._client_as(self.admin_user)
+
+        url = "/api/v1/ventas/cash-sessions/?status=OPEN"
+        all_ids = [row["id"] for row in client.get(url).data["results"]]
+        sellable = client.get(f"{url}&sellable=true").data["results"]
+        sellable_ids = [row["id"] for row in sellable]
+
+        self.assertEqual(len(all_ids), 2)
+        self.assertEqual(sellable_ids, [own.id])
+
     def test_supervisor_can_close_a_session_he_did_not_open(self):
         """El caso real: el cajero se fue sin cerrar."""
         session = self._open_session(user=self.seller_one)
