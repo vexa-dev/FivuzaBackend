@@ -573,7 +573,7 @@ class EmployeeEndpointsTests(TenantTestCase):
             format="json",
         )
         self.assertEqual(generate.status_code, 201)
-        self.assertEqual(generate.data["net_amount"], "1850.0000")
+        self.assertEqual(generate.data["net_amount"], "1850.00")
         self.assertEqual(generate.data["status"], "PENDING")
 
         payroll_id = generate.data["id"]
@@ -646,7 +646,7 @@ class EmployeeEndpointsTests(TenantTestCase):
             "?period_start=2026-08-01&period_end=2026-08-31"
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["total_net_amount"], "1800.0000")
+        self.assertEqual(response.data["total_net_amount"], "1800.00")
 
     def test_payroll_cost_report_xlsx_export(self):
         client = self._client_as(self.admin_user)

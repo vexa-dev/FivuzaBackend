@@ -208,7 +208,7 @@ class Employee(SoftDeleteModel):
         max_length=10,
         choices=[("MONTHLY", "MONTHLY"), ("DAILY", "DAILY"), ("HOURLY", "HOURLY")],
     )
-    salary_amount = models.DecimalField(max_digits=12, decimal_places=4)
+    salary_amount = models.DecimalField(max_digits=12, decimal_places=2)
     currency = models.CharField(max_length=3, default="PEN")
     hire_date = models.DateField()
     termination_date = models.DateField(null=True, blank=True)
@@ -338,10 +338,10 @@ class EmployeePayroll(models.Model):
     )
     period_start = models.DateField()
     period_end = models.DateField()
-    base_salary = models.DecimalField(max_digits=12, decimal_places=4)
-    bonuses = models.DecimalField(max_digits=12, decimal_places=4, default=0)
-    deductions = models.DecimalField(max_digits=12, decimal_places=4, default=0)
-    net_amount = models.DecimalField(max_digits=12, decimal_places=4)
+    base_salary = models.DecimalField(max_digits=12, decimal_places=2)
+    bonuses = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    deductions = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    net_amount = models.DecimalField(max_digits=12, decimal_places=2)
     status = models.CharField(
         max_length=10, choices=[("PENDING", "PENDING"), ("PAID", "PAID")]
     )

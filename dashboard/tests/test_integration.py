@@ -110,7 +110,7 @@ class SaleCompletedDashboardIntegrationTests(TenantTestCase):
 
         after = DashboardMetricsService.get_all_metrics(warehouse_id=None)
         self.assertEqual(after["today"]["total_transactions"], 1)
-        self.assertEqual(after["today"]["total_sales"], "40.0000")
+        self.assertEqual(after["today"]["total_sales"], "40.00")
 
     def test_scoped_metrics_are_cached_per_warehouse_set(self):
         """PR #79: get_all_metrics() dejaba de cachear apenas warehouse_ids
@@ -172,6 +172,6 @@ class SaleCompletedDashboardIntegrationTests(TenantTestCase):
         event = await communicator.receive_json_from()
         self.assertEqual(event["event"], "sale_completed")
         self.assertEqual(event["warehouse_id"], self.warehouse.id)
-        self.assertEqual(event["total"], "20.0000")
+        self.assertEqual(event["total"], "20.00")
 
         await communicator.disconnect()

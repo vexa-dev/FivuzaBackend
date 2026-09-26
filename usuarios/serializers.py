@@ -559,10 +559,10 @@ class PayrollGenerateSerializer(serializers.Serializer):
     period_start = serializers.DateField()
     period_end = serializers.DateField()
     bonuses = serializers.DecimalField(
-        max_digits=12, decimal_places=4, default=Decimal("0")
+        max_digits=12, decimal_places=2, default=Decimal("0")
     )
     deductions = serializers.DecimalField(
-        max_digits=12, decimal_places=4, default=Decimal("0")
+        max_digits=12, decimal_places=2, default=Decimal("0")
     )
 
     def validate(self, attrs):

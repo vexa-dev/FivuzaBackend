@@ -229,7 +229,7 @@ class TenantSettings(models.Model):
     # asincrono al administrador (TRD §5.4). No hay un valor "correcto" único
     # documentado -se asume 20.00 como default razonable, ajustable por tenant.
     cash_difference_alert_threshold = models.DecimalField(
-        max_digits=12, decimal_places=4, default=20
+        max_digits=12, decimal_places=2, default=20
     )
     # Sprint 24: cada cuantos minutos DashboardRefreshService recalcula las
     # vistas materializadas de este tenant (Esquema Backend §9.2). No hay un

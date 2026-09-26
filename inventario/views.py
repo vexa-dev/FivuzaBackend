@@ -11,6 +11,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from core.date_filters import day_range, optional_date
+from core.decimals import round2
 from core.permissions import RequiresFeature, TenantNotCanceled, TenantNotSuspended
 from core.openapi import SchemaAPIView
 from core.viewsets import SoftDeleteDestroyMixin
@@ -556,9 +557,8 @@ class StockValuationReportView(SchemaAPIView):
         rows = []
         total_value = Decimal("0")
         for stock in queryset.order_by("warehouse__name", "variant__sku"):
-            # quantity (3 decimales) x cost (4 decimales) da 7 -se redondea a
-            # la misma precision monetaria que el resto del sistema.
-            value = (stock.quantity * stock.variant.cost).quantize(Decimal("0.0001"))
+            # quantity x cost da hasta 4 decimales: a 2, como todo monto.
+            value = round2(stock.quantity * stock.variant.cost)
             total_value += value
             rows.append(
                 {

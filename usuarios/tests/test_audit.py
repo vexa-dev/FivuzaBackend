@@ -434,7 +434,7 @@ class TenantAuditTests(TenantTestCase):
 
         self.assertEqual(
             cost_change(self.admin_user)["cost"],
-            {"before": "3.0000", "after": "4.5000"},
+            {"before": "3.00", "after": "4.50"},
         )
         self.assertNotIn("cost", cost_change(self.auditor_user))
 

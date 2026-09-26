@@ -103,7 +103,7 @@ class PurchaseThenSaleIntegrationTests(TenantTestCase):
     def test_gross_margin_reflects_the_cost_left_by_the_purchase(self):
         self._receive_purchase(quantity="20", unit_cost="30.00")
         self.variant.refresh_from_db()
-        self.assertEqual(self.variant.cost, Decimal("30.0000"))
+        self.assertEqual(self.variant.cost, Decimal("30.00"))
 
         session = self._open_session()
         SaleService.create_sale(
@@ -115,15 +115,15 @@ class PurchaseThenSaleIntegrationTests(TenantTestCase):
         )
 
         stock = Stock.objects.get(variant=self.variant, warehouse=self.warehouse)
-        self.assertEqual(stock.quantity, Decimal("15.000"))
+        self.assertEqual(stock.quantity, Decimal("15.00"))
 
         today = timezone.localdate()
         margin = DashboardMetricsService.gross_margin(date_from=today, date_to=today)
         # Ingreso: 5 x 50.00 = 250.00. Costo: 5 x 30.00 (el de la compra,
         # no el 0.00 con el que nacio la variante) = 150.00.
-        self.assertEqual(margin["total_revenue"], "250.0000")
-        self.assertEqual(margin["total_cost"], "150.0000")
-        self.assertEqual(margin["gross_margin"], "100.0000")
+        self.assertEqual(margin["total_revenue"], "250.00")
+        self.assertEqual(margin["total_cost"], "150.00")
+        self.assertEqual(margin["gross_margin"], "100.00")
 
     def test_a_second_purchase_reprices_future_sales_but_not_the_margin_of_past_ones(
         self,
@@ -146,19 +146,19 @@ class PurchaseThenSaleIntegrationTests(TenantTestCase):
         margin_before = DashboardMetricsService.gross_margin(
             date_from=today, date_to=today
         )
-        self.assertEqual(margin_before["total_cost"], "20.0000")
+        self.assertEqual(margin_before["total_cost"], "20.00")
 
         # La venta ya bajo el stock a 8 antes de esta segunda compra -el
         # promedio ponderado pesa contra ese stock restante, no contra las
-        # 10 unidades originales: (10.00*8 + 50.00*10) / 18 = 32.2222.
+        # 10 unidades originales: (10.00*8 + 50.00*10) / 18 = 32.2222 -> 32.22.
         self._receive_purchase(quantity="10", unit_cost="50.00")
         self.variant.refresh_from_db()
-        self.assertEqual(self.variant.cost, Decimal("32.2222"))
+        self.assertEqual(self.variant.cost, Decimal("32.22"))
 
         margin_after = DashboardMetricsService.gross_margin(
             date_from=today, date_to=today
         )
-        self.assertEqual(margin_after["total_cost"], "64.4444")
+        self.assertEqual(margin_after["total_cost"], "64.44")
 
     def test_transfer_stock_between_warehouses_does_not_change_variant_cost(self):
         self._receive_purchase(quantity="10", unit_cost="15.00")
@@ -178,11 +178,11 @@ class PurchaseThenSaleIntegrationTests(TenantTestCase):
         self.assertEqual(self.variant.cost, cost_before)
         self.assertEqual(
             Stock.objects.get(variant=self.variant, warehouse=self.warehouse).quantity,
-            Decimal("6.000"),
+            Decimal("6.00"),
         )
         self.assertEqual(
             Stock.objects.get(
                 variant=self.variant, warehouse=secondary_warehouse
             ).quantity,
-            Decimal("4.000"),
+            Decimal("4.00"),
         )

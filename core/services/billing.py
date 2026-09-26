@@ -4,6 +4,7 @@ from decimal import Decimal
 from django.utils import timezone
 from rest_framework.exceptions import APIException
 
+from core.decimals import round2
 from core.models import (
     Subscription,
     SubscriptionDiscount,
@@ -135,7 +136,9 @@ class SubscriptionDiscountService:
         plan_price = getattr(
             subscription.plan, _BILLING_CYCLE_PRICE_FIELD[subscription.billing_cycle]
         )
-        return plan_price * (Decimal("1") - discount.discount_percent / Decimal("100"))
+        return round2(
+            plan_price * (Decimal("1") - discount.discount_percent / Decimal("100"))
+        )
 
     @staticmethod
     def remove_discount(discount: SubscriptionDiscount) -> None:

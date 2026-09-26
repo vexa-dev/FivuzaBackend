@@ -4,6 +4,7 @@ from django.db import transaction
 from django.db.models import Sum
 from rest_framework.exceptions import ValidationError
 
+from core.decimals import round2
 from inventario.models import ProductVariant, Stock
 from inventario.services import StockService
 from ventas.models import (
@@ -70,11 +71,13 @@ class ReturnService:
                 raise ValidationError(
                     f"La linea {item['sale_detail_id']} no pertenece a esta venta."
                 ) from exc
-            already_returned = SaleReturnDetail.objects.filter(
+            returned = SaleReturnDetail.objects.filter(
                 sale_detail=sale_detail
-            ).aggregate(total=Sum("quantity_returned"))["total"] or Decimal("0")
+            ).aggregate(quantity=Sum("quantity_returned"), refunded=Sum("subtotal"))
+            already_returned = returned["quantity"] or Decimal("0")
+            already_refunded = returned["refunded"] or Decimal("0")
             available = sale_detail.quantity - already_returned
-            quantity_returned = Decimal(str(item["quantity_returned"]))
+            quantity_returned = round2(item["quantity_returned"])
             if quantity_returned > available:
                 raise ReturnExceedsSoldError(
                     sku=sale_detail.sku_snapshot,
@@ -86,8 +89,24 @@ class ReturnService:
             # original -no al unit_price bruto, para que devolver media
             # linea con descuento reembolse la mitad de lo que el cliente
             # realmente pago, no de lista.
-            unit_refund = sale_detail.subtotal / sale_detail.quantity
-            subtotal = unit_refund * quantity_returned
+            #
+            # Se reembolsa en centimos (ROUND_HALF_UP, misma regla que la
+            # venta). Redondear cada devolucion parcial por separado puede
+            # descuadrar la suma (3 x 3.33 de una linea de 10.00 = 9.99),
+            # asi que la devolucion que completa la linea se lleva el resto
+            # exacto: entre todas reembolsan justo lo que se cobro. El tope
+            # evita que muchas parciales redondeadas hacia arriba (20 x 0.005
+            # -> 0.01) pasen lo que queda por reembolsar de la linea.
+            remaining = round2(sale_detail.subtotal - already_refunded)
+            if quantity_returned == available:
+                subtotal = remaining
+            else:
+                subtotal = min(
+                    round2(
+                        sale_detail.subtotal * quantity_returned / sale_detail.quantity
+                    ),
+                    remaining,
+                )
             prepared_items.append(
                 {
                     "sale_detail": sale_detail,

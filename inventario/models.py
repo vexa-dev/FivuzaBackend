@@ -165,9 +165,9 @@ class ProductVariant(SoftDeleteModel):
     )
     sku = models.CharField(max_length=100, unique=True)
     barcode = models.CharField(max_length=100, unique=True, null=True, blank=True)
-    cost = models.DecimalField(max_digits=12, decimal_places=4, default=0)
-    price = models.DecimalField(max_digits=12, decimal_places=4, default=0)
-    min_stock = models.DecimalField(max_digits=12, decimal_places=3, default=0)
+    cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    min_stock = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     image_url = models.URLField(null=True, blank=True)
     is_default = models.BooleanField(default=True)
     is_active = models.BooleanField(default=True)
@@ -209,16 +209,16 @@ class ProductPriceHistory(models.Model):
         ProductVariant, on_delete=models.PROTECT, related_name="price_history"
     )
     old_cost = models.DecimalField(
-        max_digits=12, decimal_places=4, null=True, blank=True
+        max_digits=12, decimal_places=2, null=True, blank=True
     )
     new_cost = models.DecimalField(
-        max_digits=12, decimal_places=4, null=True, blank=True
+        max_digits=12, decimal_places=2, null=True, blank=True
     )
     old_price = models.DecimalField(
-        max_digits=12, decimal_places=4, null=True, blank=True
+        max_digits=12, decimal_places=2, null=True, blank=True
     )
     new_price = models.DecimalField(
-        max_digits=12, decimal_places=4, null=True, blank=True
+        max_digits=12, decimal_places=2, null=True, blank=True
     )
     changed_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="+")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -237,8 +237,8 @@ class VolumePricingTier(models.Model):
     variant = models.ForeignKey(
         ProductVariant, on_delete=models.CASCADE, related_name="pricing_tiers"
     )
-    min_quantity = models.DecimalField(max_digits=12, decimal_places=3)
-    unit_price = models.DecimalField(max_digits=12, decimal_places=4)
+    min_quantity = models.DecimalField(max_digits=12, decimal_places=2)
+    unit_price = models.DecimalField(max_digits=12, decimal_places=2)
 
     class Meta:
         db_table = "volume_pricing_tiers"
@@ -259,7 +259,7 @@ class Stock(models.Model):
     warehouse = models.ForeignKey(
         Warehouse, on_delete=models.PROTECT, related_name="stock"
     )
-    quantity = models.DecimalField(max_digits=12, decimal_places=3, default=0)
+    quantity = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -286,7 +286,7 @@ class InventoryMovement(models.Model):
         User, on_delete=models.PROTECT, related_name="inventory_movements"
     )
     type = models.CharField(max_length=3, choices=[("IN", "IN"), ("OUT", "OUT")])
-    quantity = models.DecimalField(max_digits=12, decimal_places=3)
+    quantity = models.DecimalField(max_digits=12, decimal_places=2)
     concept = models.CharField(
         max_length=20,
         choices=[
@@ -309,7 +309,7 @@ class InventoryMovement(models.Model):
     # sobre una tabla particionada potencialmente grande -StockService ya
     # conoce este valor en el momento de escribir, es mas barato guardarlo
     # que recalcularlo (Esquema Backend §5.2).
-    resulting_balance = models.DecimalField(max_digits=12, decimal_places=3)
+    resulting_balance = models.DecimalField(max_digits=12, decimal_places=2)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -376,7 +376,7 @@ class PurchaseOrder(models.Model):
             ("CANCELLED", "CANCELLED"),
         ],
     )
-    total = models.DecimalField(max_digits=12, decimal_places=4)
+    total = models.DecimalField(max_digits=12, decimal_places=2)
     currency = models.CharField(max_length=3, default="PEN")
     received_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -398,9 +398,9 @@ class PurchaseOrderDetail(models.Model):
     variant_id = (
         models.IntegerField()
     )  # desacoplado, sin FK física (igual que sale_details)
-    quantity = models.DecimalField(max_digits=12, decimal_places=3)
-    unit_cost = models.DecimalField(max_digits=12, decimal_places=4)
-    subtotal = models.DecimalField(max_digits=12, decimal_places=4)
+    quantity = models.DecimalField(max_digits=12, decimal_places=2)
+    unit_cost = models.DecimalField(max_digits=12, decimal_places=2)
+    subtotal = models.DecimalField(max_digits=12, decimal_places=2)
 
     class Meta:
         db_table = "purchase_order_details"

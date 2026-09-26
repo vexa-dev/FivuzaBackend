@@ -117,4 +117,4 @@ class SaleServiceConcurrencyTests(TransactionTestCase):
         self.assertEqual(len(results), 2)
         self.assertEqual(list(results.values()).count("sold"), 1)
         self.assertEqual(list(results.values()).count("rejected"), 1)
-        self.assertEqual(final_stock.quantity, Decimal("2.000"))
+        self.assertEqual(final_stock.quantity, Decimal("2.00"))

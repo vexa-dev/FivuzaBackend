@@ -38,16 +38,16 @@ class CashSession(models.Model):
     user = models.ForeignKey(
         User, on_delete=models.PROTECT, related_name="cash_sessions"
     )
-    opening_amount = models.DecimalField(max_digits=12, decimal_places=4)
+    opening_amount = models.DecimalField(max_digits=12, decimal_places=2)
     opening_at = models.DateTimeField()
     expected_closing_amount = models.DecimalField(
-        max_digits=12, decimal_places=4, null=True, blank=True
+        max_digits=12, decimal_places=2, null=True, blank=True
     )
     counted_closing_amount = models.DecimalField(
-        max_digits=12, decimal_places=4, null=True, blank=True
+        max_digits=12, decimal_places=2, null=True, blank=True
     )
     difference = models.DecimalField(
-        max_digits=12, decimal_places=4, null=True, blank=True
+        max_digits=12, decimal_places=2, null=True, blank=True
     )
     # Bloque A: PENDING_APPROVAL es el paso intermedio del cierre en dos
     # pasos -el cajero entrega su conteo y la caja deja de admitir ventas y
@@ -110,7 +110,7 @@ class CashMovement(models.Model):
             ("DEVOLUCION", "DEVOLUCION"),
         ],
     )
-    amount = models.DecimalField(max_digits=12, decimal_places=4)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
     reason = models.TextField(blank=True)
     receipt_url = models.URLField(max_length=500, null=True, blank=True)
     user = models.ForeignKey(
@@ -144,7 +144,7 @@ class Customer(models.Model):
     # por cliente". None = sin limite (todo cliente existente sigue vendiendo
     # a credito sin restriccion hasta que el negocio le fije un tope).
     credit_limit = models.DecimalField(
-        max_digits=12, decimal_places=4, null=True, blank=True
+        max_digits=12, decimal_places=2, null=True, blank=True
     )
     is_active = models.BooleanField(default=True)
     search_vector = SearchVectorField(null=True, blank=True)
@@ -178,7 +178,7 @@ class Promotion(models.Model):
         max_length=20,
         choices=[("PERCENTAGE", "PERCENTAGE"), ("FIXED_AMOUNT", "FIXED_AMOUNT")],
     )
-    value = models.DecimalField(max_digits=12, decimal_places=4)
+    value = models.DecimalField(max_digits=12, decimal_places=2)
     start_date = models.DateTimeField()
     end_date = models.DateTimeField()
     is_active = models.BooleanField(default=True)
@@ -235,9 +235,9 @@ class Sale(models.Model):
         blank=True,
         related_name="sales",
     )
-    subtotal = models.DecimalField(max_digits=12, decimal_places=4)
-    discount_total = models.DecimalField(max_digits=12, decimal_places=4, default=0)
-    total = models.DecimalField(max_digits=12, decimal_places=4)
+    subtotal = models.DecimalField(max_digits=12, decimal_places=2)
+    discount_total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total = models.DecimalField(max_digits=12, decimal_places=2)
     currency = models.CharField(max_length=3, default="PEN")
     payment_status = models.CharField(
         max_length=10,
@@ -313,7 +313,7 @@ class SalePayment(models.Model):
             ("BALANCE", "BALANCE"),
         ],
     )
-    amount = models.DecimalField(max_digits=12, decimal_places=4)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -336,10 +336,10 @@ class SaleDetail(models.Model):
     variant_id = models.IntegerField()
     product_name_snapshot = models.CharField(max_length=200)
     sku_snapshot = models.CharField(max_length=100)
-    quantity = models.DecimalField(max_digits=12, decimal_places=3)
-    unit_price = models.DecimalField(max_digits=12, decimal_places=4)
-    discount_amount = models.DecimalField(max_digits=12, decimal_places=4, default=0)
-    subtotal = models.DecimalField(max_digits=12, decimal_places=4)
+    quantity = models.DecimalField(max_digits=12, decimal_places=2)
+    unit_price = models.DecimalField(max_digits=12, decimal_places=2)
+    discount_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    subtotal = models.DecimalField(max_digits=12, decimal_places=2)
 
     class Meta:
         db_table = "sale_details"
@@ -351,7 +351,7 @@ class SaleReturn(models.Model):
         User, on_delete=models.PROTECT, related_name="sale_returns"
     )
     reason = models.CharField(max_length=255, blank=True)
-    total_refund_amount = models.DecimalField(max_digits=12, decimal_places=4)
+    total_refund_amount = models.DecimalField(max_digits=12, decimal_places=2)
     refund_type = models.CharField(
         max_length=10, choices=[("BALANCE", "BALANCE"), ("CASH", "CASH")]
     )
@@ -374,9 +374,9 @@ class SaleReturnDetail(models.Model):
     sale_detail = models.ForeignKey(
         SaleDetail, on_delete=models.PROTECT, related_name="return_details"
     )
-    quantity_returned = models.DecimalField(max_digits=12, decimal_places=3)
+    quantity_returned = models.DecimalField(max_digits=12, decimal_places=2)
     restock = models.BooleanField(default=True)  # False para ítems tipo SERVICE
-    subtotal = models.DecimalField(max_digits=12, decimal_places=4)
+    subtotal = models.DecimalField(max_digits=12, decimal_places=2)
 
     class Meta:
         db_table = "sale_return_details"
@@ -398,7 +398,7 @@ class CustomerDebtLedger(models.Model):
     type = models.CharField(
         max_length=6, choices=[("DEBIT", "DEBIT"), ("CREDIT", "CREDIT")]
     )
-    amount = models.DecimalField(max_digits=12, decimal_places=4)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
     currency = models.CharField(max_length=3, default="PEN")
     description = models.CharField(max_length=255, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -432,7 +432,7 @@ class ProductReservation(models.Model):
     warehouse = models.ForeignKey(
         Warehouse, on_delete=models.PROTECT, related_name="reservations"
     )
-    quantity = models.DecimalField(max_digits=12, decimal_places=3)
+    quantity = models.DecimalField(max_digits=12, decimal_places=2)
     expires_at = models.DateTimeField()
     status = models.CharField(
         max_length=10,
@@ -493,9 +493,9 @@ class Quote(models.Model):
         default="DRAFT",
     )
     valid_until = models.DateTimeField()
-    subtotal = models.DecimalField(max_digits=12, decimal_places=4)
-    discount_total = models.DecimalField(max_digits=12, decimal_places=4, default=0)
-    total = models.DecimalField(max_digits=12, decimal_places=4)
+    subtotal = models.DecimalField(max_digits=12, decimal_places=2)
+    discount_total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total = models.DecimalField(max_digits=12, decimal_places=2)
     sale = models.ForeignKey(
         Sale, on_delete=models.PROTECT, null=True, blank=True, related_name="quotes"
     )
@@ -522,10 +522,10 @@ class QuoteDetail(models.Model):
     variant_id = models.IntegerField()
     product_name_snapshot = models.CharField(max_length=200)
     sku_snapshot = models.CharField(max_length=100)
-    quantity = models.DecimalField(max_digits=12, decimal_places=3)
-    unit_price = models.DecimalField(max_digits=12, decimal_places=4)
-    discount_amount = models.DecimalField(max_digits=12, decimal_places=4, default=0)
-    subtotal = models.DecimalField(max_digits=12, decimal_places=4)
+    quantity = models.DecimalField(max_digits=12, decimal_places=2)
+    unit_price = models.DecimalField(max_digits=12, decimal_places=2)
+    discount_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    subtotal = models.DecimalField(max_digits=12, decimal_places=2)
 
     class Meta:
         db_table = "quote_details"
@@ -554,7 +554,7 @@ class CustomerBalanceLedger(models.Model):
     type = models.CharField(
         max_length=6, choices=[("CREDIT", "CREDIT"), ("DEBIT", "DEBIT")]
     )
-    amount = models.DecimalField(max_digits=12, decimal_places=4)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
     currency = models.CharField(max_length=3, default="PEN")
     description = models.CharField(max_length=255, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

@@ -7,6 +7,7 @@ from django.template.loader import render_to_string
 from django.utils import timezone
 from rest_framework.exceptions import APIException, ValidationError
 
+from core.decimals import round2
 from inventario.models import ProductVariant, Stock
 from inventario.services import StockService
 from ventas.models import (
@@ -187,7 +188,9 @@ class SaleService:
                 raise ValidationError(
                     f"La variante {line['variant_id']} no existe."
                 ) from exc
-            quantity = Decimal(str(line["quantity"]))
+            # A 2 decimales tambien aqui, no solo en el serializer: el sync
+            # offline y convert_to_sale llaman al servicio directo.
+            quantity = round2(line["quantity"])
 
             # Mismo patron que PurchaseService.receive_order (Sprint 5): se
             # lee el stock BAJO el lock de select_for_update, para que el
@@ -220,11 +223,11 @@ class SaleService:
             # esta clave, asi que el comportamiento por defecto no cambia.
             unit_price = line.get("unit_price")
             unit_price = (
-                Decimal(str(unit_price))
+                round2(unit_price)
                 if unit_price is not None
                 else SaleService._resolve_unit_price(variant=variant, quantity=quantity)
             )
-            line_subtotal = unit_price * quantity
+            line_subtotal = round2(unit_price * quantity)
 
             discount_amount = line.get("discount_amount")
             if discount_amount is None:
@@ -232,7 +235,9 @@ class SaleService:
                     variant=variant, quantity=quantity, unit_price=unit_price, at=at
                 )
             else:
-                discount_amount = min(Decimal(str(discount_amount)), line_subtotal)
+                discount_amount = round2(
+                    min(Decimal(str(discount_amount)), line_subtotal)
+                )
                 line_percent = SaleService.discount_percent(
                     discount_amount, line_subtotal
                 )
@@ -562,13 +567,15 @@ class SaleService:
         if promotion is None:
             return Decimal("0")
 
-        line_subtotal = unit_price * quantity
+        # Sobre el subtotal ya redondeado: el % se aplica al monto que ve el
+        # cliente en la linea, y el descuento tambien queda en centimos.
+        line_subtotal = round2(unit_price * quantity)
         if promotion.type == "PERCENTAGE":
-            return line_subtotal * promotion.value / Decimal("100")
+            return round2(line_subtotal * promotion.value / Decimal("100"))
         # FIXED_AMOUNT: monto fijo por unidad, nunca mas que el subtotal de
         # la linea (sin regla documentada sobre si escala con la cantidad;
         # se asume por unidad, tope al subtotal para no dejarlo negativo).
-        return min(promotion.value * quantity, line_subtotal)
+        return min(round2(promotion.value * quantity), line_subtotal)
 
     @staticmethod
     def _next_invoice_number() -> str:

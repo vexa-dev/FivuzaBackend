@@ -24,6 +24,7 @@ from inventario.models import (
     Warehouse,
 )
 from inventario.services import MediaService, ProductVariantService, StockService
+from core.decimals import round2
 from core.warehouse_access import WarehouseAccessService
 
 
@@ -192,13 +193,13 @@ class ProductVariantCreateInputSerializer(serializers.Serializer):
         max_length=100, required=False, allow_blank=True, allow_null=True
     )
     cost = serializers.DecimalField(
-        max_digits=12, decimal_places=4, min_value=Decimal("0"), default=Decimal("0")
+        max_digits=12, decimal_places=2, min_value=Decimal("0"), default=Decimal("0")
     )
     price = serializers.DecimalField(
-        max_digits=12, decimal_places=4, min_value=Decimal("0"), default=Decimal("0")
+        max_digits=12, decimal_places=2, min_value=Decimal("0"), default=Decimal("0")
     )
     min_stock = serializers.DecimalField(
-        max_digits=12, decimal_places=3, min_value=Decimal("0"), default=Decimal("0")
+        max_digits=12, decimal_places=2, min_value=Decimal("0"), default=Decimal("0")
     )
     attribute_value_ids = serializers.PrimaryKeyRelatedField(
         queryset=AttributeValue.objects.all(), many=True, required=False
@@ -365,7 +366,7 @@ class LowStockVariantSerializer(serializers.ModelSerializer):
 
     product_name = serializers.CharField(source="product.name", read_only=True)
     total_stock = serializers.DecimalField(
-        max_digits=12, decimal_places=3, read_only=True
+        max_digits=12, decimal_places=2, read_only=True
     )
 
     class Meta:
@@ -382,7 +383,7 @@ class StockAdjustSerializer(serializers.Serializer):
 
     variant = serializers.PrimaryKeyRelatedField(queryset=ProductVariant.objects.all())
     warehouse = serializers.PrimaryKeyRelatedField(queryset=Warehouse.objects.all())
-    counted_quantity = serializers.DecimalField(max_digits=12, decimal_places=3)
+    counted_quantity = serializers.DecimalField(max_digits=12, decimal_places=2)
     concept = serializers.ChoiceField(
         choices=["PURCHASE", "SALE", "ADJUSTMENT", "RETURN"], default="ADJUSTMENT"
     )
@@ -412,7 +413,7 @@ class StockTransferSerializer(serializers.Serializer):
         queryset=Warehouse.objects.all()
     )
     to_warehouse = serializers.PrimaryKeyRelatedField(queryset=Warehouse.objects.all())
-    quantity = serializers.DecimalField(max_digits=12, decimal_places=3)
+    quantity = serializers.DecimalField(max_digits=12, decimal_places=2)
 
     def validate(self, attrs):
         user = self.context["request"].user
@@ -480,15 +481,44 @@ class PurchaseOrderDetailSerializer(serializers.ModelSerializer):
         read_only_fields = ["subtotal"]
 
 
+class PurchaseOrderLineInputSerializer(serializers.Serializer):
+    """Linea de una orden de compra: cantidad y, o el costo unitario, o el
+    subtotal de la linea. Con subtotal manda el total de la factura del
+    proveedor (1000 unidades por S/ 33.33): se guarda tal cual y el costo
+    unitario (0.03, a 2 decimales como todo) queda solo como referencia."""
+
+    variant_id = serializers.IntegerField()
+    quantity = serializers.DecimalField(
+        max_digits=12, decimal_places=2, min_value=Decimal("0.01")
+    )
+    unit_cost = serializers.DecimalField(
+        max_digits=12, decimal_places=2, min_value=Decimal("0"), required=False
+    )
+    subtotal = serializers.DecimalField(
+        max_digits=12, decimal_places=2, min_value=Decimal("0"), required=False
+    )
+
+    def validate(self, attrs):
+        has_unit_cost = attrs.get("unit_cost") is not None
+        has_subtotal = attrs.get("subtotal") is not None
+        if has_unit_cost == has_subtotal:
+            raise serializers.ValidationError(
+                "Indica el costo unitario o el subtotal de la linea, uno de los dos."
+            )
+        if has_subtotal:
+            attrs["unit_cost"] = round2(attrs["subtotal"] / attrs["quantity"])
+        else:
+            attrs["subtotal"] = round2(attrs["quantity"] * attrs["unit_cost"])
+        return attrs
+
+
 class PurchaseOrderSerializer(serializers.ModelSerializer):
     """details es de solo lectura -las lineas se arman en create() a
     partir de details_input, calculando subtotal/total en el servidor
     (nunca confiando en el total que mande el cliente)."""
 
     details = PurchaseOrderDetailSerializer(many=True, read_only=True)
-    details_input = serializers.ListField(
-        child=serializers.DictField(), write_only=True
-    )
+    details_input = PurchaseOrderLineInputSerializer(many=True, write_only=True)
 
     class Meta:
         model = PurchaseOrder
@@ -528,16 +558,13 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
             )
             total = Decimal("0")
             for line in details_data:
-                quantity = Decimal(str(line["quantity"]))
-                unit_cost = Decimal(str(line["unit_cost"]))
-                subtotal = quantity * unit_cost
-                total += subtotal
+                total += line["subtotal"]
                 PurchaseOrderDetail.objects.create(
                     purchase_order=order,
                     variant_id=line["variant_id"],
-                    quantity=quantity,
-                    unit_cost=unit_cost,
-                    subtotal=subtotal,
+                    quantity=line["quantity"],
+                    unit_cost=line["unit_cost"],
+                    subtotal=line["subtotal"],
                 )
             order.total = total
             order.save(update_fields=["total"])

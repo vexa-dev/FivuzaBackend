@@ -144,7 +144,7 @@ class DashboardMetricsServiceTests(TenantTestCase):
         self._make_sale(quantity=2, unit_price=Decimal("25.00"), created_at=today)
 
         result = DashboardMetricsService.sales_today()
-        self.assertEqual(result["total_sales"], "50.0000")
+        self.assertEqual(result["total_sales"], "50.00")
         self.assertEqual(result["total_transactions"], 1)
 
     def test_daily_summary_groups_by_local_business_day(self):
@@ -161,7 +161,7 @@ class DashboardMetricsServiceTests(TenantTestCase):
         result = DashboardMetricsService.sales_range(
             date_from=date(2026, 8, 10), date_to=date(2026, 8, 11)
         )
-        self.assertEqual(result["by_day"], [{"date": "2026-08-10", "total": "25.0000"}])
+        self.assertEqual(result["by_day"], [{"date": "2026-08-10", "total": "25.00"}])
 
     def test_top_products_orders_by_quantity_sold(self):
         today = datetime.now(dt_timezone.utc)
@@ -171,7 +171,7 @@ class DashboardMetricsServiceTests(TenantTestCase):
             date_from=timezone.localdate(), date_to=timezone.localdate()
         )
         self.assertEqual(top[0]["product_name"], "Producto A")
-        self.assertEqual(top[0]["quantity_sold"], "3.000")
+        self.assertEqual(top[0]["quantity_sold"], "3.00")
 
     def test_gross_margin_uses_current_variant_cost(self):
         today = datetime.now(dt_timezone.utc)
@@ -181,9 +181,9 @@ class DashboardMetricsServiceTests(TenantTestCase):
             date_from=timezone.localdate(), date_to=timezone.localdate()
         )
         # Ingreso 50.00, costo 2 x 10.00 = 20.00 -> margen 30.00
-        self.assertEqual(margin["total_revenue"], "50.0000")
-        self.assertEqual(margin["total_cost"], "20.0000")
-        self.assertEqual(margin["gross_margin"], "30.0000")
+        self.assertEqual(margin["total_revenue"], "50.00")
+        self.assertEqual(margin["total_cost"], "20.00")
+        self.assertEqual(margin["gross_margin"], "30.00")
 
     def test_payment_method_distribution_groups_by_method(self):
         today = datetime.now(dt_timezone.utc)
@@ -192,4 +192,4 @@ class DashboardMetricsServiceTests(TenantTestCase):
         distribution = DashboardMetricsService.payment_method_distribution(
             date_from=timezone.localdate(), date_to=timezone.localdate()
         )
-        self.assertEqual(distribution, [{"method": "CASH", "total": "25.0000"}])
+        self.assertEqual(distribution, [{"method": "CASH", "total": "25.00"}])

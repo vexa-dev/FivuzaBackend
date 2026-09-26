@@ -98,7 +98,7 @@ class CashSessionEndpointsTests(TenantTestCase):
         )
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["status"], "OPEN")
-        self.assertEqual(response.data["opening_amount"], "50.0000")
+        self.assertEqual(response.data["opening_amount"], "50.00")
 
     def test_cannot_open_two_sessions_on_same_register(self):
         client = self._client_as(self.admin_user)
@@ -148,7 +148,7 @@ class CashSessionEndpointsTests(TenantTestCase):
         # Antes de cerrar, la caja abierta ya informa el esperado a la fecha
         # (misma formula que el cierre), para el arqueo del frontend.
         detail = client.get(f"/api/v1/ventas/cash-sessions/{session_id}/")
-        self.assertEqual(detail.data["expected_amount_so_far"], "55.0000")
+        self.assertEqual(detail.data["expected_amount_so_far"], "55.00")
 
         response = client.post(
             f"/api/v1/ventas/cash-sessions/{session_id}/close/",
@@ -159,8 +159,8 @@ class CashSessionEndpointsTests(TenantTestCase):
         self.assertEqual(response.data["status"], "CLOSED")
         self.assertIsNone(response.data["expected_amount_so_far"])
         # 50 + 10 - 5 = 55 esperado; contado 54 -> diferencia -1
-        self.assertEqual(response.data["expected_closing_amount"], "55.0000")
-        self.assertEqual(response.data["difference"], "-1.0000")
+        self.assertEqual(response.data["expected_closing_amount"], "55.00")
+        self.assertEqual(response.data["difference"], "-1.00")
 
     def test_cannot_close_an_already_closed_session(self):
         client = self._client_as(self.admin_user)
@@ -269,7 +269,7 @@ class CashSessionEndpointsTests(TenantTestCase):
         )
         results = response.data["results"]
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]["amount"], "1.0000")
+        self.assertEqual(results[0]["amount"], "1.00")
 
     def test_sessions_filtered_by_user_and_date_range(self):
         client = self._client_as(self.admin_user)
@@ -764,7 +764,7 @@ class SaleEndpointsTests(TenantTestCase):
         )
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["status"], "COMPLETED")
-        self.assertEqual(response.data["total"], "40.0000")
+        self.assertEqual(response.data["total"], "40.00")
         self.assertEqual(len(response.data["details"]), 1)
 
     def test_sale_rejects_payment_mismatch(self):
@@ -839,7 +839,7 @@ class SaleEndpointsTests(TenantTestCase):
         self.assertEqual(response.status_code, 200)
         row = next(row for row in response.data if row["id"] == self.variant.id)
         self.assertEqual(row["sku"], self.variant.sku)
-        self.assertEqual(row["stock"], "10.000")
+        self.assertEqual(row["stock"], "10.00")
 
     def test_pos_search_by_sku(self):
         client = self._client_as(self.seller_user)
@@ -1100,7 +1100,7 @@ class SaleVoidAndReturnTests(TenantTestCase):
             m for m in movements.data["results"] if m["concept"] == "DEVOLUCION"
         )
         self.assertEqual(devolucion["type"], "OUT")
-        self.assertEqual(devolucion["amount"], "40.0000")
+        self.assertEqual(devolucion["amount"], "40.00")
 
     def test_seller_cannot_void_sale(self):
         admin_client = self._client_as(self.admin_user)
@@ -1176,7 +1176,7 @@ class SaleVoidAndReturnTests(TenantTestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.data["total_refund_amount"], "40.0000")
+        self.assertEqual(response.data["total_refund_amount"], "40.00")
         self.assertEqual(self._stock_quantity(), Decimal("8"))
 
         from ventas.models import CustomerBalanceLedger
@@ -1185,7 +1185,7 @@ class SaleVoidAndReturnTests(TenantTestCase):
             sale_return_id=response.data["id"]
         )
         self.assertEqual(ledger_entry.type, "CREDIT")
-        self.assertEqual(ledger_entry.amount, Decimal("40.0000"))
+        self.assertEqual(ledger_entry.amount, Decimal("40.00"))
 
     def test_return_with_cash_refund_generates_cash_movement(self):
         client = self._client_as(self.seller_user)
@@ -1212,7 +1212,7 @@ class SaleVoidAndReturnTests(TenantTestCase):
         devolucion = next(
             m for m in movements.data["results"] if m["concept"] == "DEVOLUCION"
         )
-        self.assertEqual(devolucion["amount"], "20.0000")
+        self.assertEqual(devolucion["amount"], "20.00")
 
     def test_cannot_return_more_than_sold(self):
         client = self._client_as(self.admin_user)
@@ -1415,7 +1415,7 @@ class CreditLedgerTests(TenantTestCase):
         self.assertEqual(response.status_code, 201)
 
         customer_response = client.get(f"/api/v1/ventas/customers/{self.customer.id}/")
-        self.assertEqual(customer_response.data["current_debt"], "40.0000")
+        self.assertEqual(customer_response.data["current_debt"], "40.00")
 
     def test_credit_sale_blocked_by_credit_limit(self):
         self.customer.credit_limit = Decimal("30.00")
@@ -1452,7 +1452,7 @@ class CreditLedgerTests(TenantTestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.data["customer_current_debt"], "25.0000")
+        self.assertEqual(response.data["customer_current_debt"], "25.00")
 
     def test_balance_payment_consumes_and_depletes_balance(self):
         client = self._client_as(self.admin_user)
@@ -1472,7 +1472,7 @@ class CreditLedgerTests(TenantTestCase):
             format="json",
         )
         customer_response = client.get(f"/api/v1/ventas/customers/{self.customer.id}/")
-        self.assertEqual(customer_response.data["current_balance"], "40.0000")
+        self.assertEqual(customer_response.data["current_balance"], "40.00")
 
         # Paga otra venta con ese saldo.
         balance_sale = self._create_sale(
@@ -1481,7 +1481,7 @@ class CreditLedgerTests(TenantTestCase):
         self.assertEqual(balance_sale.status_code, 201)
 
         customer_response = client.get(f"/api/v1/ventas/customers/{self.customer.id}/")
-        self.assertEqual(customer_response.data["current_balance"], "20.0000")
+        self.assertEqual(customer_response.data["current_balance"], "20.00")
 
     def test_balance_payment_fails_if_insufficient(self):
         client = self._client_as(self.admin_user)
@@ -1502,7 +1502,7 @@ class CreditLedgerTests(TenantTestCase):
             format="json",
         )
         customer_response = client.get(f"/api/v1/ventas/customers/{self.customer.id}/")
-        self.assertEqual(customer_response.data["current_debt"], "0.0000")
+        self.assertEqual(customer_response.data["current_debt"], "0.00")
 
     def test_ledger_sum_matches_reported_balance_after_mixed_operations(self):
         from ventas.models import CustomerBalanceLedger, CustomerDebtLedger
@@ -2401,8 +2401,8 @@ class QuoteEndpointsTests(TenantTestCase):
         response = self._create_quote(client)
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["status"], "DRAFT")
-        self.assertEqual(response.data["total"], "40.0000")
-        self.assertEqual(response.data["details"][0]["unit_price"], "20.0000")
+        self.assertEqual(response.data["total"], "40.00")
+        self.assertEqual(response.data["details"][0]["unit_price"], "20.00")
 
     def test_quote_document_returns_html(self):
         client = self._client()
@@ -2431,7 +2431,7 @@ class QuoteEndpointsTests(TenantTestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.data["total"], "40.0000")
+        self.assertEqual(response.data["total"], "40.00")
 
     def test_convert_quote_not_accepted_returns_409(self):
         client = self._client()

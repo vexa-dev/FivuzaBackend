@@ -8,6 +8,8 @@ from django.db import connection
 from django.utils import timezone
 from django_tenants.utils import get_tenant_model, schema_context
 
+from core.decimals import round2
+
 _REFRESH_DAILY_SALES_SQL = (
     "REFRESH MATERIALIZED VIEW CONCURRENTLY mv_daily_sales_summary;"
 )
@@ -335,9 +337,8 @@ class DashboardMetricsService:
             total_revenue += detail["subtotal"]
             unit_cost = costs.get(detail["variant_id"], Decimal("0"))
             total_cost += unit_cost * detail["quantity"]
-        # cost (4 decimales) x quantity (3 decimales) da 7 decimales -se
-        # redondea a la misma precision monetaria que el resto del sistema.
-        total_cost = total_cost.quantize(Decimal("0.0001"))
+        # cost x quantity da hasta 4 decimales: a 2, como todo monto.
+        total_cost = round2(total_cost)
 
         gross_margin_amount = total_revenue - total_cost
         margin_pct = None

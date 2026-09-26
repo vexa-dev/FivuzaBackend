@@ -1,4 +1,6 @@
 # Pruebas de ViewSets/vistas: permisos, serialización, códigos de respuesta HTTP.
+from decimal import Decimal
+
 from django.core.cache import cache
 from django_tenants.test.cases import TenantTestCase
 from rest_framework.test import APIClient
@@ -289,9 +291,9 @@ class InventoryCatalogEndpointsTests(TenantTestCase):
                 "variants_input": [
                     {
                         "sku": "POLO-COMPLETO-M",
-                        "cost": "25.5000",
-                        "price": "49.9000",
-                        "min_stock": "5.000",
+                        "cost": "25.50",
+                        "price": "49.90",
+                        "min_stock": "5.00",
                         "attribute_value_ids": [mediana.id],
                     }
                 ],
@@ -305,9 +307,9 @@ class InventoryCatalogEndpointsTests(TenantTestCase):
         self.assertEqual(product.description, "Algodón")
         self.assertFalse(product.is_for_sale)
         self.assertFalse(product.is_active)
-        self.assertEqual(str(variant.cost), "25.5000")
-        self.assertEqual(str(variant.price), "49.9000")
-        self.assertEqual(str(variant.min_stock), "5.000")
+        self.assertEqual(str(variant.cost), "25.50")
+        self.assertEqual(str(variant.price), "49.90")
+        self.assertEqual(str(variant.min_stock), "5.00")
         self.assertEqual(
             variant.attribute_values.get().attribute_value_id,
             mediana.id,
@@ -535,7 +537,7 @@ class PurchaseOrderEndpointsTests(TenantTestCase):
         )
         self.assertEqual(create_response.status_code, 201)
         self.assertEqual(create_response.data["status"], "PENDING")
-        self.assertEqual(create_response.data["total"], "50.0000")
+        self.assertEqual(create_response.data["total"], "50.00")
 
         order_id = create_response.data["id"]
         receive_response = admin.post(
@@ -548,7 +550,91 @@ class PurchaseOrderEndpointsTests(TenantTestCase):
         stock_response = admin.get(
             f"/api/v1/inventario/stock/?variant={variant.id}&warehouse={self.warehouse.id}"
         )
-        self.assertEqual(stock_response.data["results"][0]["quantity"], "5.000")
+        self.assertEqual(stock_response.data["results"][0]["quantity"], "5.00")
+
+    def _create_order(self, lines):
+        return self._client_as(self.admin_user).post(
+            "/api/v1/inventario/purchase-orders/",
+            {
+                "supplier": self.supplier.id,
+                "warehouse": self.warehouse.id,
+                "details_input": lines,
+            },
+            format="json",
+        )
+
+    def test_line_with_invoice_subtotal_keeps_the_real_total(self):
+        # 1000 unidades por S/ 33.33: el costo unitario (0.03333) va a 2
+        # decimales, pero la orden guarda lo que dice la factura.
+        variant = self._create_variant(sku="PO-SUB")
+        response = self._create_order(
+            [{"variant_id": variant.id, "quantity": "1000", "subtotal": "33.33"}]
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["total"], "33.33")
+        detail = response.data["details"][0]
+        self.assertEqual(detail["subtotal"], "33.33")
+        self.assertEqual(detail["unit_cost"], "0.03")
+
+    def test_line_with_unit_cost_rounds_the_subtotal(self):
+        variant = self._create_variant(sku="PO-UNIT")
+        response = self._create_order(
+            [{"variant_id": variant.id, "quantity": "3", "unit_cost": "3.33"}]
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["total"], "9.99")
+
+    def test_line_needs_unit_cost_or_subtotal_but_not_both(self):
+        variant = self._create_variant(sku="PO-BOTH")
+        both = self._create_order(
+            [
+                {
+                    "variant_id": variant.id,
+                    "quantity": "3",
+                    "unit_cost": "3.33",
+                    "subtotal": "10.00",
+                }
+            ]
+        )
+        neither = self._create_order([{"variant_id": variant.id, "quantity": "3"}])
+
+        self.assertEqual(both.status_code, 400)
+        self.assertEqual(neither.status_code, 400)
+
+    def test_more_than_two_decimals_is_rejected(self):
+        variant = self._create_variant(sku="PO-3DEC")
+        response = self._create_order(
+            [{"variant_id": variant.id, "quantity": "1.234", "unit_cost": "3.335"}]
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_weighted_average_cost_uses_the_real_subtotal(self):
+        # 1 unidad en stock a 0.02 + 3 por S/ 10.00 de factura:
+        # (0.02 + 10.00) / 4 = 2.505 -> 2.51. Con el costo unitario
+        # redondeado (3 x 3.33 = 9.99) daria 2.5025 -> 2.50.
+        variant = self._create_variant(sku="PO-AVG")
+        variant.cost = Decimal("0.02")
+        variant.save(update_fields=["cost"])
+        StockService.adjust_stock(
+            variant=variant,
+            warehouse=self.warehouse,
+            counted_quantity=Decimal("1"),
+            concept="ADJUSTMENT",
+            user=self.admin_user,
+        )
+        order = self._create_order(
+            [{"variant_id": variant.id, "quantity": "3", "subtotal": "10.00"}]
+        )
+
+        self._client_as(self.admin_user).post(
+            f"/api/v1/inventario/purchase-orders/{order.data['id']}/receive/"
+        )
+
+        variant.refresh_from_db()
+        self.assertEqual(variant.cost, Decimal("2.51"))
 
 
 class CatalogImportEndpointsTests(TenantTestCase):
@@ -794,7 +880,7 @@ class InventoryReportsEndpointsTests(TenantTestCase):
     def test_stock_valuation_report_totals_quantity_times_cost(self):
         response = self._client().get("/api/v1/inventario/reports/stock-valuation/")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["total_value"], "30.0000")
+        self.assertEqual(response.data["total_value"], "30.00")
 
     def test_stock_valuation_report_xlsx_export(self):
         response = self._client().get(
@@ -1012,7 +1098,7 @@ class VolumePricingTierEndpointTests(TenantTestCase):
         self.assertEqual(listing.status_code, 200)
         results = listing.data["results"]
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]["min_quantity"], "12.000")
+        self.assertEqual(results[0]["min_quantity"], "12.00")
 
     def test_duplicate_min_quantity_for_same_variant_is_rejected(self):
         client = self._client()

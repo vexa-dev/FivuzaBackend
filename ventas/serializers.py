@@ -134,7 +134,7 @@ class CashSessionSerializer(serializers.ModelSerializer):
         return data
 
     @extend_schema_field(
-        serializers.DecimalField(max_digits=14, decimal_places=4, allow_null=True)
+        serializers.DecimalField(max_digits=14, decimal_places=2, allow_null=True)
     )
     def get_expected_amount_so_far(self, session):
         if session.status not in ("OPEN", "PENDING_APPROVAL"):
@@ -314,7 +314,7 @@ class RegisterDebtPaymentSerializer(serializers.Serializer):
         source="customer", queryset=Customer.objects.all()
     )
     amount = serializers.DecimalField(
-        max_digits=12, decimal_places=4, min_value=Decimal("0.01")
+        max_digits=12, decimal_places=2, min_value=Decimal("0.01")
     )
     description = serializers.CharField(required=False, allow_blank=True)
 
@@ -411,10 +411,10 @@ class SaleSerializer(serializers.ModelSerializer):
 class SaleLineInputSerializer(serializers.Serializer):
     variant_id = serializers.IntegerField()
     quantity = serializers.DecimalField(
-        max_digits=12, decimal_places=3, min_value=Decimal("0.001")
+        max_digits=12, decimal_places=2, min_value=Decimal("0.01")
     )
     discount_amount = serializers.DecimalField(
-        max_digits=12, decimal_places=4, min_value=0, required=False, allow_null=True
+        max_digits=12, decimal_places=2, min_value=0, required=False, allow_null=True
     )
 
 
@@ -423,7 +423,7 @@ class SalePaymentInputSerializer(serializers.Serializer):
         choices=["CASH", "CARD", "YAPE", "CREDIT_LEDGER", "BALANCE"]
     )
     amount = serializers.DecimalField(
-        max_digits=12, decimal_places=4, min_value=Decimal("0.01")
+        max_digits=12, decimal_places=2, min_value=Decimal("0.01")
     )
 
 
@@ -571,7 +571,7 @@ class SaleReturnSerializer(serializers.ModelSerializer):
 class SaleReturnItemInputSerializer(serializers.Serializer):
     sale_detail_id = serializers.IntegerField()
     quantity_returned = serializers.DecimalField(
-        max_digits=12, decimal_places=3, min_value=Decimal("0.001")
+        max_digits=12, decimal_places=2, min_value=Decimal("0.01")
     )
     restock = serializers.BooleanField(required=False, default=True)
 
@@ -633,7 +633,7 @@ class CashSessionOpenSerializer(serializers.Serializer):
         source="cash_register", queryset=CashRegister.objects.filter(is_active=True)
     )
     opening_amount = serializers.DecimalField(
-        max_digits=12, decimal_places=4, min_value=0
+        max_digits=12, decimal_places=2, min_value=0
     )
 
     def validate_cash_register_id(self, cash_register):
@@ -654,7 +654,7 @@ class CashSessionSubmitCountSerializer(serializers.Serializer):
     """Primer paso del cierre (Bloque A): el cajero entrega lo que conto."""
 
     counted_closing_amount = serializers.DecimalField(
-        max_digits=12, decimal_places=4, min_value=0
+        max_digits=12, decimal_places=2, min_value=0
     )
     notes = serializers.CharField(required=False, allow_blank=True)
 
@@ -678,7 +678,7 @@ class CashSessionCloseSerializer(serializers.Serializer):
     # Opcional desde el cierre en dos pasos: si el cajero ya entrego su
     # conteo, el supervisor confirma sin volver a escribirlo.
     counted_closing_amount = serializers.DecimalField(
-        max_digits=12, decimal_places=4, min_value=0, required=False
+        max_digits=12, decimal_places=2, min_value=0, required=False
     )
     notes = serializers.CharField(required=False, allow_blank=True)
 
@@ -732,7 +732,7 @@ class ReservationCreateSerializer(serializers.Serializer):
         source="warehouse", queryset=Warehouse.objects.all()
     )
     quantity = serializers.DecimalField(
-        max_digits=12, decimal_places=3, min_value=Decimal("0.001")
+        max_digits=12, decimal_places=2, min_value=Decimal("0.01")
     )
     expires_at = serializers.DateTimeField()
 
@@ -830,10 +830,10 @@ class QuoteSerializer(serializers.ModelSerializer):
 class QuoteLineInputSerializer(serializers.Serializer):
     variant_id = serializers.IntegerField()
     quantity = serializers.DecimalField(
-        max_digits=12, decimal_places=3, min_value=Decimal("0.001")
+        max_digits=12, decimal_places=2, min_value=Decimal("0.01")
     )
     discount_amount = serializers.DecimalField(
-        max_digits=12, decimal_places=4, min_value=0, required=False, allow_null=True
+        max_digits=12, decimal_places=2, min_value=0, required=False, allow_null=True
     )
 
 
