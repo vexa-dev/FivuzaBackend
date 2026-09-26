@@ -2,7 +2,7 @@ import uuid
 from decimal import Decimal
 
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import Q, Sum
 from django.utils import timezone
 from rest_framework.exceptions import APIException
 
@@ -94,11 +94,12 @@ class CashSessionService:
 
     Bloque A.2 agrega la otra mitad de esa pregunta: de quien es la caja.
     - Si CashRegister.assigned_user esta puesto, la caja es de esa persona:
-      solo ella (o quien tenga CASH_CLOSE) abre, vende y cierra en ella.
+      solo ella vende en ella; abrir y cerrar tambien puede quien tenga
+      CASH_CLOSE.
     - Si no lo esta, quien abre el turno es el dueño de esa sesion: solo esa
       persona vende y cierra.
     - Quien tenga CASH_CLOSE siempre puede cerrar, para el caso real de "el
-      cajero se fue sin cerrar".
+      cajero se fue sin cerrar", pero nunca vende en la caja de otro.
     """
 
     @staticmethod
@@ -120,23 +121,32 @@ class CashSessionService:
         raise CashSessionNotOwnedError()
 
     @staticmethod
-    def assert_can_sell(*, session: CashSession, user) -> None:
-        """La venta es el caso estricto: ni siquiera un supervisor vende en
-        la caja de otro sin que la caja este asignada a el -meter ventas
-        ajenas en un turno es exactamente lo que descuadra el arqueo."""
+    def owner_id(session: CashSession) -> int:
+        """Dueño del turno: la persona asignada a la caja o, si no hay, quien
+        la abrio."""
         assigned_id = session.cash_register.assigned_user_id
-        if assigned_id is not None:
-            if assigned_id == user.id or CashSessionService._has_cash_close(user):
-                return
-            raise CashSessionNotOwnedError()
-        if session.user_id != user.id:
+        return assigned_id if assigned_id is not None else session.user_id
+
+    @staticmethod
+    def sellable_by(user) -> Q:
+        """Filtro de las sesiones en las que `user` puede vender -la misma
+        regla que assert_can_sell, para que el selector del POS no ofrezca
+        cajas que el backend va a rechazar."""
+        return Q(cash_register__assigned_user=user) | Q(
+            cash_register__assigned_user__isnull=True, user=user
+        )
+
+    @staticmethod
+    def assert_can_sell(*, session: CashSession, user) -> None:
+        """La venta es el caso estricto: solo vende el dueño del turno, ni
+        siquiera un supervisor -meter ventas ajenas en un turno es
+        exactamente lo que descuadra el arqueo de otro."""
+        if CashSessionService.owner_id(session) != user.id:
             raise CashSessionNotOwnedError()
 
     @staticmethod
     def assert_can_close(*, session: CashSession, user) -> None:
-        assigned_id = session.cash_register.assigned_user_id
-        owner_id = assigned_id if assigned_id is not None else session.user_id
-        if owner_id == user.id:
+        if CashSessionService.owner_id(session) == user.id:
             return
         if CashSessionService._has_cash_close(user):
             return

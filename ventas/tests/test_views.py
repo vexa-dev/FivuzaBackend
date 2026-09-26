@@ -726,20 +726,19 @@ class SaleEndpointsTests(TenantTestCase):
         client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
         return client
 
-    def _open_session(self, client=None):
+    def _open_session(self, client=None, seller=None):
         # Siempre se abre con el admin -un seller no tiene CASH_OPEN salvo
         # que el negocio se lo conceda (Bloque A.1), asi que no podria abrir
         # su propia caja aunque si pueda vender contra una ya abierta. La
-        # caja se asigna al vendedor (Bloque A.2) porque es el quien vende
-        # en estos tests: sin asignacion, el dueño del turno seria el admin
-        # que la abrio y el vendedor recibiria CASH_SESSION_NOT_OWNED. Cada
-        # test usa su propio CashRegister porque CashSessionService no
+        # caja se asigna a quien vende en el test (Bloque A.2): solo el
+        # dueño del turno vende, ni siquiera el admin en la caja de otro.
+        # Cada test usa su propio CashRegister porque CashSessionService no
         # permite dos sesiones abiertas sobre el mismo registro.
         SaleEndpointsTests._register_counter += 1
         register = CashRegister.objects.create(
             warehouse=self.warehouse,
             name=f"Caja {SaleEndpointsTests._register_counter}",
-            assigned_user=self.seller_user,
+            assigned_user=seller or self.seller_user,
         )
         response = self._client_as(self.admin_user).post(
             "/api/v1/ventas/cash-sessions/open/",
@@ -769,7 +768,7 @@ class SaleEndpointsTests(TenantTestCase):
 
     def test_sale_rejects_payment_mismatch(self):
         client = self._client_as(self.admin_user)
-        session_id = self._open_session(client)
+        session_id = self._open_session(client, seller=self.admin_user)
 
         response = client.post(
             "/api/v1/ventas/sales/",
@@ -805,7 +804,7 @@ class SaleEndpointsTests(TenantTestCase):
 
     def test_sales_filtered_by_customer(self):
         client = self._client_as(self.admin_user)
-        session_id = self._open_session(client)
+        session_id = self._open_session(client, seller=self.admin_user)
         client.post(
             "/api/v1/ventas/sales/",
             {
@@ -857,8 +856,8 @@ class SaleEndpointsTests(TenantTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data, [])
 
-    def _create_sale(self, client):
-        session_id = self._open_session(client)
+    def _create_sale(self, client, seller=None):
+        session_id = self._open_session(client, seller=seller)
         response = client.post(
             "/api/v1/ventas/sales/",
             {
@@ -918,7 +917,7 @@ class SaleEndpointsTests(TenantTestCase):
 
     def test_auditor_can_view_receipt(self):
         client = self._client_as(self.admin_user)
-        sale_id = self._create_sale(client)
+        sale_id = self._create_sale(client, seller=self.admin_user)
 
         response = self._client_as(self.auditor_user).get(
             f"/api/v1/ventas/sales/{sale_id}/receipt/"
@@ -1023,17 +1022,15 @@ class SaleVoidAndReturnTests(TenantTestCase):
         client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
         return client
 
-    def _open_session(self):
-        # La caja se asigna al vendedor (Bloque A.2): la abre el admin, pero
-        # hay casos que venden y devuelven con el vendedor -sin asignacion,
-        # el dueño del turno seria el admin y el vendedor recibiria
-        # CASH_SESSION_NOT_OWNED. El admin puede operarla igual porque tiene
-        # CASH_CLOSE.
+    def _open_session(self, seller=None):
+        # La abre el admin y la caja se asigna a quien vende en el test
+        # (Bloque A.2): solo el dueño del turno vende, ni siquiera el admin
+        # en la caja de otro. Anular y devolver no dependen del dueño.
         SaleVoidAndReturnTests._register_counter += 1
         register = CashRegister.objects.create(
             warehouse=self.warehouse,
             name=f"Caja {SaleVoidAndReturnTests._register_counter}",
-            assigned_user=self.seller_user,
+            assigned_user=seller or self.seller_user,
         )
         response = self._client_as(self.admin_user).post(
             "/api/v1/ventas/cash-sessions/open/",
@@ -1069,7 +1066,7 @@ class SaleVoidAndReturnTests(TenantTestCase):
 
     def test_admin_can_void_sale_and_restocks(self):
         client = self._client_as(self.admin_user)
-        session_id = self._open_session()
+        session_id = self._open_session(seller=self.admin_user)
         sale = self._create_sale(client, session_id)
         self.assertEqual(self._stock_quantity(), Decimal("8"))
 
@@ -1084,7 +1081,7 @@ class SaleVoidAndReturnTests(TenantTestCase):
 
     def test_void_reverses_cash_in_session(self):
         client = self._client_as(self.admin_user)
-        session_id = self._open_session()
+        session_id = self._open_session(seller=self.admin_user)
         sale = self._create_sale(client, session_id)
 
         client.post(
@@ -1104,7 +1101,7 @@ class SaleVoidAndReturnTests(TenantTestCase):
 
     def test_seller_cannot_void_sale(self):
         admin_client = self._client_as(self.admin_user)
-        session_id = self._open_session()
+        session_id = self._open_session(seller=self.admin_user)
         sale = self._create_sale(admin_client, session_id)
 
         response = self._client_as(self.seller_user).post(
@@ -1116,7 +1113,7 @@ class SaleVoidAndReturnTests(TenantTestCase):
 
     def test_cannot_void_sale_with_returns(self):
         client = self._client_as(self.admin_user)
-        session_id = self._open_session()
+        session_id = self._open_session(seller=self.admin_user)
         sale = self._create_sale(client, session_id)
         detail_id = sale["details"][0]["id"]
 
@@ -1141,7 +1138,7 @@ class SaleVoidAndReturnTests(TenantTestCase):
 
     def test_cannot_void_sale_after_cash_session_closed(self):
         client = self._client_as(self.admin_user)
-        session_id = self._open_session()
+        session_id = self._open_session(seller=self.admin_user)
         sale = self._create_sale(client, session_id)
 
         client.post(
@@ -1160,7 +1157,7 @@ class SaleVoidAndReturnTests(TenantTestCase):
 
     def test_partial_return_restocks_and_generates_balance(self):
         client = self._client_as(self.admin_user)
-        session_id = self._open_session()
+        session_id = self._open_session(seller=self.admin_user)
         sale = self._create_sale(client, session_id, quantity="4")
         detail_id = sale["details"][0]["id"]
         self.assertEqual(self._stock_quantity(), Decimal("6"))
@@ -1216,7 +1213,7 @@ class SaleVoidAndReturnTests(TenantTestCase):
 
     def test_cannot_return_more_than_sold(self):
         client = self._client_as(self.admin_user)
-        session_id = self._open_session()
+        session_id = self._open_session(seller=self.admin_user)
         sale = self._create_sale(client, session_id, quantity="2")
         detail_id = sale["details"][0]["id"]
 
@@ -1235,7 +1232,7 @@ class SaleVoidAndReturnTests(TenantTestCase):
 
     def test_two_returns_on_same_sale_track_already_returned(self):
         client = self._client_as(self.admin_user)
-        session_id = self._open_session()
+        session_id = self._open_session(seller=self.admin_user)
         sale = self._create_sale(client, session_id, quantity="4")
         detail_id = sale["details"][0]["id"]
 
@@ -1278,7 +1275,7 @@ class SaleVoidAndReturnTests(TenantTestCase):
 
     def test_auditor_cannot_create_return(self):
         client = self._client_as(self.admin_user)
-        session_id = self._open_session()
+        session_id = self._open_session(seller=self.admin_user)
         sale = self._create_sale(client, session_id)
         detail_id = sale["details"][0]["id"]
 

@@ -64,6 +64,7 @@ from ventas.serializers import (
     SaleVoidSerializer,
 )
 from ventas.services import (
+    CashSessionService,
     CreditLedgerService,
     POSCatalogService,
     QuoteService,
@@ -199,6 +200,11 @@ class CashSessionViewSet(
                 Q(user=user) | Q(cash_register__assigned_user=user)
             )
         params = self.request.query_params
+        # ?sellable=true: solo las sesiones donde este usuario puede vender
+        # (selector del POS). Un supervisor ve todas para cerrarlas, pero no
+        # vende en ninguna ajena.
+        if params.get("sellable") in ("true", "1"):
+            queryset = queryset.filter(CashSessionService.sellable_by(user))
         cash_register_id = params.get("cash_register")
         if cash_register_id:
             queryset = queryset.filter(cash_register_id=cash_register_id)
