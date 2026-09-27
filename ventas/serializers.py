@@ -13,6 +13,8 @@ from ventas.models import (
     Customer,
     CustomerBalanceLedger,
     CustomerDebtLedger,
+    PaymentSettlement,
+    PaymentSettlementLine,
     ProductReservation,
     Promotion,
     PromotionProduct,
@@ -87,6 +89,10 @@ class CashSessionSerializer(serializers.ModelSerializer):
     # formulario con la respuesta impresa al lado. El backend no envia el
     # dato; no se confia en que la UI lo esconda.
     expected_amount_so_far = serializers.SerializerMethodField()
+    # Bloque D.7: solo viaja en la respuesta del cierre (atributo transitorio
+    # que CashSessionService.close_session() agrega a la instancia); en una
+    # lectura normal de la sesion viene vacio.
+    pending_payment_warnings = serializers.SerializerMethodField()
 
     class Meta:
         model = CashSession
@@ -105,6 +111,7 @@ class CashSessionSerializer(serializers.ModelSerializer):
             "status",
             "closing_at",
             "notes",
+            "pending_payment_warnings",
         ]
         read_only_fields = [
             "user",
@@ -141,6 +148,10 @@ class CashSessionSerializer(serializers.ModelSerializer):
             return None
         expected = CashSessionService._calculate_expected_closing_amount(session)
         return str(expected)
+
+    @extend_schema_field(serializers.ListField(child=serializers.CharField()))
+    def get_pending_payment_warnings(self, session):
+        return getattr(session, "pending_payment_warnings", [])
 
     def _viewer_closes_cash(self) -> bool:
         """Quien controla la caja, es decir quien tiene CASH_CLOSE. El
@@ -250,6 +261,7 @@ class CustomerSerializer(serializers.ModelSerializer):
             "phone",
             "address",
             "is_active",
+            "is_walk_in",
             "credit_limit",
             "current_debt",
             "current_balance",
@@ -257,7 +269,7 @@ class CustomerSerializer(serializers.ModelSerializer):
             "updated_at",
             "created_at",
         ]
-        read_only_fields = ["updated_at", "created_at"]
+        read_only_fields = ["is_walk_in", "updated_at", "created_at"]
 
     def get_current_debt(self, obj) -> str:
         return str(CreditLedgerService.get_debt(obj))
@@ -378,12 +390,33 @@ class SaleDetailSerializer(serializers.ModelSerializer):
 class SalePaymentSerializer(serializers.ModelSerializer):
     class Meta:
         model = SalePayment
-        fields = ["id", "method", "amount", "created_at"]
+        fields = [
+            "id",
+            "method",
+            "amount",
+            "provider",
+            "operation_number",
+            "voucher_number",
+            "card_last4",
+            "card_brand",
+            "installments",
+            "status",
+            "fee_amount",
+            "settled_at",
+            "is_manual",
+            "tendered_amount",
+            "change_amount",
+            "created_at",
+        ]
 
 
 class SaleSerializer(serializers.ModelSerializer):
     details = SaleDetailSerializer(many=True, read_only=True)
     payments = SalePaymentSerializer(many=True, read_only=True)
+    # Bloque D.2: avisos no bloqueantes de la venta recien creada (ej.
+    # numero de operacion repetido). Transitorio -no persiste en Sale, solo
+    # existe cuando SaleService.create_sale() lo agrega a la instancia.
+    warnings = serializers.SerializerMethodField()
 
     class Meta:
         model = Sale
@@ -399,13 +432,19 @@ class SaleSerializer(serializers.ModelSerializer):
             "total",
             "currency",
             "payment_status",
+            "credit_amount",
+            "credit_settled_amount",
             "status",
             "sync_status",
             "details",
             "payments",
+            "warnings",
             "created_at",
             "occurred_at",
         ]
+
+    def get_warnings(self, obj):
+        return getattr(obj, "payment_warnings", [])
 
 
 class SaleLineInputSerializer(serializers.Serializer):
@@ -424,6 +463,25 @@ class SalePaymentInputSerializer(serializers.Serializer):
     )
     amount = serializers.DecimalField(
         max_digits=12, decimal_places=2, min_value=Decimal("0.01")
+    )
+    # Bloque D.2: solo se usan para CARD/YAPE (rastreo) o CASH (vuelto); el
+    # servicio, no este serializer, decide que es obligatorio segun el metodo.
+    provider = serializers.CharField(required=False, allow_blank=True, max_length=50)
+    operation_number = serializers.CharField(
+        required=False, allow_blank=True, max_length=50
+    )
+    voucher_number = serializers.CharField(
+        required=False, allow_blank=True, max_length=50
+    )
+    card_last4 = serializers.CharField(required=False, allow_blank=True, max_length=4)
+    card_brand = serializers.CharField(required=False, allow_blank=True, max_length=30)
+    installments = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    is_manual = serializers.BooleanField(required=False, default=True)
+    tendered_amount = serializers.DecimalField(
+        max_digits=12, decimal_places=2, required=False, allow_null=True, min_value=0
+    )
+    change_amount = serializers.DecimalField(
+        max_digits=12, decimal_places=2, required=False, allow_null=True, min_value=0
     )
 
 
@@ -585,7 +643,12 @@ class SaleReturnCreateSerializer(serializers.Serializer):
         source="sale", queryset=Sale.objects.all()
     )
     reason = serializers.CharField(required=False, allow_blank=True)
-    refund_type = serializers.ChoiceField(choices=["BALANCE", "CASH"])
+    # Bloque D.5: opcional -si no viene, ReturnService decide el default
+    # segun como se cobro la venta original (saldo a favor si fue con medio
+    # electronico).
+    refund_type = serializers.ChoiceField(
+        choices=["BALANCE", "CASH"], required=False, allow_null=True
+    )
     cash_session_id = serializers.PrimaryKeyRelatedField(
         source="cash_session",
         queryset=CashSession.objects.all(),
@@ -617,7 +680,7 @@ class SaleReturnCreateSerializer(serializers.Serializer):
             sale=validated_data["sale"],
             items=validated_data["items"],
             reason=validated_data.get("reason", ""),
-            refund_type=validated_data["refund_type"],
+            refund_type=validated_data.get("refund_type"),
             user=self.context["request"].user,
             cash_session=validated_data.get("cash_session"),
             authorization_token=authorization_token_from(self.context["request"]),
@@ -892,3 +955,46 @@ class QuoteConvertSerializer(serializers.Serializer):
             user=self.context["request"].user,
             payments=validated_data["payments"],
         )
+
+
+class PaymentSettlementLineSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PaymentSettlementLine
+        fields = [
+            "id",
+            "operation_number",
+            "amount",
+            "fee_amount",
+            "matched_sale_payment",
+            "status",
+            "created_at",
+        ]
+
+
+class PaymentSettlementSerializer(serializers.ModelSerializer):
+    lines = PaymentSettlementLineSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = PaymentSettlement
+        fields = [
+            "id",
+            "provider",
+            "period_start",
+            "period_end",
+            "total_deposited",
+            "total_fee",
+            "uploaded_by",
+            "lines",
+            "created_at",
+        ]
+
+
+class SettlementImportSerializer(serializers.Serializer):
+    """No es un ModelSerializer -delega en SettlementImportService.import_csv(),
+    mismo patron que SaleCreateSerializer."""
+
+    provider = serializers.CharField(max_length=50)
+    period_start = serializers.DateField()
+    period_end = serializers.DateField()
+    total_deposited = serializers.DecimalField(max_digits=12, decimal_places=2)
+    total_fee = serializers.DecimalField(max_digits=12, decimal_places=2)

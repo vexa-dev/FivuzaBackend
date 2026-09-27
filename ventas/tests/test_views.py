@@ -1190,7 +1190,10 @@ class SaleVoidAndReturnTests(TenantTestCase):
         sale = self._create_sale(client, session_id)
         detail_id = sale["details"][0]["id"]
 
-        response = client.post(
+        # Bloque D.5: reembolsar en efectivo exige SALES_CASH_REFUND ademas
+        # de SALES_RETURN -admin lo tiene de entrada, a diferencia de seller.
+        admin_client = self._client_as(self.admin_user)
+        response = admin_client.post(
             "/api/v1/ventas/sale-returns/",
             {
                 "sale_id": sale["id"],

@@ -9,13 +9,13 @@ from inventario.models import ProductVariant, Stock
 from inventario.services import StockService
 from ventas.models import (
     CashSession,
-    CustomerBalanceLedger,
     Sale,
     SaleDetail,
     SaleReturn,
     SaleReturnDetail,
 )
 from ventas.services.cash import CashSessionService
+from ventas.services.credit import CreditLedgerService
 from ventas.services.sales import (
     NoCashSessionError,
     ReturnExceedsSoldError,
@@ -38,7 +38,7 @@ class ReturnService:
         sale: Sale,
         items: list[dict],
         reason: str,
-        refund_type: str,
+        refund_type: str | None,
         user,
         cash_session: CashSession | None = None,
         authorization_token: str | None = None,
@@ -55,10 +55,35 @@ class ReturnService:
         )
         if sale.status != "COMPLETED":
             raise SaleNotCompletedError()
-        if refund_type == "CASH" and (
-            cash_session is None or cash_session.status != "OPEN"
-        ):
-            raise NoCashSessionError()
+
+        # Bloque D.5: si no viene explicito, saldo a favor por defecto
+        # cuando la venta se cobro por un medio electronico (CARD/YAPE) -no
+        # tiene sentido devolver en efectivo lo que nunca entro como
+        # efectivo a la caja.
+        if refund_type is None:
+            paid_electronically = sale.payments.filter(
+                method__in=["CARD", "YAPE"]
+            ).exclude(status="VOIDED").exists()
+            refund_type = "BALANCE" if paid_electronically else "CASH"
+        # El cliente de paso no tiene saldo a favor (D.1): siempre efectivo,
+        # aunque la venta se haya cobrado con tarjeta/Yape.
+        if sale.customer.is_walk_in:
+            refund_type = "CASH"
+
+        cash_refund_authorization = None
+        if refund_type == "CASH":
+            if cash_session is None or cash_session.status != "OPEN":
+                raise NoCashSessionError()
+            # Bloque D.5: reembolsar en efectivo exige autorizacion de
+            # supervisor aparte de SALES_RETURN -incluso quien ya puede
+            # devolver por si mismo necesita SALES_CASH_REFUND (o la clave
+            # de alguien que lo tenga) para que el efectivo salga de caja.
+            cash_refund_authorization = SupervisorAuthorizationService.require(
+                user=user,
+                permission="SALES_CASH_REFUND",
+                raw_token=authorization_token,
+                target_id=sale.id,
+            )
 
         total_refund_amount = Decimal("0")
         prepared_items = []
@@ -164,29 +189,33 @@ class ReturnService:
                 reason=f"Devolucion de venta {sale.invoice_number}",
             )
         else:
-            CustomerBalanceLedger.objects.create(
+            CreditLedgerService.register_balance_credit(
                 customer=sale.customer,
                 sale_return=sale_return,
-                sale=sale,
-                type="CREDIT",
                 amount=total_refund_amount,
                 description=f"Devolucion de venta {sale.invoice_number}",
             )
 
         from usuarios.services import AuditLogService
 
+        details = {
+            "sale_id": sale.id,
+            "invoice_number": sale.invoice_number,
+            "total_refund_amount": str(total_refund_amount),
+            "refund_type": refund_type,
+            "reason": reason,
+            **SupervisorAuthorizationService.audit_details(authorization),
+        }
+        if cash_refund_authorization is not None:
+            details["cash_refund_authorized_by"] = (
+                cash_refund_authorization.authorized_by_id
+            )
         AuditLogService.log_action(
             user=user,
             action="SALE_RETURNED",
             entity="SaleReturn",
             entity_id=sale_return.id,
-            details={
-                "sale_id": sale.id,
-                "invoice_number": sale.invoice_number,
-                "total_refund_amount": str(total_refund_amount),
-                "refund_type": refund_type,
-                **SupervisorAuthorizationService.audit_details(authorization),
-            },
+            details=details,
         )
 
         return sale_return

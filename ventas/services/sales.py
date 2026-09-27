@@ -1,3 +1,4 @@
+import re
 import uuid
 from decimal import ROUND_UP, Decimal
 
@@ -265,6 +266,35 @@ class SaleService:
         if payments_total != total:
             raise PaymentMismatchError()
 
+        # Bloque D.2: numero de operacion obligatorio para tarjeta y Yape, y
+        # ultimos 4 digitos validados si vienen. Se valida antes de tocar la
+        # base -un pago invalido no debe dejar ningun efecto parcial.
+        for payment in payments:
+            if payment["method"] in ("CARD", "YAPE") and not payment.get(
+                "operation_number"
+            ):
+                raise ValidationError(
+                    "El número de operación es obligatorio para tarjeta y Yape."
+                )
+            card_last4 = payment.get("card_last4")
+            if card_last4 and not re.fullmatch(r"\d{1,4}", card_last4):
+                raise ValidationError(
+                    "card_last4 debe tener como máximo 4 dígitos numéricos."
+                )
+
+        # Bloque D.4: la parte que queda fiada es la suma de los pagos
+        # CREDIT_LEDGER; de ahi se deriva el estado real de la venta.
+        credit_amount = sum(
+            (p["amount"] for p in payments if p["method"] == "CREDIT_LEDGER"),
+            Decimal("0"),
+        )
+        if credit_amount == 0:
+            payment_status = "PAID"
+        elif credit_amount >= total:
+            payment_status = "UNPAID"
+        else:
+            payment_status = "PARTIAL"
+
         from usuarios.authorization import (
             SupervisorAuthorizationRequiredError,
             SupervisorAuthorizationService,
@@ -301,7 +331,8 @@ class SaleService:
             subtotal=subtotal,
             discount_total=discount_total,
             total=total,
-            payment_status="PAID",
+            payment_status=payment_status,
+            credit_amount=credit_amount,
             status="COMPLETED",
             client_side_uuid=client_side_uuid or uuid.uuid4().hex,
             sync_status="SYNCED",
@@ -330,15 +361,53 @@ class SaleService:
                 oversell_flag=prepared["oversold"],
             )
 
+        payment_warnings: list[str] = []
         for payment in payments:
+            operation_number = payment.get("operation_number") or ""
+            provider = payment.get("provider") or ""
+            if payment["method"] in ("CARD", "YAPE") and operation_number:
+                # Aviso, no bloqueo (D.2): un numero de operacion repetido el
+                # mismo dia para el mismo proveedor suele ser un error de
+                # tipeo del cajero, pero puede ser legitimo (dos terminales).
+                duplicate = (
+                    SalePayment.objects.filter(
+                        method=payment["method"],
+                        provider=provider,
+                        operation_number=operation_number,
+                        # Bloque B: comparar fecha en hora de Lima, no en UTC
+                        # -at.date() extrae el dia del datetime aware tal
+                        # cual esta guardado (UTC), que puede ser un dia
+                        # distinto al que ve el negocio.
+                        created_at__date=timezone.localtime(at).date(),
+                    )
+                    .exclude(status="VOIDED")
+                    .exists()
+                )
+                if duplicate:
+                    payment_warnings.append(
+                        f"El número de operación {operation_number} ya se registró "
+                        "hoy para este proveedor."
+                    )
             SalePayment.objects.create(
-                sale=sale, method=payment["method"], amount=payment["amount"]
+                sale=sale,
+                method=payment["method"],
+                amount=payment["amount"],
+                provider=provider,
+                operation_number=operation_number,
+                voucher_number=payment.get("voucher_number") or "",
+                card_last4=payment.get("card_last4") or "",
+                card_brand=payment.get("card_brand") or "",
+                installments=payment.get("installments"),
+                is_manual=payment.get("is_manual", True),
+                tendered_amount=payment.get("tendered_amount"),
+                change_amount=payment.get("change_amount"),
             )
             # CreditLedgerService.register_*() puede levantar
-            # CreditLimitExceededError/InsufficientBalanceError -al estar
-            # todo dentro de esta misma transaccion atomica, el rollback
-            # deshace tambien el Sale/SaleDetail/movimiento de stock ya
-            # creados en este mismo request (Sprint 19).
+            # CreditLimitExceededError/InsufficientBalanceError/
+            # WalkInCustomerNotAllowedError -al estar todo dentro de esta
+            # misma transaccion atomica, el rollback deshace tambien el
+            # Sale/SaleDetail/movimiento de stock ya creados en este mismo
+            # request (Sprint 19).
             if payment["method"] == "CREDIT_LEDGER":
                 CreditLedgerService.register_credit_sale(
                     customer=customer, sale=sale, amount=payment["amount"]
@@ -389,6 +458,9 @@ class SaleService:
         # sin cambiar la firma de retorno que ya usan el endpoint normal de
         # creacion y todos sus tests existentes.
         sale.oversold_variant_ids = oversold_variant_ids
+        # Idem (D.2): SaleSerializer.get_warnings() lo expone sin persistir
+        # nada -es solo un aviso para el cajero en la respuesta del cobro.
+        sale.payment_warnings = payment_warnings
 
         from django.db import connection
 
@@ -607,6 +679,22 @@ class ReceiptService:
             f"{payment.method}: {payment.amount.quantize(Decimal('0.01'))}"
             for payment in sale.payments.all()
         )
+        # Bloque D.3: el efectivo recibido y el vuelto viven en el pago CASH
+        # de la venta (SalePayment.tendered_amount/change_amount), no se
+        # recalculan aca -son la fuente de verdad que ya guardo el cobro.
+        cash_payment = next(
+            (p for p in sale.payments.all() if p.method == "CASH"), None
+        )
+        cash_received = (
+            cash_payment.tendered_amount.quantize(Decimal("0.01"))
+            if cash_payment and cash_payment.tendered_amount is not None
+            else None
+        )
+        change = (
+            cash_payment.change_amount.quantize(Decimal("0.01"))
+            if cash_payment and cash_payment.change_amount is not None
+            else None
+        )
         return render_to_string(
             "ventas/receipts/sale_receipt.html",
             {
@@ -619,6 +707,8 @@ class ReceiptService:
                 "lines": lines,
                 "total": sale.total.quantize(Decimal("0.01")),
                 "payments_line": payments_line,
+                "cash_received": cash_received,
+                "change": change,
                 "width_mm": width_mm,
             },
         )

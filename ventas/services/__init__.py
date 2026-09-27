@@ -34,6 +34,10 @@ from ventas.services.credit import (
     CreditLedgerService,
     CreditLimitExceededError,
     InsufficientBalanceError,
+    WalkInCustomerNotAllowedError,
+)
+from ventas.services.settlements import (
+    SettlementImportService,
 )
 from ventas.services.sync import (
     SaleSyncService,
@@ -78,7 +82,9 @@ __all__ = [
     "SaleNotFoundError",
     "SaleService",
     "SaleSyncService",
+    "SettlementImportService",
     "SyncReferenceNotFoundError",
+    "WalkInCustomerNotAllowedError",
     "_ALLOWED_RECEIPT_CONTENT_TYPES",
     "_PRESIGNED_URL_TTL_SECONDS",
 ]

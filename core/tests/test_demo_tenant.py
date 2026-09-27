@@ -79,7 +79,9 @@ class DemoTenantServiceTests(TestCase):
             self.assertEqual(Product.objects.count(), 6)
             self.assertEqual(ProductVariant.objects.count(), 6)
             self.assertEqual(Stock.objects.count(), 6)
-            self.assertEqual(Customer.objects.count(), 3)
+            # 3 del demo + el cliente de paso que siembra
+            # TenantProvisioningService.seed_default_resources (Bloque D.1).
+            self.assertEqual(Customer.objects.count(), 4)
             self.assertEqual(Employee.objects.count(), 2)
             self.assertEqual(Sale.objects.count(), 5)
             self.assertEqual(SaleDetail.objects.count(), 5)

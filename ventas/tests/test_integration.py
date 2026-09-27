@@ -261,7 +261,7 @@ class SaleServiceTests(TenantTestCase):
             lines=[{"variant_id": variant.id, "quantity": "2"}],
             payments=[
                 {"method": "CASH", "amount": Decimal("25.00")},
-                {"method": "CARD", "amount": Decimal("15.00")},
+                {"method": "CARD", "amount": Decimal("15.00"), "operation_number": "OP-1"},
             ],
         )
 

@@ -36,6 +36,11 @@ router.register(
     "ventas/reservations", views.ProductReservationViewSet, basename="reservation"
 )
 router.register("ventas/quotes", views.QuoteViewSet, basename="quote")
+router.register(
+    "ventas/payment-settlements",
+    views.SettlementViewSet,
+    basename="payment-settlement",
+)
 
 urlpatterns = [
     path(
@@ -85,10 +90,26 @@ urlpatterns = [
         views.CashMovementReportView.as_view(),
         name="cash-movement-report",
     ),
+    # Bloque D.6: conciliacion de cobros electronicos.
+    path(
+        "ventas/payment-settlements/template/",
+        views.SettlementImportTemplateView.as_view(),
+        name="payment-settlement-template",
+    ),
+    path(
+        "ventas/payment-settlements/import/",
+        views.SettlementImportView.as_view(),
+        name="payment-settlement-import",
+    ),
+    path(
+        "ventas/payment-settlements/reconciliation/",
+        views.SettlementReconciliationView.as_view(),
+        name="payment-settlement-reconciliation",
+    ),
 ]
 
 # El router va al final: open/ debe resolverse antes de que el patron de
 # detalle del router (ventas/cash-sessions/<pk>/) intente tomar "open" como
-# si fuera un pk. Mismo motivo para sales/sync/: sin esto, el router
-# intentaria resolver "sync" como si fuera el <pk> de ventas/sales/<pk>/.
+# si fuera un pk. Mismo motivo para sales/sync/, y para las rutas propias de
+# payment-settlements/ (template/import/reconciliation/ no son un <pk>).
 urlpatterns += router.urls
