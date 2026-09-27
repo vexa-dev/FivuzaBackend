@@ -2037,6 +2037,50 @@ class SalesReportTests(TenantTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response["Content-Type"], "text/csv")
 
+    def test_sales_report_shows_fee_amount_to_who_has_cost_access(self):
+        # Bloque D.6: la comision de un cobro electronico reduce el margen
+        # del periodo -admin tiene INVENTORY_VIEW_COST por defecto.
+        client = self._client()
+        register = CashRegister.objects.create(
+            warehouse=self.warehouse, name="Caja reporte fee"
+        )
+        session = client.post(
+            "/api/v1/ventas/cash-sessions/open/",
+            {"cash_register_id": register.id, "opening_amount": "0"},
+            format="json",
+        )
+        client.post(
+            "/api/v1/ventas/sales/",
+            {
+                "customer_id": self.customer.id,
+                "cash_session_id": session.data["id"],
+                "lines": [{"variant_id": self.variant.id, "quantity": "1"}],
+                "payments": [
+                    {
+                        "method": "CARD",
+                        "amount": "20.00",
+                        "provider": "visanet",
+                        "operation_number": "OP-REPORT-1",
+                    }
+                ],
+            },
+            format="json",
+        )
+
+        from ventas.models import SalePayment
+
+        SalePayment.objects.filter(operation_number="OP-REPORT-1").update(
+            fee_amount="0.60"
+        )
+
+        today = timezone.localdate().isoformat()
+        response = client.get(
+            f"/api/v1/ventas/reports/sales/?date_from={today}&date_to={today}"
+        )
+        self.assertEqual(response.status_code, 200)
+        row = next(r for r in response.data if r["invoice_number"])
+        self.assertIn("fee_amount", row)
+
 
 class CashReportTests(TenantTestCase):
     """GET /ventas/reports/cash-sessions/ y /ventas/reports/cash-movements/

@@ -1,6 +1,8 @@
 from django.contrib.postgres.search import SearchQuery, SearchRank
 from django.db import transaction
-from django.db.models import F, Q
+from decimal import Decimal
+
+from django.db.models import F, Q, Sum
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -36,6 +38,7 @@ from ventas.models import (
     PromotionProduct,
     Quote,
     Sale,
+    SalePayment,
     SaleReturn,
 )
 from ventas.serializers import (
@@ -856,6 +859,21 @@ class SalesReportView(SchemaAPIView):
             WarehouseAccessService.require_warehouse(request.user, warehouse_id)
             queryset = queryset.filter(warehouse_id=warehouse_id)
 
+        # Bloque D.6: la comisión de los cobros electrónicos reduce el
+        # margen del período -mismo criterio que el costo (Bloque A.5):
+        # solo se muestra a quien tiene INVENTORY_VIEW_COST. Se agrega como
+        # campo por venta, sin cambiar la forma de la respuesta (sigue
+        # siendo una lista), para no romper el contrato ya publicado.
+        show_fees = PermissionService.check_permission(request.user, "INVENTORY_VIEW_COST")
+        fee_by_sale: dict[int, Decimal] = {}
+        if show_fees:
+            fee_by_sale = {
+                row["sale_id"]: row["total"] or Decimal("0")
+                for row in SalePayment.objects.filter(sale__in=queryset)
+                .values("sale_id")
+                .annotate(total=Sum("fee_amount"))
+            }
+
         rows = [
             {
                 "invoice_number": sale.invoice_number,
@@ -866,6 +884,11 @@ class SalesReportView(SchemaAPIView):
                 "discount_total": str(sale.discount_total),
                 "total": str(sale.total),
                 "payment_status": sale.payment_status,
+                **(
+                    {"fee_amount": str(fee_by_sale.get(sale.id, Decimal("0")))}
+                    if show_fees
+                    else {}
+                ),
             }
             for sale in queryset.order_by("occurred_at", "id")
         ]
@@ -882,6 +905,8 @@ class SalesReportView(SchemaAPIView):
                 "total",
                 "payment_status",
             ]
+            if show_fees:
+                columns.append("fee_amount")
             return ReportExportService.export_queryset(
                 rows=rows,
                 columns=columns,
