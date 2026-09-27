@@ -443,6 +443,7 @@ class SaleSerializer(serializers.ModelSerializer):
             "occurred_at",
         ]
 
+    @extend_schema_field(serializers.ListField(child=serializers.CharField()))
     def get_warnings(self, obj):
         return getattr(obj, "payment_warnings", [])
 
