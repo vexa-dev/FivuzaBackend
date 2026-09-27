@@ -318,8 +318,8 @@ class CashSessionService:
         # cobros electronicos sin numero de operacion o sin conciliar.
         # Atributo transitorio (no persiste en el modelo), mismo criterio
         # que Sale.payment_warnings.
-        session.pending_payment_warnings = (
-            CashSessionService._pending_payment_warnings(session)
+        session.pending_payment_warnings = CashSessionService._pending_payment_warnings(
+            session
         )
 
         return session

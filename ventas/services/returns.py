@@ -61,9 +61,11 @@ class ReturnService:
         # tiene sentido devolver en efectivo lo que nunca entro como
         # efectivo a la caja.
         if refund_type is None:
-            paid_electronically = sale.payments.filter(
-                method__in=["CARD", "YAPE"]
-            ).exclude(status="VOIDED").exists()
+            paid_electronically = (
+                sale.payments.filter(method__in=["CARD", "YAPE"])
+                .exclude(status="VOIDED")
+                .exists()
+            )
             refund_type = "BALANCE" if paid_electronically else "CASH"
         # El cliente de paso no tiene saldo a favor (D.1): siempre efectivo,
         # aunque la venta se haya cobrado con tarjeta/Yape.

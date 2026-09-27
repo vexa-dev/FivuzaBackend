@@ -10,7 +10,9 @@ def seed_bloque_d_permissions(apps, schema_editor):
     RolePermission = apps.get_model("usuarios", "RolePermission")
 
     permissions = {
-        code: Permission.objects.get_or_create(code=code, defaults={"module": "SALES"})[0]
+        code: Permission.objects.get_or_create(code=code, defaults={"module": "SALES"})[
+            0
+        ]
         for code in ("SALES_CASH_REFUND", "SALES_RECONCILE")
     }
     for role in Role.objects.filter(

@@ -212,7 +212,9 @@ class BloqueDTests(TenantTestCase):
         self.assertEqual(sale.payment_status, "PARTIAL")
         self.assertEqual(sale.credit_amount, Decimal("15.00"))
 
-        CreditLedgerService.register_payment(customer=self.customer, amount=Decimal("15.00"))
+        CreditLedgerService.register_payment(
+            customer=self.customer, amount=Decimal("15.00")
+        )
         sale.refresh_from_db()
         self.assertEqual(sale.payment_status, "PAID")
 
@@ -238,7 +240,9 @@ class BloqueDTests(TenantTestCase):
         self.assertEqual(newer.payment_status, "UNPAID")
 
         # Solo alcanza para saldar la mas antigua.
-        CreditLedgerService.register_payment(customer=self.customer, amount=Decimal("20.00"))
+        CreditLedgerService.register_payment(
+            customer=self.customer, amount=Decimal("20.00")
+        )
         older.refresh_from_db()
         newer.refresh_from_db()
         self.assertEqual(older.payment_status, "PAID")
@@ -255,7 +259,11 @@ class BloqueDTests(TenantTestCase):
             user=self.user,
             lines=[{"variant_id": variant.id, "quantity": "1"}],
             payments=[
-                {"method": "CARD", "amount": Decimal("20.00"), "operation_number": "OP-9"}
+                {
+                    "method": "CARD",
+                    "amount": Decimal("20.00"),
+                    "operation_number": "OP-9",
+                }
             ],
         )
         detail = sale.details.first()

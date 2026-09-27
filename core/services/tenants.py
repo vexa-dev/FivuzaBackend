@@ -369,5 +369,9 @@ class TenantProvisioningService:
             Customer.objects.get_or_create(
                 document_type="ANONIMO",
                 document_number="00000000",
-                defaults={"name": "Cliente de paso", "is_walk_in": True, "is_active": True},
+                defaults={
+                    "name": "Cliente de paso",
+                    "is_walk_in": True,
+                    "is_active": True,
+                },
             )

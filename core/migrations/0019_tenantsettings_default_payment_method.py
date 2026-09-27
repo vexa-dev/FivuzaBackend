@@ -4,15 +4,24 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('core', '0018_dos_decimales'),
+        ("core", "0018_dos_decimales"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='tenantsettings',
-            name='default_payment_method',
-            field=models.CharField(choices=[('CASH', 'CASH'), ('CARD', 'CARD'), ('YAPE', 'YAPE'), ('CREDIT_LEDGER', 'CREDIT_LEDGER'), ('BALANCE', 'BALANCE')], default='CASH', max_length=20),
+            model_name="tenantsettings",
+            name="default_payment_method",
+            field=models.CharField(
+                choices=[
+                    ("CASH", "CASH"),
+                    ("CARD", "CARD"),
+                    ("YAPE", "YAPE"),
+                    ("CREDIT_LEDGER", "CREDIT_LEDGER"),
+                    ("BALANCE", "BALANCE"),
+                ],
+                default="CASH",
+                max_length=20,
+            ),
         ),
     ]

@@ -476,7 +476,9 @@ class SalePaymentInputSerializer(serializers.Serializer):
     )
     card_last4 = serializers.CharField(required=False, allow_blank=True, max_length=4)
     card_brand = serializers.CharField(required=False, allow_blank=True, max_length=30)
-    installments = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    installments = serializers.IntegerField(
+        required=False, allow_null=True, min_value=1
+    )
     is_manual = serializers.BooleanField(required=False, default=True)
     tendered_amount = serializers.DecimalField(
         max_digits=12, decimal_places=2, required=False, allow_null=True, min_value=0

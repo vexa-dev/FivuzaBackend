@@ -82,7 +82,9 @@ class SettlementImportService:
             try:
                 with transaction.atomic():
                     line_status = SettlementImportService._create_row(
-                        settlement=settlement, row=row, operation_number=operation_number
+                        settlement=settlement,
+                        row=row,
+                        operation_number=operation_number,
                     )
             except Exception as exc:  # noqa: BLE001 -- una fila mala no debe frenar el resto del archivo
                 results.append(
@@ -151,7 +153,9 @@ class SettlementImportService:
         return None
 
     @staticmethod
-    def _create_row(*, settlement: PaymentSettlement, row: dict, operation_number: str) -> str:
+    def _create_row(
+        *, settlement: PaymentSettlement, row: dict, operation_number: str
+    ) -> str:
         amount = Decimal(row["monto"])
         fee_amount = Decimal(row.get("comision") or "0")
 
@@ -207,13 +211,28 @@ class SettlementImportService:
             )
 
         return {
-            "reconciled": list(matched_lines.values(
-                "id", "operation_number", "amount", "fee_amount", "matched_sale_payment"
-            )),
-            "deposits_without_payment": list(unmatched_lines.values(
-                "id", "operation_number", "amount", "fee_amount", "settlement"
-            )),
-            "payments_without_deposit": list(payments_without_deposit.values(
-                "id", "sale_id", "provider", "operation_number", "amount", "created_at"
-            )),
+            "reconciled": list(
+                matched_lines.values(
+                    "id",
+                    "operation_number",
+                    "amount",
+                    "fee_amount",
+                    "matched_sale_payment",
+                )
+            ),
+            "deposits_without_payment": list(
+                unmatched_lines.values(
+                    "id", "operation_number", "amount", "fee_amount", "settlement"
+                )
+            ),
+            "payments_without_deposit": list(
+                payments_without_deposit.values(
+                    "id",
+                    "sale_id",
+                    "provider",
+                    "operation_number",
+                    "amount",
+                    "created_at",
+                )
+            ),
         }

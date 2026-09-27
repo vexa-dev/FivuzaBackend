@@ -864,7 +864,9 @@ class SalesReportView(SchemaAPIView):
         # solo se muestra a quien tiene INVENTORY_VIEW_COST. Se agrega como
         # campo por venta, sin cambiar la forma de la respuesta (sigue
         # siendo una lista), para no romper el contrato ya publicado.
-        show_fees = PermissionService.check_permission(request.user, "INVENTORY_VIEW_COST")
+        show_fees = PermissionService.check_permission(
+            request.user, "INVENTORY_VIEW_COST"
+        )
         fee_by_sale: dict[int, Decimal] = {}
         if show_fees:
             fee_by_sale = {

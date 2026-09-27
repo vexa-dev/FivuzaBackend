@@ -204,7 +204,9 @@ class CreditLedgerService:
             applied = min(remaining, outstanding)
             sale.credit_settled_amount += applied
             sale.payment_status = (
-                "PAID" if sale.credit_settled_amount >= sale.credit_amount else "PARTIAL"
+                "PAID"
+                if sale.credit_settled_amount >= sale.credit_amount
+                else "PARTIAL"
             )
             sale.save(update_fields=["credit_settled_amount", "payment_status"])
             remaining -= applied
