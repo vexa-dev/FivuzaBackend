@@ -8,7 +8,7 @@ from django_tenants.test.cases import TenantTestCase
 from rest_framework.exceptions import ValidationError
 
 from core.models import TenantSettings
-from inventario.models import Category, Stock
+from inventario.models import Category
 from inventario.services import ProductVariantService, StockService
 from usuarios.models import Role, User
 from ventas.models import Customer, CashRegister, CashSession, SalePayment
