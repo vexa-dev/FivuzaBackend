@@ -147,6 +147,11 @@ class Customer(models.Model):
         max_digits=12, decimal_places=2, null=True, blank=True
     )
     is_active = models.BooleanField(default=True)
+    # Bloque D.1: cliente "Público general" sembrado por
+    # TenantProvisioningService.seed_default_resources para vender sin
+    # registrar a la persona. No se fiado ni saldo a favor (CreditLedgerService
+    # lo rechaza), no se borra ni se convierte en cliente normal.
+    is_walk_in = models.BooleanField(default=False)
     search_vector = SearchVectorField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
     deleted_at = models.DateTimeField(null=True, blank=True)
@@ -243,6 +248,15 @@ class Sale(models.Model):
         max_length=10,
         choices=[("PAID", "PAID"), ("PARTIAL", "PARTIAL"), ("UNPAID", "UNPAID")],
     )
+    # Bloque D.4: parte del total que se fio (suma de pagos CREDIT_LEDGER de
+    # esta venta) y cuanto de esa parte ya se abono. credit_settled_amount
+    # sube via CreditLedgerService.register_payment (asignacion FIFO contra
+    # las ventas mas antiguas con saldo). payment_status se deriva de estos
+    # dos campos, nunca se edita a mano.
+    credit_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    credit_settled_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0
+    )
     status = models.CharField(
         max_length=15,
         choices=[
@@ -314,6 +328,39 @@ class SalePayment(models.Model):
         ],
     )
     amount = models.DecimalField(max_digits=12, decimal_places=2)
+    # Bloque D.2: pago enriquecido -rastreable y conciliable. Nunca el numero
+    # completo de tarjeta ni datos del titular, solo los ultimos 4 digitos.
+    provider = models.CharField(max_length=50, blank=True)
+    operation_number = models.CharField(max_length=50, blank=True)
+    voucher_number = models.CharField(max_length=50, blank=True)
+    card_last4 = models.CharField(max_length=4, blank=True)
+    card_brand = models.CharField(max_length=30, blank=True)
+    installments = models.PositiveSmallIntegerField(null=True, blank=True)
+    status = models.CharField(
+        max_length=10,
+        choices=[
+            ("APPROVED", "APPROVED"),
+            ("REJECTED", "REJECTED"),
+            ("VOIDED", "VOIDED"),
+            ("REFUNDED", "REFUNDED"),
+        ],
+        default="APPROVED",
+    )
+    fee_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    # Cuando la conciliacion (D.6) cruzo este pago con un deposito real.
+    settled_at = models.DateTimeField(null=True, blank=True)
+    # True cuando el cajero anoto el numero de operacion a mano (terminal
+    # fisica del operador, sin integracion -bloque D/E), no vino de una
+    # pasarela que confirma el pago desde el propio sistema.
+    is_manual = models.BooleanField(default=True)
+    # Solo para CASH: lo que recibio el cajero y el vuelto calculado. Viaja al
+    # ticket (ReceiptService); es la fuente de verdad, no un calculo de UI.
+    tendered_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
+    change_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -324,7 +371,13 @@ class SalePayment(models.Model):
                     method__in=["CASH", "CARD", "YAPE", "CREDIT_LEDGER", "BALANCE"]
                 ),
                 name="ck_sale_payments_method",
-            )
+            ),
+            models.CheckConstraint(
+                check=models.Q(
+                    status__in=["APPROVED", "REJECTED", "VOIDED", "REFUNDED"]
+                ),
+                name="ck_sale_payments_status",
+            ),
         ]
 
 
@@ -565,5 +618,53 @@ class CustomerBalanceLedger(models.Model):
             models.CheckConstraint(
                 check=models.Q(type__in=["CREDIT", "DEBIT"]),
                 name="ck_customer_balance_ledger_type",
+            )
+        ]
+
+
+class PaymentSettlement(models.Model):
+    """Bloque D.6: liquidacion cargada por el negocio (archivo del operador
+    de tarjeta/Yape con el periodo, el total depositado y la comision)."""
+
+    provider = models.CharField(max_length=50)
+    period_start = models.DateField()
+    period_end = models.DateField()
+    total_deposited = models.DecimalField(max_digits=12, decimal_places=2)
+    total_fee = models.DecimalField(max_digits=12, decimal_places=2)
+    uploaded_by = models.ForeignKey(
+        User, on_delete=models.PROTECT, related_name="payment_settlements"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "payment_settlements"
+
+
+class PaymentSettlementLine(models.Model):
+    settlement = models.ForeignKey(
+        PaymentSettlement, on_delete=models.CASCADE, related_name="lines"
+    )
+    operation_number = models.CharField(max_length=50)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    fee_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    matched_sale_payment = models.ForeignKey(
+        SalePayment,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="settlement_lines",
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=[("MATCHED", "MATCHED"), ("UNMATCHED_DEPOSIT", "UNMATCHED_DEPOSIT")],
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "payment_settlement_lines"
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(status__in=["MATCHED", "UNMATCHED_DEPOSIT"]),
+                name="ck_payment_settlement_lines_status",
             )
         ]

@@ -1,11 +1,15 @@
 from django.contrib.postgres.search import SearchQuery, SearchRank
 from django.db import transaction
-from django.db.models import F, Q
+from decimal import Decimal
+
+from django.db.models import F, Q, Sum
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
+from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -28,11 +32,13 @@ from ventas.models import (
     Customer,
     CustomerBalanceLedger,
     CustomerDebtLedger,
+    PaymentSettlement,
     ProductReservation,
     Promotion,
     PromotionProduct,
     Quote,
     Sale,
+    SalePayment,
     SaleReturn,
 )
 from ventas.serializers import (
@@ -54,6 +60,7 @@ from ventas.serializers import (
     QuoteCreateSerializer,
     QuoteSerializer,
     RegisterDebtPaymentSerializer,
+    PaymentSettlementSerializer,
     ReservationConvertSerializer,
     ReservationCreateSerializer,
     SaleCreateSerializer,
@@ -62,6 +69,7 @@ from ventas.serializers import (
     SaleSerializer,
     SaleSyncSerializer,
     SaleVoidSerializer,
+    SettlementImportSerializer,
 )
 from ventas.services import (
     CashSessionService,
@@ -71,6 +79,7 @@ from ventas.services import (
     ReceiptService,
     ReservationService,
     SaleNotFoundError,
+    SettlementImportService,
 )
 
 # Lectura: cualquier tenant.users autenticado con el modulo de caja activo
@@ -151,6 +160,15 @@ _SALES_RETURN_PERMISSIONS = [
     TenantNotCanceled,
     RequiresFeature("HAS_SALES_MODULE"),
     HasPermissionOrSupervisorAuthorization("SALES_RETURN"),
+]
+# Bloque D.6: cargar la liquidacion y ver la conciliacion es decision del
+# dueño/admin, no del cajero -mismo criterio que SETTINGS_MANAGE.
+_SALES_RECONCILE_PERMISSIONS = [
+    IsAuthenticated,
+    TenantNotSuspended,
+    TenantNotCanceled,
+    RequiresFeature("HAS_SALES_MODULE"),
+    HasModulePermission("SALES_RECONCILE"),
 ]
 
 
@@ -344,8 +362,19 @@ class CustomerViewSet(TenantAuditMixin, SoftDeleteDestroyMixin, viewsets.ModelVi
             return [permission() for permission in _SALES_READ_PERMISSIONS]
         return [permission() for permission in _SALES_WRITE_PERMISSIONS]
 
+    def perform_destroy(self, instance):
+        # Bloque D.1: el cliente de paso es un recurso sembrado, no un
+        # cliente del negocio -borrarlo dejaria al POS sin a quien
+        # preseleccionar para vender sin registrar a la persona.
+        if instance.is_walk_in:
+            raise ValidationError("El cliente de paso no se puede eliminar.")
+        super().perform_destroy(instance)
+
     def get_queryset(self):
         queryset = super().get_queryset().filter(deleted_at__isnull=True)
+        is_walk_in = self.request.query_params.get("is_walk_in")
+        if is_walk_in is not None:
+            queryset = queryset.filter(is_walk_in=is_walk_in.lower() == "true")
         search = self.request.query_params.get("search")
         if search:
             query = SearchQuery(search, config="simple", search_type="websearch")
@@ -830,6 +859,23 @@ class SalesReportView(SchemaAPIView):
             WarehouseAccessService.require_warehouse(request.user, warehouse_id)
             queryset = queryset.filter(warehouse_id=warehouse_id)
 
+        # Bloque D.6: la comisión de los cobros electrónicos reduce el
+        # margen del período -mismo criterio que el costo (Bloque A.5):
+        # solo se muestra a quien tiene INVENTORY_VIEW_COST. Se agrega como
+        # campo por venta, sin cambiar la forma de la respuesta (sigue
+        # siendo una lista), para no romper el contrato ya publicado.
+        show_fees = PermissionService.check_permission(
+            request.user, "INVENTORY_VIEW_COST"
+        )
+        fee_by_sale: dict[int, Decimal] = {}
+        if show_fees:
+            fee_by_sale = {
+                row["sale_id"]: row["total"] or Decimal("0")
+                for row in SalePayment.objects.filter(sale__in=queryset)
+                .values("sale_id")
+                .annotate(total=Sum("fee_amount"))
+            }
+
         rows = [
             {
                 "invoice_number": sale.invoice_number,
@@ -840,6 +886,11 @@ class SalesReportView(SchemaAPIView):
                 "discount_total": str(sale.discount_total),
                 "total": str(sale.total),
                 "payment_status": sale.payment_status,
+                **(
+                    {"fee_amount": str(fee_by_sale.get(sale.id, Decimal("0")))}
+                    if show_fees
+                    else {}
+                ),
             }
             for sale in queryset.order_by("occurred_at", "id")
         ]
@@ -856,6 +907,8 @@ class SalesReportView(SchemaAPIView):
                 "total",
                 "payment_status",
             ]
+            if show_fees:
+                columns.append("fee_amount")
             return ReportExportService.export_queryset(
                 rows=rows,
                 columns=columns,
@@ -1012,3 +1065,73 @@ class CashMovementReportView(SchemaAPIView):
                 filename=f"movimientos_caja_{date_from}_a_{date_to}",
             )
         return Response(rows)
+
+
+class SettlementImportTemplateView(SchemaAPIView):
+    """GET plantilla CSV descargable para cargar la liquidacion del operador
+    (Bloque D.6)."""
+
+    permission_classes = _SALES_RECONCILE_PERMISSIONS
+
+    def get(self, request):
+        response = HttpResponse(
+            SettlementImportService.build_template_csv(), content_type="text/csv"
+        )
+        response["Content-Disposition"] = (
+            'attachment; filename="plantilla_liquidacion.csv"'
+        )
+        return response
+
+
+class SettlementImportView(SchemaAPIView):
+    """POST archivo CSV de la liquidacion del operador -cruza cada linea
+    contra los SalePayment ya cobrados por numero de operacion y monto
+    (Bloque D.6)."""
+
+    permission_classes = _SALES_RECONCILE_PERMISSIONS
+    parser_classes = [MultiPartParser]
+
+    def post(self, request):
+        meta = SettlementImportSerializer(data=request.data)
+        meta.is_valid(raise_exception=True)
+
+        uploaded_file = request.FILES.get("file")
+        if not uploaded_file:
+            raise ValidationError({"file": "Este campo es requerido."})
+        try:
+            content = uploaded_file.read().decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise ValidationError(
+                {"file": "El archivo debe ser un CSV codificado en UTF-8."}
+            ) from exc
+
+        report = SettlementImportService.import_csv(
+            file_content=content,
+            user=request.user,
+            **meta.validated_data,
+        )
+        return Response(report, status=status.HTTP_200_OK)
+
+
+class SettlementViewSet(
+    mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet
+):
+    """Solo lectura -la carga real pasa por SettlementImportView (Bloque D.6)."""
+
+    queryset = PaymentSettlement.objects.all().order_by("-created_at")
+    serializer_class = PaymentSettlementSerializer
+    permission_classes = _SALES_RECONCILE_PERMISSIONS
+
+
+class SettlementReconciliationView(SchemaAPIView):
+    """GET /ventas/payment-settlements/reconciliation/?provider= -las tres
+    listas que pide D.6: conciliados, cobros sin deposito y depositos sin
+    cobro."""
+
+    permission_classes = _SALES_RECONCILE_PERMISSIONS
+
+    def get(self, request):
+        provider = request.query_params.get("provider")
+        return Response(
+            SettlementImportService.reconciliation_report(provider=provider)
+        )

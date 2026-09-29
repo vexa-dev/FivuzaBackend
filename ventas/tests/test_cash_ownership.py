@@ -567,7 +567,11 @@ class CashOwnershipTests(TenantTestCase):
             lines=[{"variant_id": variant.id, "quantity": "1"}],
             payments=[
                 {"method": "CASH", "amount": Decimal("50.00")},
-                {"method": "CARD", "amount": Decimal("30.00")},
+                {
+                    "method": "CARD",
+                    "amount": Decimal("30.00"),
+                    "operation_number": "OP-1",
+                },
                 {"method": "CREDIT_LEDGER", "amount": Decimal("20.00")},
             ],
         )

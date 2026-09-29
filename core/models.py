@@ -237,6 +237,21 @@ class TenantSettings(models.Model):
     # del plan sugiere ("cada 15-30 min"), ajustable por tenant segun cuanto
     # trafico de ventas tenga.
     dashboard_refresh_minutes = models.IntegerField(default=15)
+    # Bloque D.3: método preseleccionado al abrir el cobro en el POS. Mismos
+    # choices que SalePayment.method (ventas); se repiten aquí en vez de
+    # importar ese modelo para no acoplar core a ventas (mismo criterio que
+    # evita la FK física en SaleDetail.variant_id).
+    default_payment_method = models.CharField(
+        max_length=20,
+        choices=[
+            ("CASH", "CASH"),
+            ("CARD", "CARD"),
+            ("YAPE", "YAPE"),
+            ("CREDIT_LEDGER", "CREDIT_LEDGER"),
+            ("BALANCE", "BALANCE"),
+        ],
+        default="CASH",
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

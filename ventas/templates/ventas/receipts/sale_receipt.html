@@ -7,6 +7,8 @@
   {% endfor %}<hr/>
   <p>TOTAL: S/. {{ total }}</p>
   <p>{{ payments_line }}</p>
-  <hr/>
+  {% if cash_received is not None %}<p>Recibido: S/. {{ cash_received }}</p>
+  <p>Vuelto: S/. {{ change }}</p>
+  {% endif %}<hr/>
   <p>Gracias por su compra</p>
 </div>

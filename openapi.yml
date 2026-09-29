@@ -9869,6 +9869,104 @@ paths:
       responses:
         '204':
           description: No response body
+  /api/v1/ventas/payment-settlements/:
+    get:
+      operationId: v1_ventas_payment_settlements_list
+      description: Solo lectura -la carga real pasa por SettlementImportView (Bloque
+        D.6).
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      tags:
+      - v1
+      security:
+      - platformBearerAuth: []
+      - tenantBearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedPaymentSettlementList'
+          description: ''
+  /api/v1/ventas/payment-settlements/{id}/:
+    get:
+      operationId: v1_ventas_payment_settlements_retrieve
+      description: Solo lectura -la carga real pasa por SettlementImportView (Bloque
+        D.6).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this payment settlement.
+        required: true
+      tags:
+      - v1
+      security:
+      - platformBearerAuth: []
+      - tenantBearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentSettlement'
+          description: ''
+  /api/v1/ventas/payment-settlements/import/:
+    post:
+      operationId: v1_ventas_payment_settlements_import_create
+      description: |-
+        POST archivo CSV de la liquidacion del operador -cruza cada linea
+        contra los SalePayment ya cobrados por numero de operacion y monto
+        (Bloque D.6).
+      tags:
+      - v1
+      security:
+      - platformBearerAuth: []
+      - tenantBearerAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/v1/ventas/payment-settlements/reconciliation/:
+    get:
+      operationId: v1_ventas_payment_settlements_reconciliation_retrieve
+      description: |-
+        GET /ventas/payment-settlements/reconciliation/?provider= -las tres
+        listas que pide D.6: conciliados, cobros sin deposito y depositos sin
+        cobro.
+      tags:
+      - v1
+      security:
+      - platformBearerAuth: []
+      - tenantBearerAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/v1/ventas/payment-settlements/template/:
+    get:
+      operationId: v1_ventas_payment_settlements_template_retrieve
+      description: |-
+        GET plantilla CSV descargable para cargar la liquidacion del operador
+        (Bloque D.6).
+      tags:
+      - v1
+      security:
+      - platformBearerAuth: []
+      - tenantBearerAuth: []
+      responses:
+        '200':
+          description: No response body
   /api/v1/ventas/pos/catalog/:
     get:
       operationId: v1_ventas_pos_catalog_retrieve
@@ -11427,6 +11525,11 @@ components:
           type: string
           nullable: true
           maxLength: 255
+        pending_payment_warnings:
+          type: array
+          items:
+            type: string
+          readOnly: true
       required:
       - approved_by
       - cash_register
@@ -11439,6 +11542,7 @@ components:
       - id
       - opening_amount
       - opening_at
+      - pending_payment_warnings
       - status
       - user
     CashSessionClose:
@@ -11519,6 +11623,11 @@ components:
           type: string
           nullable: true
           maxLength: 255
+        pending_payment_warnings:
+          type: array
+          items:
+            type: string
+          readOnly: true
         movements:
           type: array
           items:
@@ -11543,6 +11652,7 @@ components:
       - opening_amount
       - opening_at
       - payment_totals
+      - pending_payment_warnings
       - status
       - user
     CashSessionOpen:
@@ -11695,6 +11805,9 @@ components:
           maxLength: 255
         is_active:
           type: boolean
+        is_walk_in:
+          type: boolean
+          readOnly: true
         credit_limit:
           type: string
           format: decimal
@@ -11725,6 +11838,7 @@ components:
       - document_number
       - document_type
       - id
+      - is_walk_in
       - name
       - oldest_unpaid_debt_at
       - updated_at
@@ -12569,6 +12683,9 @@ components:
         * `CASH` - CASH
         * `GYM` - GYM
         * `COMPLIANCE` - COMPLIANCE
+    NullEnum:
+      enum:
+      - null
     PaginatedAttributeList:
       type: object
       required:
@@ -13144,6 +13261,29 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/MembershipPlan'
+    PaginatedPaymentSettlementList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaymentSettlement'
     PaginatedPermissionList:
       type: object
       required:
@@ -13965,6 +14105,9 @@ components:
           maxLength: 255
         is_active:
           type: boolean
+        is_walk_in:
+          type: boolean
+          readOnly: true
         credit_limit:
           type: string
           format: decimal
@@ -14594,6 +14737,8 @@ components:
           type: boolean
         cashier_can_close_session:
           type: boolean
+        default_payment_method:
+          $ref: '#/components/schemas/Method5c0Enum'
         updated_at:
           type: string
           format: date-time
@@ -14738,6 +14883,90 @@ components:
         * `TRANSFER` - TRANSFER
         * `YAPE` - YAPE
         * `PLIN` - PLIN
+    PaymentSettlement:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        provider:
+          type: string
+          maxLength: 50
+        period_start:
+          type: string
+          format: date
+        period_end:
+          type: string
+          format: date
+        total_deposited:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        total_fee:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        uploaded_by:
+          type: integer
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaymentSettlementLine'
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - id
+      - lines
+      - period_end
+      - period_start
+      - provider
+      - total_deposited
+      - total_fee
+      - uploaded_by
+    PaymentSettlementLine:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        operation_number:
+          type: string
+          maxLength: 50
+        amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        fee_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        matched_sale_payment:
+          type: integer
+          nullable: true
+        status:
+          $ref: '#/components/schemas/PaymentSettlementLineStatusEnum'
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - amount
+      - created_at
+      - id
+      - operation_number
+      - status
+    PaymentSettlementLineStatusEnum:
+      enum:
+      - MATCHED
+      - UNMATCHED_DEPOSIT
+      type: string
+      description: |-
+        * `MATCHED` - MATCHED
+        * `UNMATCHED_DEPOSIT` - UNMATCHED_DEPOSIT
     PaymentStatusEnum:
       enum:
       - PAID
@@ -15718,6 +15947,14 @@ components:
           maxLength: 3
         payment_status:
           $ref: '#/components/schemas/PaymentStatusEnum'
+        credit_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        credit_settled_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         status:
           $ref: '#/components/schemas/SaleStatusEnum'
         sync_status:
@@ -15731,6 +15968,11 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/SalePayment'
+          readOnly: true
+        warnings:
+          type: array
+          items:
+            type: string
           readOnly: true
         created_at:
           type: string
@@ -15753,6 +15995,7 @@ components:
       - total
       - user
       - warehouse
+      - warnings
     SaleCreate:
       type: object
       description: |-
@@ -15848,6 +16091,48 @@ components:
           type: string
           format: decimal
           pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        provider:
+          type: string
+          maxLength: 50
+        operation_number:
+          type: string
+          maxLength: 50
+        voucher_number:
+          type: string
+          maxLength: 50
+        card_last4:
+          type: string
+          maxLength: 4
+        card_brand:
+          type: string
+          maxLength: 30
+        installments:
+          type: integer
+          maximum: 32767
+          minimum: 0
+          nullable: true
+        status:
+          $ref: '#/components/schemas/SalePaymentStatusEnum'
+        fee_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        settled_at:
+          type: string
+          format: date-time
+          nullable: true
+        is_manual:
+          type: boolean
+        tendered_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+          nullable: true
+        change_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+          nullable: true
         created_at:
           type: string
           format: date-time
@@ -15866,9 +16151,53 @@ components:
           type: string
           format: decimal
           pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        provider:
+          type: string
+          maxLength: 50
+        operation_number:
+          type: string
+          maxLength: 50
+        voucher_number:
+          type: string
+          maxLength: 50
+        card_last4:
+          type: string
+          maxLength: 4
+        card_brand:
+          type: string
+          maxLength: 30
+        installments:
+          type: integer
+          minimum: 1
+          nullable: true
+        is_manual:
+          type: boolean
+          default: true
+        tendered_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+          nullable: true
+        change_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+          nullable: true
       required:
       - amount
       - method
+    SalePaymentStatusEnum:
+      enum:
+      - APPROVED
+      - REJECTED
+      - VOIDED
+      - REFUNDED
+      type: string
+      description: |-
+        * `APPROVED` - APPROVED
+        * `REJECTED` - REJECTED
+        * `VOIDED` - VOIDED
+        * `REFUNDED` - REFUNDED
     SaleReturn:
       type: object
       properties:
@@ -15917,7 +16246,10 @@ components:
         reason:
           type: string
         refund_type:
-          $ref: '#/components/schemas/RefundTypeEnum'
+          nullable: true
+          oneOf:
+          - $ref: '#/components/schemas/RefundTypeEnum'
+          - $ref: '#/components/schemas/NullEnum'
         cash_session_id:
           type: integer
           nullable: true
@@ -15927,7 +16259,6 @@ components:
             $ref: '#/components/schemas/SaleReturnItemInput'
       required:
       - items
-      - refund_type
       - sale_id
     SaleReturnDetail:
       type: object
@@ -16486,6 +16817,8 @@ components:
           type: boolean
         cashier_can_close_session:
           type: boolean
+        default_payment_method:
+          $ref: '#/components/schemas/Method5c0Enum'
         updated_at:
           type: string
           format: date-time

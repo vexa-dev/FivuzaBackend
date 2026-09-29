@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from django.db.models import Q, Sum
+from django.db.models import F, Q, Sum
 from rest_framework.exceptions import APIException
 
 from ventas.models import (
@@ -8,6 +8,17 @@ from ventas.models import (
     CustomerDebtLedger,
     Sale,
 )
+
+
+class WalkInCustomerNotAllowedError(APIException):
+    """Bloque D.1: el cliente de paso no puede fiar ni tener saldo a favor
+    -no se le puede cobrar ni reclamar despues, y no aparece en Cobranzas."""
+
+    status_code = 409
+
+    def __init__(self, *, default_code: str, message: str):
+        self.default_code = default_code
+        super().__init__({"error": {"code": default_code, "message": message}})
 
 
 class CreditLimitExceededError(APIException):
@@ -77,6 +88,11 @@ class CreditLedgerService:
     def register_credit_sale(
         *, customer, sale: Sale, amount: Decimal
     ) -> CustomerDebtLedger:
+        if customer.is_walk_in:
+            raise WalkInCustomerNotAllowedError(
+                default_code="WALK_IN_CREDIT_NOT_ALLOWED",
+                message="El cliente de paso no puede fiar: registra un cliente real.",
+            )
         current_debt = CreditLedgerService.get_debt(customer)
         if (
             customer.credit_limit is not None
@@ -99,6 +115,14 @@ class CreditLedgerService:
     def register_balance_use(
         *, customer, sale: Sale, amount: Decimal
     ) -> CustomerBalanceLedger:
+        if customer.is_walk_in:
+            raise WalkInCustomerNotAllowedError(
+                default_code="WALK_IN_BALANCE_NOT_ALLOWED",
+                message=(
+                    "El cliente de paso no tiene saldo a favor: registra un "
+                    "cliente real."
+                ),
+            )
         current_balance = CreditLedgerService.get_balance(customer)
         if amount > current_balance:
             raise InsufficientBalanceError(available=current_balance, requested=amount)
@@ -138,12 +162,52 @@ class CreditLedgerService:
         )
 
     @staticmethod
+    def register_balance_credit(
+        *, customer, sale_return, amount: Decimal, description: str = ""
+    ) -> CustomerBalanceLedger:
+        """Alta de saldo a favor por una devolucion (Bloque D.5): reemplaza
+        el alta directa que ReturnService hacia antes, para que este servicio
+        siga siendo el unico punto de entrada al libro de saldo."""
+        return CustomerBalanceLedger.objects.create(
+            customer=customer,
+            sale_return=sale_return,
+            sale=sale_return.sale,
+            type="CREDIT",
+            amount=amount,
+            description=description or f"Devolución {sale_return.sale.invoice_number}",
+        )
+
+    @staticmethod
     def register_payment(
         *, customer, amount: Decimal, description: str = ""
     ) -> CustomerDebtLedger:
-        return CustomerDebtLedger.objects.create(
+        """Abono de fiado. Bloque D.4: ademas del asiento contable, asigna el
+        abono FIFO contra las ventas mas antiguas del cliente con parte
+        fiada pendiente (Sale.credit_amount > credit_settled_amount), para
+        que payment_status refleje que ya se pago -sin esto una venta a
+        credito nunca deja de figurar como pendiente aunque el cliente ya
+        abono todo."""
+        entry = CustomerDebtLedger.objects.create(
             customer=customer,
             type="CREDIT",
             amount=amount,
             description=description or "Abono de fiado",
         )
+        remaining = amount
+        pending_sales = Sale.objects.filter(
+            customer=customer, credit_amount__gt=F("credit_settled_amount")
+        ).order_by("occurred_at")
+        for sale in pending_sales:
+            if remaining <= 0:
+                break
+            outstanding = sale.credit_amount - sale.credit_settled_amount
+            applied = min(remaining, outstanding)
+            sale.credit_settled_amount += applied
+            sale.payment_status = (
+                "PAID"
+                if sale.credit_settled_amount >= sale.credit_amount
+                else "PARTIAL"
+            )
+            sale.save(update_fields=["credit_settled_amount", "payment_status"])
+            remaining -= applied
+        return entry

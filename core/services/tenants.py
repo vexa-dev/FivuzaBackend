@@ -189,6 +189,14 @@ class TenantProvisioningService:
         # max_discount_percent). Quien lo tiene tambien puede autorizar el
         # descuento de un cajero con su clave.
         ("SALES_DISCOUNT", "SALES"),
+        # Bloque D.5: reembolsar en efectivo exige autorizacion de supervisor
+        # aunque quien devuelve ya tenga SALES_RETURN -mismo criterio que
+        # SALES_DISCOUNT (tope 0 para seller, admin/manager lo tienen de
+        # entrada). El saldo a favor sigue bastando con SALES_RETURN.
+        ("SALES_CASH_REFUND", "SALES"),
+        # Bloque D.6: cargar la liquidacion del operador y conciliar cobros
+        # contra depositos -decision del dueño/admin, no del cajero.
+        ("SALES_RECONCILE", "SALES"),
         # Sprint 29: vertical de Gimnasios, un solo permiso para todo el
         # modulo (mismo criterio que HR_MANAGE, sin split fino).
         ("GYM_MANAGE", "GYM"),
@@ -219,6 +227,8 @@ class TenantProvisioningService:
             "SALES_VOID",
             "SALES_RETURN",
             "SALES_DISCOUNT",
+            "SALES_CASH_REFUND",
+            "SALES_RECONCILE",
             "GYM_MANAGE",
             "DATA_EXPORT",
             "SETTINGS_MANAGE",
@@ -242,6 +252,8 @@ class TenantProvisioningService:
             "SALES_VOID",
             "SALES_RETURN",
             "SALES_DISCOUNT",
+            "SALES_CASH_REFUND",
+            "SALES_RECONCILE",
             "GYM_MANAGE",
         ],
         # "seller" no recibe CASH_MANAGE todavia a proposito (ver nota
@@ -343,11 +355,23 @@ class TenantProvisioningService:
         with schema_context(tenant.schema_name), transaction.atomic():
             TenantProvisioningService._lock_provisioning(tenant.schema_name)
             from inventario.models import Warehouse
-            from ventas.models import CashRegister
+            from ventas.models import CashRegister, Customer
 
             warehouse, _ = Warehouse.objects.get_or_create(
                 name="Principal", defaults={"is_active": True}
             )
             CashRegister.objects.get_or_create(
                 warehouse=warehouse, name="Caja Principal", defaults={"is_active": True}
+            )
+            # Bloque D.1: cliente "Público general" para vender sin registrar
+            # a la persona. document_number fijo porque Customer.document_number
+            # es unico -no puede depender de nada variable del tenant.
+            Customer.objects.get_or_create(
+                document_type="ANONIMO",
+                document_number="00000000",
+                defaults={
+                    "name": "Cliente de paso",
+                    "is_walk_in": True,
+                    "is_active": True,
+                },
             )

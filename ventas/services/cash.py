@@ -314,7 +314,36 @@ class CashSessionService:
                 session=session, tenant=tenant
             )
 
+        # Bloque D.7: avisa, no bloquea -el cierre muestra si quedaron
+        # cobros electronicos sin numero de operacion o sin conciliar.
+        # Atributo transitorio (no persiste en el modelo), mismo criterio
+        # que Sale.payment_warnings.
+        session.pending_payment_warnings = CashSessionService._pending_payment_warnings(
+            session
+        )
+
         return session
+
+    @staticmethod
+    def _pending_payment_warnings(session: CashSession) -> list[str]:
+        from ventas.models import SalePayment
+
+        payments = SalePayment.objects.filter(
+            sale__cash_session=session, method__in=["CARD", "YAPE"]
+        ).exclude(status="VOIDED")
+        warnings = []
+        missing_operation = payments.filter(operation_number="").count()
+        if missing_operation:
+            warnings.append(
+                f"{missing_operation} cobro(s) con tarjeta/Yape sin número de "
+                "operación."
+            )
+        unsettled = payments.filter(settled_at__isnull=True).count()
+        if unsettled:
+            warnings.append(
+                f"{unsettled} cobro(s) con tarjeta/Yape todavía sin conciliar."
+            )
+        return warnings
 
     @staticmethod
     def _maybe_alert_on_difference(*, session: CashSession, tenant) -> None:

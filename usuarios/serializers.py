@@ -621,6 +621,7 @@ class TenantOperationalSettingsSerializer(serializers.ModelSerializer):
         fields = [
             "cashier_can_open_session",
             "cashier_can_close_session",
+            "default_payment_method",
             "updated_at",
         ]
         read_only_fields = ["updated_at"]

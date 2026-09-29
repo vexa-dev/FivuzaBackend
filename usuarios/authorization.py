@@ -26,15 +26,20 @@ from usuarios.services import AuditLogService, PermissionService
 AUTHORIZATION_HEADER = "HTTP_X_SUPERVISOR_AUTHORIZATION"
 AUTHORIZATION_TTL = timedelta(minutes=2)
 # Operaciones que un supervisor puede autorizar desde el equipo del cajero.
-AUTHORIZABLE_PERMISSIONS = frozenset({"SALES_VOID", "SALES_RETURN", "SALES_DISCOUNT"})
+AUTHORIZABLE_PERMISSIONS = frozenset(
+    {"SALES_VOID", "SALES_RETURN", "SALES_DISCOUNT", "SALES_CASH_REFUND"}
+)
 # Las que se atan a una venta concreta: autorizar "anular la V-000123" no
 # sirve para anular otra.
-_TARGETED_PERMISSIONS = frozenset({"SALES_VOID", "SALES_RETURN"})
+_TARGETED_PERMISSIONS = frozenset({"SALES_VOID", "SALES_RETURN", "SALES_CASH_REFUND"})
 
 _OPERATION_LABELS = {
     "SALES_VOID": "anular esta venta",
     "SALES_RETURN": "devolver esta venta",
     "SALES_DISCOUNT": "aplicar este descuento",
+    # Bloque D.5: reembolsar en efectivo exige autorizacion aunque quien
+    # devuelve ya tenga SALES_RETURN -el saldo a favor no la pide.
+    "SALES_CASH_REFUND": "reembolsar esta devolución en efectivo",
 }
 
 

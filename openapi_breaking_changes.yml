@@ -4,3 +4,13 @@ allowed_breaking_changes:
       El refresh token deja de formar parte del JSON y se migra a una cookie
       HttpOnly rotativa. El frontend coordinado usa la cookie y ya no depende
       de este componente.
+  - change: >-
+      SaleReturnCreate.refund_type: tipo cambiado ((None, None,
+      '#/components/schemas/RefundTypeEnum') -> (None, None, None))
+    reason: >-
+      Bloque D.5: refund_type pasa de obligatorio a opcional -si no viene,
+      ReturnService decide el default segun como se cobro la venta original
+      (saldo a favor si fue con medio electronico). Sigue aceptando los
+      mismos valores (BALANCE/CASH); drf-spectacular solo deja de emitir un
+      $ref directo al volverse nullable, el falso positivo es de la
+      herramienta, no un cambio real de contrato para quien ya lo envia.
