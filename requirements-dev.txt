@@ -4,4 +4,4 @@
 pytest-django>=4.14.0,<4.15
 coverage>=7.6,<8.0
 pip-audit>=2.7,<3.0
-ruff>=0.15.21,<1.0
+ruff>=0.16.9,<1.0
